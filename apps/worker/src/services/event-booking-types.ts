@@ -26,6 +26,14 @@ export type EventTargetType = 'single' | 'multi-account-dedup';
 
 export const EVENT_TARGET_TYPES: ReadonlyArray<EventTargetType> = ['single', 'multi-account-dedup'];
 
+// Webinar Launch (migration 041): `events.kind` 拡張。
+//   - 'standard' (default): 既存のイベント予約フロー。
+//   - 'webinar'           : 録画動画の擬似ライブ配信 + CTA + 視聴計測。
+// 既存 events 行はすべて 'standard' で動作不変。
+export type EventKind = 'standard' | 'webinar';
+
+export const EVENT_KINDS: ReadonlyArray<EventKind> = ['standard', 'webinar'];
+
 export interface EventRow {
   id: string;
   line_account_id: string;
@@ -54,6 +62,21 @@ export interface EventRow {
   account_ids: string | null;
   dedup_priority: string | null;
   failed_account_ids: string | null;
+  // Webinar Launch (migration 041). kind='webinar' のときのみ意味を持つ。
+  //   - video_r2_key: R2 オブジェクトキー (webinar/{accountId}/{eventId}/video.{ext})。
+  //     finalize 前は NULL。
+  //   - replay_window_minutes: 動画終了後にリプレイ視聴可能な分数 (NULL/0 = リプレイ不可)。
+  //     migration default は 1440 (24h)。
+  //   - attendance_threshold_seconds: 完視聴とみなす秒数 (NULL なら duration の 80%)。
+  //   - archive_url: replay_window 経過後のリダイレクト先 (アーカイブ販売 LP 等)。
+  kind: EventKind;
+  video_r2_key: string | null;
+  video_duration_seconds: number | null;
+  video_mime_type: string | null;
+  video_size_bytes: number | null;
+  replay_window_minutes: number | null;
+  attendance_threshold_seconds: number | null;
+  archive_url: string | null;
 }
 
 export interface EventSlotRow {
@@ -85,6 +108,17 @@ export interface EventBookingRow {
   cancelled_by: CancelledBy | null;
   created_at: string;
   updated_at: string;
+  // Webinar Launch (migration 041). kind='webinar' イベントの視聴トラッキング。
+  //   - webinar_first_opened_at        : LIFF 視聴ページに初めて到達した UTC ISO8601
+  //   - webinar_video_started_at       : 動画 play() 発火時刻 (UTC ISO8601)
+  //   - webinar_max_position_seconds   : 視聴到達秒の最大値 (heartbeat ごとに MAX で更新)
+  //   - webinar_completed_at           : 完視聴判定到達時刻 (UTC ISO8601, 一度書いたら no-op)
+  //   - webinar_last_heartbeat_at      : 最新 heartbeat 到達時刻 (UTC ISO8601)
+  webinar_first_opened_at: string | null;
+  webinar_video_started_at: string | null;
+  webinar_max_position_seconds: number;
+  webinar_completed_at: string | null;
+  webinar_last_heartbeat_at: string | null;
 }
 
 export interface EventBookingReminderRow {
@@ -109,3 +143,61 @@ export const ACTIVE_BOOKING_STATUSES: ReadonlyArray<EventBookingStatus> = [
   'requested',
   'confirmed',
 ];
+
+// ===========================================================
+// Webinar Launch (migration 041)
+// ===========================================================
+
+export type WebinarCtaDisplayMode = 'banner' | 'modal' | 'sticky';
+export const WEBINAR_CTA_DISPLAY_MODES: ReadonlyArray<WebinarCtaDisplayMode> = [
+  'banner',
+  'modal',
+  'sticky',
+];
+
+export type WebinarCtaActionType = 'url' | 'tag' | 'tracked_link' | 'close';
+export const WEBINAR_CTA_ACTION_TYPES: ReadonlyArray<WebinarCtaActionType> = [
+  'url',
+  'tag',
+  'tracked_link',
+  'close',
+];
+
+export interface WebinarCtaItemRow {
+  id: string;
+  event_id: string;
+  at_seconds: number;
+  display_mode: WebinarCtaDisplayMode;
+  label: string;
+  action_type: WebinarCtaActionType;
+  action_value: string | null;
+  dismiss_after_seconds: number | null;
+  sort_order: number;
+  is_active: number;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WebinarHeartbeatRow {
+  id: string;
+  booking_id: string;
+  position_seconds: number;
+  occurred_at: string;
+  user_agent: string | null;
+}
+
+export interface WebinarCtaClickRow {
+  id: string;
+  booking_id: string;
+  cta_item_id: string;
+  position_seconds: number;
+  clicked_at: string;
+}
+
+// 設計書 §6.1 の WebinarState のサーバー側起点。
+// /api/webinar/:bookingId/manifest が返す server 時刻 + slot.starts_at +
+// video.duration_seconds から client が状態を計算する。
+export const WEBINAR_HEARTBEAT_INTERVAL_SECONDS = 30;
+export const WEBINAR_DEFAULT_ATTENDANCE_RATIO = 0.8;
+export const WEBINAR_UPLOAD_URL_TTL_SECONDS = 15 * 60;
