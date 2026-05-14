@@ -443,6 +443,26 @@ async function initEventBooking(initialKind: 'detail' | 'history'): Promise<void
   mountEventBooking(container, ctx, initial);
 }
 
+// ─── Webinar viewing (vanilla JS, dynamic-imported) ──────
+
+async function initWebinarPage(): Promise<void> {
+  const params = new URLSearchParams(window.location.search);
+  const bookingId = params.get('id') ?? '';
+  if (!bookingId) {
+    showError('id クエリパラメータが必要です（?page=webinar&id=<bookingId>）');
+    return;
+  }
+  const idToken = liff.getIDToken();
+  if (!idToken) {
+    showError('LINE 認証情報の取得に失敗しました。LINE アプリ内で再度開いてください。');
+    return;
+  }
+  // 友達追加 gate は経由しない (予約済の friend がそのまま開く想定)。
+  // 視聴ページの認証は Worker 側で id_token + booking.friend_id 一致で行う。
+  const { initWebinar } = await import('./webinar.js');
+  await initWebinar({ liffId: LIFF_ID, idToken, bookingId });
+}
+
 // ─── Entry Point ────────────────────────────────────────
 
 async function main() {
@@ -474,6 +494,8 @@ async function main() {
       await initEventBooking('detail');
     } else if (page === 'event-me') {
       await initEventBooking('history');
+    } else if (page === 'webinar') {
+      await initWebinarPage();
     } else if (page === 'form') {
       const params = new URLSearchParams(window.location.search);
       const formId = params.get('id');
