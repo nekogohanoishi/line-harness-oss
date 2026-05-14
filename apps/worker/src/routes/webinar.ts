@@ -1,0 +1,990 @@
+// Webinar Launch HTTP routes.
+//
+// Admin endpoints:  /api/events/admin/events/:id/(video|cta|webinar/stats)
+// LIFF endpoints :  /api/liff/webinar/:bookingId/...
+//
+// 既存 events.ts のパターンを踏襲:
+//   - admin は ?account_id= で認可 (ownsEvent と同じ JSON-each による
+//     multi-account-dedup チェック)
+//   - LIFF は LIFF id_token を verifyCallerLineUserId で検証し、
+//     friend.line_user_id を bookingId.friend_id と一致確認
+//   - 時刻列は Worker から UTC ISO8601 (Z) で書く
+//
+// R2 ストリーミングと "presigned" PUT URL について:
+//   R2 の真の SigV4 presign には R2 API キー (S3 互換アクセスキー) が必要。
+//   v1 では Worker 自身が短命 HMAC 署名トークン付き URL を発行し、PUT は
+//   Worker 経由で R2 にプロキシして access control を維持する。
+//   トークン署名鍵は LIFF id_token 検証と共通の LINE_CHANNEL_SECRET を流用。
+//   将来 R2 S3 credentials を発行できれば aws4 sign に差し替え可能。
+//
+// 設計書: docs/specs/2026-05-14-webinar-launch-design.md
+
+import { Hono, type Context } from 'hono';
+import type { Env } from '../index.js';
+import {
+  WEBINAR_CTA_DISPLAY_MODES,
+  WEBINAR_CTA_ACTION_TYPES,
+  WEBINAR_DEFAULT_ATTENDANCE_RATIO,
+  WEBINAR_UPLOAD_URL_TTL_SECONDS,
+  type WebinarCtaDisplayMode,
+  type WebinarCtaActionType,
+} from '../services/event-booking-types.js';
+import { verifyCallerLineUserId } from '../services/liff-auth.js';
+
+const webinar = new Hono<Env>();
+
+// ============================================================
+// Helpers
+// ============================================================
+
+function bad(c: Context<Env>, code: string, status = 422): Response {
+  return c.json({ error: code }, status as 400 | 401 | 403 | 404 | 409 | 410 | 422 | 429);
+}
+
+function getAccountId(c: Context<Env>): string | null {
+  return c.req.query('account_id') ?? null;
+}
+
+async function ownsEvent(
+  db: D1Database,
+  event_id: string,
+  account_id: string,
+): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `SELECT id FROM events
+        WHERE id = ? AND deleted_at IS NULL AND (
+          (target_type = 'single' AND line_account_id = ?)
+          OR (target_type = 'multi-account-dedup'
+              AND EXISTS (SELECT 1 FROM json_each(account_ids) WHERE value = ?))
+        )`,
+    )
+    .bind(event_id, account_id, account_id)
+    .first<{ id: string }>();
+  return row != null;
+}
+
+interface EventWebinarRow {
+  id: string;
+  line_account_id: string;
+  kind: string;
+  video_r2_key: string | null;
+  video_duration_seconds: number | null;
+  video_mime_type: string | null;
+  video_size_bytes: number | null;
+  replay_window_minutes: number | null;
+  attendance_threshold_seconds: number | null;
+  archive_url: string | null;
+  image_url: string | null;
+  name: string;
+  venue_name: string | null;
+  description: string | null;
+  is_published: number;
+  target_type: string;
+  account_ids: string | null;
+}
+
+async function fetchEvent(db: D1Database, event_id: string): Promise<EventWebinarRow | null> {
+  return (await db
+    .prepare(`SELECT * FROM events WHERE id = ? AND deleted_at IS NULL`)
+    .bind(event_id)
+    .first<EventWebinarRow>()) ?? null;
+}
+
+function r2KeyFor(account_id: string, event_id: string, mime: string): string {
+  const ext = pickExtension(mime);
+  return `webinar/${account_id}/${event_id}/video.${ext}`;
+}
+
+function pickExtension(mime: string): string {
+  const m = mime.toLowerCase();
+  if (m.includes('mp4')) return 'mp4';
+  if (m.includes('webm')) return 'webm';
+  if (m.includes('quicktime') || m.includes('mov')) return 'mov';
+  if (m.includes('ogg')) return 'ogg';
+  // 不明な MIME は mp4 にしておく (HTML5 video の互換性最優先)
+  return 'mp4';
+}
+
+const ALLOWED_VIDEO_MIME = new Set([
+  'video/mp4',
+  'video/webm',
+  'video/ogg',
+  'video/quicktime',
+]);
+
+const MAX_VIDEO_SIZE_BYTES = 2 * 1024 * 1024 * 1024; // 2GB 上限 (Cloudflare R2 single-PUT 制限と整合)
+
+// ------------------------------------------------------------
+// HMAC sign / verify for upload tokens
+// ------------------------------------------------------------
+// LINE_CHANNEL_SECRET を流用して HMAC-SHA256 で署名する。
+// クライアントには `${base64url(payloadJson)}.${base64url(signature)}` で渡し、
+// PUT 受信時に Worker が payload を復元してから R2 に書き込む。
+
+async function hmacSign(secret: string, message: string): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sigBuf = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+  return base64UrlEncode(new Uint8Array(sigBuf));
+}
+
+async function hmacVerify(secret: string, message: string, signature: string): Promise<boolean> {
+  const expected = await hmacSign(secret, message);
+  return timingSafeEqual(expected, signature);
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+function base64UrlEncode(input: Uint8Array | string): string {
+  const bytes =
+    typeof input === 'string' ? new TextEncoder().encode(input) : input;
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+}
+
+function base64UrlDecode(input: string): string {
+  let s = input.replaceAll('-', '+').replaceAll('_', '/');
+  while (s.length % 4 !== 0) s += '=';
+  return atob(s);
+}
+
+interface UploadTokenPayload {
+  k: string;        // r2 key
+  m: string;        // mime
+  s: number;        // max size bytes
+  e: number;        // expiry epoch ms
+  a: string;        // account_id
+  i: string;        // event_id
+}
+
+async function signUploadToken(secret: string, payload: UploadTokenPayload): Promise<string> {
+  const json = JSON.stringify(payload);
+  const p = base64UrlEncode(json);
+  const sig = await hmacSign(secret, p);
+  return `${p}.${sig}`;
+}
+
+async function verifyUploadToken(
+  secret: string,
+  token: string,
+): Promise<UploadTokenPayload | null> {
+  const [p, sig] = token.split('.', 2);
+  if (!p || !sig) return null;
+  if (!(await hmacVerify(secret, p, sig))) return null;
+  try {
+    const payload = JSON.parse(base64UrlDecode(p)) as UploadTokenPayload;
+    if (typeof payload.e !== 'number' || payload.e < Date.now()) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================
+// Admin: video upload-url / finalize / delete
+// ============================================================
+
+webinar.post('/api/events/admin/events/:id/video/upload-url', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const body = (await c.req.json().catch(() => ({}))) as {
+    mime_type?: string;
+    size_bytes?: number;
+  };
+  const mime = body.mime_type;
+  const size = body.size_bytes;
+  if (typeof mime !== 'string' || !ALLOWED_VIDEO_MIME.has(mime)) {
+    return bad(c, 'invalid_mime_type', 422);
+  }
+  if (!Number.isInteger(size) || (size as number) <= 0 || (size as number) > MAX_VIDEO_SIZE_BYTES) {
+    return bad(c, 'invalid_size_bytes', 422);
+  }
+
+  const key = r2KeyFor(account_id, id, mime);
+  const expiresAt = Date.now() + WEBINAR_UPLOAD_URL_TTL_SECONDS * 1000;
+  const token = await signUploadToken(c.env.LINE_CHANNEL_SECRET, {
+    k: key,
+    m: mime,
+    s: size as number,
+    e: expiresAt,
+    a: account_id,
+    i: id,
+  });
+
+  const origin = c.env.WORKER_URL || new URL(c.req.url).origin;
+  const uploadUrl = `${origin}/api/events/admin/events/${encodeURIComponent(id)}/video/upload?token=${encodeURIComponent(token)}`;
+  return c.json({
+    upload_url: uploadUrl,
+    method: 'PUT',
+    r2_key: key,
+    expires_at: new Date(expiresAt).toISOString(),
+    // Implementation note: Worker-proxied PUT instead of R2 SigV4 presign.
+    // See routes/webinar.ts top-of-file comment for rationale.
+    headers: { 'Content-Type': mime },
+  });
+});
+
+// Worker-proxied PUT — token authenticates the caller; we stream the body into R2.
+// IMAGES バインドを流用 (videoはサイズが大きいため将来別バケットに分離可能)。
+webinar.put('/api/events/admin/events/:id/video/upload', async (c) => {
+  const token = c.req.query('token') ?? '';
+  if (!token) return bad(c, 'token_required', 400);
+  const payload = await verifyUploadToken(c.env.LINE_CHANNEL_SECRET, token);
+  if (!payload) return bad(c, 'invalid_or_expired_token', 401);
+  if (payload.i !== c.req.param('id')) return bad(c, 'token_event_mismatch', 403);
+
+  const contentType = c.req.header('Content-Type') || payload.m;
+  if (!ALLOWED_VIDEO_MIME.has(contentType)) return bad(c, 'invalid_mime_type', 422);
+
+  // Stream the body to R2. body は Cloudflare Worker の ReadableStream。
+  if (!c.req.raw.body) return bad(c, 'empty_body', 400);
+  await c.env.IMAGES.put(payload.k, c.req.raw.body, {
+    httpMetadata: { contentType },
+    customMetadata: { account_id: payload.a, event_id: payload.i },
+  });
+  return c.json({ ok: true, r2_key: payload.k });
+});
+
+webinar.post('/api/events/admin/events/:id/video/finalize', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const body = (await c.req.json().catch(() => ({}))) as {
+    r2_key?: string;
+    duration_seconds?: number;
+    mime_type?: string;
+    size_bytes?: number;
+  };
+  const r2Key = body.r2_key;
+  const duration = body.duration_seconds;
+  const mime = body.mime_type;
+  const size = body.size_bytes;
+  if (typeof r2Key !== 'string' || !r2Key.startsWith(`webinar/${account_id}/${id}/`)) {
+    return bad(c, 'invalid_r2_key', 422);
+  }
+  if (!Number.isInteger(duration) || (duration as number) <= 0) {
+    return bad(c, 'invalid_duration_seconds', 422);
+  }
+  if (typeof mime !== 'string' || !ALLOWED_VIDEO_MIME.has(mime)) {
+    return bad(c, 'invalid_mime_type', 422);
+  }
+  if (!Number.isInteger(size) || (size as number) <= 0) {
+    return bad(c, 'invalid_size_bytes', 422);
+  }
+
+  // R2 にオブジェクトが実在するか軽く確認 (head 相当)。
+  const head = await c.env.IMAGES.head(r2Key);
+  if (!head) return bad(c, 'r2_object_not_found', 404);
+
+  const now = new Date().toISOString();
+  await c.env.DB
+    .prepare(
+      `UPDATE events
+          SET video_r2_key = ?, video_duration_seconds = ?, video_mime_type = ?,
+              video_size_bytes = ?, kind = 'webinar', updated_at = ?
+        WHERE id = ?`,
+    )
+    .bind(r2Key, duration, mime, size, now, id)
+    .run();
+
+  const row = await c.env.DB.prepare(`SELECT * FROM events WHERE id = ?`).bind(id).first();
+  return c.json(row);
+});
+
+webinar.delete('/api/events/admin/events/:id/video', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const ev = await fetchEvent(c.env.DB, id);
+  if (!ev) return bad(c, 'not_found', 404);
+
+  if (ev.video_r2_key) {
+    try {
+      await c.env.IMAGES.delete(ev.video_r2_key);
+    } catch (e) {
+      // R2 削除失敗でも DB クリアは続行 (孤児 object は容認)。
+      console.error('webinar video R2 delete failed:', e);
+    }
+  }
+  const now = new Date().toISOString();
+  await c.env.DB
+    .prepare(
+      `UPDATE events
+          SET video_r2_key = NULL, video_duration_seconds = NULL,
+              video_mime_type = NULL, video_size_bytes = NULL, updated_at = ?
+        WHERE id = ?`,
+    )
+    .bind(now, id)
+    .run();
+  return new Response(null, { status: 204 });
+});
+
+// ============================================================
+// Admin: CTA CRUD
+// ============================================================
+
+interface CtaInput {
+  at_seconds?: number;
+  display_mode?: string;
+  label?: string;
+  action_type?: string;
+  action_value?: string | null;
+  dismiss_after_seconds?: number | null;
+  sort_order?: number;
+  is_active?: number;
+}
+
+function validateCtaInput(
+  body: Record<string, unknown>,
+  isCreate: boolean,
+): { ok: true } | { ok: false; code: string } {
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(body, k);
+  if (isCreate || has('at_seconds')) {
+    const v = body.at_seconds;
+    if (!Number.isInteger(v) || (v as number) < 0) return { ok: false, code: 'invalid_at_seconds' };
+  }
+  if (isCreate || has('display_mode')) {
+    if (!WEBINAR_CTA_DISPLAY_MODES.includes(body.display_mode as WebinarCtaDisplayMode)) {
+      return { ok: false, code: 'invalid_display_mode' };
+    }
+  }
+  if (isCreate || has('label')) {
+    const v = body.label;
+    if (typeof v !== 'string' || v.length === 0 || v.length > 200) {
+      return { ok: false, code: 'invalid_label' };
+    }
+  }
+  if (isCreate || has('action_type')) {
+    if (!WEBINAR_CTA_ACTION_TYPES.includes(body.action_type as WebinarCtaActionType)) {
+      return { ok: false, code: 'invalid_action_type' };
+    }
+  }
+  if (has('action_value') && body.action_value != null) {
+    if (typeof body.action_value !== 'string' || (body.action_value as string).length > 2000) {
+      return { ok: false, code: 'invalid_action_value' };
+    }
+  }
+  if (has('dismiss_after_seconds') && body.dismiss_after_seconds != null) {
+    const v = body.dismiss_after_seconds;
+    if (!Number.isInteger(v) || (v as number) <= 0) {
+      return { ok: false, code: 'invalid_dismiss_after_seconds' };
+    }
+  }
+  if (has('sort_order') && body.sort_order != null && !Number.isInteger(body.sort_order)) {
+    return { ok: false, code: 'invalid_sort_order' };
+  }
+  if (has('is_active') && body.is_active != null && body.is_active !== 0 && body.is_active !== 1) {
+    return { ok: false, code: 'invalid_is_active' };
+  }
+  return { ok: true };
+}
+
+webinar.get('/api/events/admin/events/:id/cta', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+  const { results } = await c.env.DB
+    .prepare(
+      `SELECT * FROM webinar_cta_items
+        WHERE event_id = ? AND deleted_at IS NULL
+        ORDER BY at_seconds ASC, sort_order ASC, created_at ASC`,
+    )
+    .bind(id)
+    .all();
+  return c.json({ items: results ?? [] });
+});
+
+webinar.post('/api/events/admin/events/:id/cta', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const v = validateCtaInput(body, true);
+  if (!v.ok) return bad(c, v.code, 422);
+
+  const ctaId = crypto.randomUUID();
+  await c.env.DB
+    .prepare(
+      `INSERT INTO webinar_cta_items (
+         id, event_id, at_seconds, display_mode, label, action_type,
+         action_value, dismiss_after_seconds, sort_order, is_active
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      ctaId,
+      id,
+      body.at_seconds as number,
+      body.display_mode as string,
+      body.label as string,
+      body.action_type as string,
+      (body.action_value as string | null | undefined) ?? null,
+      (body.dismiss_after_seconds as number | null | undefined) ?? null,
+      (body.sort_order as number | undefined) ?? 0,
+      (body.is_active as number | undefined) ?? 1,
+    )
+    .run();
+  const row = await c.env.DB
+    .prepare(`SELECT * FROM webinar_cta_items WHERE id = ?`)
+    .bind(ctaId)
+    .first();
+  return c.json(row, 201);
+});
+
+webinar.put('/api/events/admin/events/:id/cta/:ctaId', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  const ctaId = c.req.param('ctaId');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const existing = await c.env.DB
+    .prepare(
+      `SELECT id FROM webinar_cta_items WHERE id = ? AND event_id = ? AND deleted_at IS NULL`,
+    )
+    .bind(ctaId, id)
+    .first<{ id: string }>();
+  if (!existing) return bad(c, 'not_found', 404);
+
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const v = validateCtaInput(body, false);
+  if (!v.ok) return bad(c, v.code, 422);
+
+  const updatable = [
+    'at_seconds',
+    'display_mode',
+    'label',
+    'action_type',
+    'action_value',
+    'dismiss_after_seconds',
+    'sort_order',
+    'is_active',
+  ] as const;
+  const setClauses: string[] = [];
+  const setValues: unknown[] = [];
+  for (const k of updatable) {
+    if (Object.prototype.hasOwnProperty.call(body, k)) {
+      setClauses.push(`${k} = ?`);
+      setValues.push(body[k]);
+    }
+  }
+  if (setClauses.length === 0) {
+    const row = await c.env.DB
+      .prepare(`SELECT * FROM webinar_cta_items WHERE id = ?`)
+      .bind(ctaId)
+      .first();
+    return c.json(row);
+  }
+  setClauses.push(`updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`);
+  setValues.push(ctaId);
+  await c.env.DB
+    .prepare(`UPDATE webinar_cta_items SET ${setClauses.join(', ')} WHERE id = ?`)
+    .bind(...setValues)
+    .run();
+  const row = await c.env.DB
+    .prepare(`SELECT * FROM webinar_cta_items WHERE id = ?`)
+    .bind(ctaId)
+    .first();
+  return c.json(row);
+});
+
+webinar.delete('/api/events/admin/events/:id/cta/:ctaId', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  const ctaId = c.req.param('ctaId');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const now = new Date().toISOString();
+  const result = await c.env.DB
+    .prepare(
+      `UPDATE webinar_cta_items
+          SET deleted_at = ?, updated_at = ?
+        WHERE id = ? AND event_id = ? AND deleted_at IS NULL`,
+    )
+    .bind(now, now, ctaId, id)
+    .run();
+  if ((result.meta?.changes ?? 0) === 0) return bad(c, 'not_found', 404);
+  return new Response(null, { status: 204 });
+});
+
+// ============================================================
+// Admin: stats
+// ============================================================
+
+webinar.get('/api/events/admin/events/:id/webinar/stats', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const ev = await c.env.DB
+    .prepare(
+      `SELECT video_duration_seconds, attendance_threshold_seconds FROM events WHERE id = ?`,
+    )
+    .bind(id)
+    .first<{ video_duration_seconds: number | null; attendance_threshold_seconds: number | null }>();
+
+  const threshold =
+    ev?.attendance_threshold_seconds ??
+    (ev?.video_duration_seconds != null
+      ? Math.floor(ev.video_duration_seconds * WEBINAR_DEFAULT_ATTENDANCE_RATIO)
+      : null);
+
+  const bookingAgg = await c.env.DB
+    .prepare(
+      `SELECT
+          COUNT(*) AS total_bookings,
+          SUM(CASE WHEN webinar_first_opened_at IS NOT NULL THEN 1 ELSE 0 END) AS opened,
+          SUM(CASE WHEN webinar_video_started_at IS NOT NULL THEN 1 ELSE 0 END) AS started,
+          SUM(CASE WHEN webinar_completed_at IS NOT NULL THEN 1 ELSE 0 END) AS completed,
+          AVG(webinar_max_position_seconds) AS avg_position
+         FROM event_bookings
+        WHERE event_id = ?`,
+    )
+    .bind(id)
+    .first<{
+      total_bookings: number | null;
+      opened: number | null;
+      started: number | null;
+      completed: number | null;
+      avg_position: number | null;
+    }>();
+
+  const ctaStats = await c.env.DB
+    .prepare(
+      `SELECT
+          ci.id AS cta_id,
+          ci.label,
+          ci.at_seconds,
+          (SELECT COUNT(DISTINCT booking_id)
+             FROM webinar_cta_clicks
+            WHERE cta_item_id = ci.id) AS click_unique_count,
+          (SELECT COUNT(*)
+             FROM webinar_cta_clicks
+            WHERE cta_item_id = ci.id) AS click_total_count
+         FROM webinar_cta_items ci
+        WHERE ci.event_id = ? AND ci.deleted_at IS NULL
+        ORDER BY ci.at_seconds ASC`,
+    )
+    .bind(id)
+    .all<{
+      cta_id: string;
+      label: string;
+      at_seconds: number;
+      click_unique_count: number;
+      click_total_count: number;
+    }>();
+
+  return c.json({
+    duration_seconds: ev?.video_duration_seconds ?? null,
+    attendance_threshold_seconds: threshold,
+    bookings: {
+      total: bookingAgg?.total_bookings ?? 0,
+      opened: bookingAgg?.opened ?? 0,
+      started: bookingAgg?.started ?? 0,
+      completed: bookingAgg?.completed ?? 0,
+      avg_max_position_seconds: bookingAgg?.avg_position ?? 0,
+    },
+    ctas: (ctaStats.results ?? []).map((r) => ({
+      cta_id: r.cta_id,
+      label: r.label,
+      at_seconds: r.at_seconds,
+      click_unique_count: r.click_unique_count,
+      click_total_count: r.click_total_count,
+      ctr_unique:
+        bookingAgg?.opened && bookingAgg.opened > 0
+          ? r.click_unique_count / bookingAgg.opened
+          : 0,
+    })),
+  });
+});
+
+// ============================================================
+// LIFF: booking auth + manifest
+// ============================================================
+
+interface BookingForLiff {
+  booking_id: string;
+  event_id: string;
+  slot_id: string;
+  friend_id: string;
+  line_user_id: string;
+  account_id: string;
+  // event
+  kind: string;
+  name: string;
+  video_r2_key: string | null;
+  video_duration_seconds: number | null;
+  video_mime_type: string | null;
+  video_size_bytes: number | null;
+  replay_window_minutes: number | null;
+  attendance_threshold_seconds: number | null;
+  archive_url: string | null;
+  image_url: string | null;
+  description: string | null;
+  // slot
+  slot_starts_at: string;
+  slot_ends_at: string;
+  // booking watch state
+  webinar_first_opened_at: string | null;
+  webinar_video_started_at: string | null;
+  webinar_max_position_seconds: number;
+  webinar_completed_at: string | null;
+  webinar_last_heartbeat_at: string | null;
+}
+
+async function loadBookingForLiff(
+  db: D1Database,
+  bookingId: string,
+): Promise<BookingForLiff | null> {
+  const row = await db
+    .prepare(
+      `SELECT
+         b.id AS booking_id, b.event_id, b.slot_id, b.friend_id,
+         b.line_account_id AS account_id,
+         b.webinar_first_opened_at, b.webinar_video_started_at,
+         b.webinar_max_position_seconds, b.webinar_completed_at,
+         b.webinar_last_heartbeat_at,
+         f.line_user_id,
+         e.kind, e.name, e.video_r2_key, e.video_duration_seconds,
+         e.video_mime_type, e.video_size_bytes, e.replay_window_minutes,
+         e.attendance_threshold_seconds, e.archive_url, e.image_url, e.description,
+         s.starts_at AS slot_starts_at, s.ends_at AS slot_ends_at
+        FROM event_bookings b
+        JOIN friends f ON f.id = b.friend_id
+        JOIN events e ON e.id = b.event_id
+        JOIN event_slots s ON s.id = b.slot_id
+        WHERE b.id = ?`,
+    )
+    .bind(bookingId)
+    .first<BookingForLiff>();
+  return row ?? null;
+}
+
+async function authorizeLiffBooking(c: Context<Env>): Promise<
+  | { ok: true; booking: BookingForLiff }
+  | { ok: false; status: number; code: string }
+> {
+  // 通常は Authorization: Bearer <id_token>。ただし <video src> 経由のリクエスト
+  // は header を付けられないため、?_t=<id_token> query を fallback として
+  // 受け取る (stream endpoint で実需)。 query 経由は同一 origin かつ LIFF 内で
+  // しか発火しない設計なので、漏洩リスクは小さい。
+  let authHeader = c.req.header('Authorization');
+  if (!authHeader) {
+    const t = c.req.query('_t');
+    if (t) authHeader = `Bearer ${t}`;
+  }
+  const caller = await verifyCallerLineUserId(authHeader, c.env);
+  if (!caller) return { ok: false, status: 401, code: 'unauthorized' };
+  const bookingId = c.req.param('bookingId');
+  if (!bookingId) return { ok: false, status: 404, code: 'not_found' };
+  const booking = await loadBookingForLiff(c.env.DB, bookingId);
+  if (!booking) return { ok: false, status: 404, code: 'not_found' };
+  if (booking.line_user_id !== caller) {
+    return { ok: false, status: 403, code: 'forbidden' };
+  }
+  if (booking.kind !== 'webinar') {
+    return { ok: false, status: 409, code: 'not_a_webinar' };
+  }
+  return { ok: true, booking };
+}
+
+// 状態判定。設計書 §5.3 のマトリクスに対応。
+type WebinarAccessState = 'pre_start' | 'live' | 'replay' | 'expired';
+
+function computeAccessState(
+  slotStartsAtIso: string,
+  durationSeconds: number | null,
+  replayWindowMinutes: number | null,
+  now: Date = new Date(),
+): { state: WebinarAccessState; server_now_ts: number } {
+  const startMs = new Date(slotStartsAtIso).getTime();
+  const nowMs = now.getTime();
+  const durMs = (durationSeconds ?? 0) * 1000;
+  const replayMs = (replayWindowMinutes ?? 0) * 60 * 1000;
+  let state: WebinarAccessState;
+  if (nowMs < startMs) state = 'pre_start';
+  else if (nowMs < startMs + durMs) state = 'live';
+  else if (nowMs < startMs + durMs + replayMs) state = 'replay';
+  else state = 'expired';
+  return { state, server_now_ts: nowMs };
+}
+
+webinar.get('/api/liff/webinar/:bookingId/manifest', async (c) => {
+  const auth = await authorizeLiffBooking(c);
+  if (!auth.ok) return bad(c, auth.code, auth.status);
+  const b = auth.booking;
+
+  // CTA は active かつ未削除のみ。順序は表示時刻昇順。
+  const { results: ctas } = await c.env.DB
+    .prepare(
+      `SELECT id, at_seconds, display_mode, label, action_type, action_value,
+              dismiss_after_seconds, sort_order
+         FROM webinar_cta_items
+        WHERE event_id = ? AND is_active = 1 AND deleted_at IS NULL
+        ORDER BY at_seconds ASC, sort_order ASC`,
+    )
+    .bind(b.event_id)
+    .all();
+
+  const access = computeAccessState(
+    b.slot_starts_at,
+    b.video_duration_seconds,
+    b.replay_window_minutes,
+  );
+  const threshold =
+    b.attendance_threshold_seconds ??
+    (b.video_duration_seconds != null
+      ? Math.floor(b.video_duration_seconds * WEBINAR_DEFAULT_ATTENDANCE_RATIO)
+      : null);
+
+  return c.json({
+    booking: {
+      id: b.booking_id,
+      first_opened_at: b.webinar_first_opened_at,
+      video_started_at: b.webinar_video_started_at,
+      max_position_seconds: b.webinar_max_position_seconds,
+      completed_at: b.webinar_completed_at,
+      last_heartbeat_at: b.webinar_last_heartbeat_at,
+    },
+    event: {
+      id: b.event_id,
+      kind: b.kind,
+      name: b.name,
+      image_url: b.image_url,
+      description: b.description,
+      attendance_threshold_seconds: threshold,
+      replay_window_minutes: b.replay_window_minutes,
+      archive_url: b.archive_url,
+    },
+    video: {
+      duration_seconds: b.video_duration_seconds,
+      mime_type: b.video_mime_type,
+      // ストリーム URL は ID トークン認証ヘッダーが必要なので相対パスのみ返す
+      stream_url: `/api/liff/webinar/${encodeURIComponent(b.booking_id)}/video/stream`,
+    },
+    slot: { starts_at: b.slot_starts_at, ends_at: b.slot_ends_at },
+    access_state: access.state,
+    server_now_ts: access.server_now_ts,
+    ctas: ctas ?? [],
+  });
+});
+
+// ============================================================
+// LIFF: video streaming with Range support
+// ============================================================
+
+webinar.get('/api/liff/webinar/:bookingId/video/stream', async (c) => {
+  const auth = await authorizeLiffBooking(c);
+  if (!auth.ok) return bad(c, auth.code, auth.status);
+  const b = auth.booking;
+
+  if (!b.video_r2_key) return bad(c, 'video_not_uploaded', 404);
+
+  const access = computeAccessState(
+    b.slot_starts_at,
+    b.video_duration_seconds,
+    b.replay_window_minutes,
+  );
+  // expired は streaming 拒否。pre_start も拒否 (LIFF 側でカウントダウン表示)。
+  if (access.state === 'expired') return bad(c, 'replay_window_expired', 404);
+  if (access.state === 'pre_start') return bad(c, 'not_started_yet', 403);
+
+  const rangeHeader = c.req.header('Range');
+  let r2Range: R2Range | undefined = undefined;
+  let status = 200;
+  const headers = new Headers();
+  headers.set('Accept-Ranges', 'bytes');
+  // CDN cache を抑制 (access control が個別に効くため)
+  headers.set('Cache-Control', 'private, no-store');
+
+  // R2 head で total size を確認 (Content-Range 算出に使う)
+  const head = await c.env.IMAGES.head(b.video_r2_key);
+  if (!head) return bad(c, 'video_not_found', 404);
+  const totalSize = head.size;
+  headers.set('Content-Type', head.httpMetadata?.contentType || b.video_mime_type || 'video/mp4');
+
+  if (rangeHeader) {
+    const m = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+    if (!m) return new Response(null, { status: 416 });
+    const startStr = m[1];
+    const endStr = m[2];
+    let start: number;
+    let end: number;
+    if (startStr === '' && endStr !== '') {
+      // suffix: last N bytes
+      const n = parseInt(endStr, 10);
+      if (!Number.isFinite(n) || n <= 0) return new Response(null, { status: 416 });
+      start = Math.max(0, totalSize - n);
+      end = totalSize - 1;
+    } else {
+      start = parseInt(startStr, 10);
+      end = endStr === '' ? totalSize - 1 : parseInt(endStr, 10);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end >= totalSize || start > end) {
+        return new Response(null, {
+          status: 416,
+          headers: { 'Content-Range': `bytes */${totalSize}` },
+        });
+      }
+    }
+    r2Range = { offset: start, length: end - start + 1 };
+    status = 206;
+    headers.set('Content-Range', `bytes ${start}-${end}/${totalSize}`);
+    headers.set('Content-Length', String(end - start + 1));
+  } else {
+    headers.set('Content-Length', String(totalSize));
+  }
+
+  const obj = await c.env.IMAGES.get(b.video_r2_key, r2Range ? { range: r2Range } : undefined);
+  if (!obj) return bad(c, 'video_not_found', 404);
+
+  return new Response(obj.body, { status, headers });
+});
+
+// ============================================================
+// LIFF: tracking events
+// ============================================================
+
+webinar.post('/api/liff/webinar/:bookingId/event/opened', async (c) => {
+  const auth = await authorizeLiffBooking(c);
+  if (!auth.ok) return bad(c, auth.code, auth.status);
+  const b = auth.booking;
+  // 初回のみ書く (COALESCE) — 二度目以降は no-op
+  const now = new Date().toISOString();
+  await c.env.DB
+    .prepare(
+      `UPDATE event_bookings
+          SET webinar_first_opened_at = COALESCE(webinar_first_opened_at, ?), updated_at = ?
+        WHERE id = ?`,
+    )
+    .bind(now, now, b.booking_id)
+    .run();
+  return c.json({ ok: true });
+});
+
+webinar.post('/api/liff/webinar/:bookingId/event/started', async (c) => {
+  const auth = await authorizeLiffBooking(c);
+  if (!auth.ok) return bad(c, auth.code, auth.status);
+  const b = auth.booking;
+  const now = new Date().toISOString();
+  await c.env.DB
+    .prepare(
+      `UPDATE event_bookings
+          SET webinar_video_started_at = COALESCE(webinar_video_started_at, ?), updated_at = ?
+        WHERE id = ?`,
+    )
+    .bind(now, now, b.booking_id)
+    .run();
+  return c.json({ ok: true });
+});
+
+webinar.post('/api/liff/webinar/:bookingId/event/heartbeat', async (c) => {
+  const auth = await authorizeLiffBooking(c);
+  if (!auth.ok) return bad(c, auth.code, auth.status);
+  const b = auth.booking;
+  const body = (await c.req.json().catch(() => ({}))) as { positionSeconds?: number };
+  const pos = body.positionSeconds;
+  if (!Number.isFinite(pos) || (pos as number) < 0) return bad(c, 'invalid_position', 422);
+  const position = Math.floor(pos as number);
+  const now = new Date().toISOString();
+  const ua = c.req.header('User-Agent') ?? null;
+
+  const heartbeatId = crypto.randomUUID();
+  await c.env.DB
+    .prepare(
+      `INSERT INTO webinar_heartbeats (id, booking_id, position_seconds, occurred_at, user_agent)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .bind(heartbeatId, b.booking_id, position, now, ua)
+    .run();
+
+  // MAX で max_position を伸ばす。冪等。
+  await c.env.DB
+    .prepare(
+      `UPDATE event_bookings
+          SET webinar_max_position_seconds = MAX(webinar_max_position_seconds, ?),
+              webinar_last_heartbeat_at = ?, updated_at = ?
+        WHERE id = ?`,
+    )
+    .bind(position, now, now, b.booking_id)
+    .run();
+  return c.json({ ok: true });
+});
+
+webinar.post('/api/liff/webinar/:bookingId/event/cta-click', async (c) => {
+  const auth = await authorizeLiffBooking(c);
+  if (!auth.ok) return bad(c, auth.code, auth.status);
+  const b = auth.booking;
+  const body = (await c.req.json().catch(() => ({}))) as {
+    ctaItemId?: string;
+    positionSeconds?: number;
+  };
+  const ctaId = body.ctaItemId;
+  const pos = body.positionSeconds;
+  if (typeof ctaId !== 'string' || ctaId.length === 0) return bad(c, 'invalid_cta_item_id', 422);
+  if (!Number.isFinite(pos) || (pos as number) < 0) return bad(c, 'invalid_position', 422);
+
+  // CTA が同一 event に属するか確認 (booking 跨ぎ防止)
+  const cta = await c.env.DB
+    .prepare(
+      `SELECT id FROM webinar_cta_items
+        WHERE id = ? AND event_id = ? AND deleted_at IS NULL`,
+    )
+    .bind(ctaId, b.event_id)
+    .first<{ id: string }>();
+  if (!cta) return bad(c, 'cta_not_found', 404);
+
+  const clickId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await c.env.DB
+    .prepare(
+      `INSERT INTO webinar_cta_clicks
+         (id, booking_id, cta_item_id, position_seconds, clicked_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .bind(clickId, b.booking_id, ctaId, Math.floor(pos as number), now)
+    .run();
+  return c.json({ ok: true });
+});
+
+webinar.post('/api/liff/webinar/:bookingId/event/completed', async (c) => {
+  const auth = await authorizeLiffBooking(c);
+  if (!auth.ok) return bad(c, auth.code, auth.status);
+  const b = auth.booking;
+  const now = new Date().toISOString();
+  // 既に completed なら no-op (COALESCE)
+  await c.env.DB
+    .prepare(
+      `UPDATE event_bookings
+          SET webinar_completed_at = COALESCE(webinar_completed_at, ?), updated_at = ?
+        WHERE id = ?`,
+    )
+    .bind(now, now, b.booking_id)
+    .run();
+  return c.json({ ok: true });
+});
+
+export default webinar;
