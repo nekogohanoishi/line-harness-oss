@@ -5,14 +5,28 @@ import { useRouter } from 'next/navigation'
 import { eventsApi, type EventDetail, type EventSlot } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import { generateBulkSlots, type BulkSlotInput } from './bulk-slot-generator'
+import WebinarSettingsTab from '@/components/webinar/webinar-settings-tab'
 
-type Tab = 'overview' | 'slots' | 'publish'
+type Tab = 'overview' | 'slots' | 'publish' | 'webinar'
 
-const TABS: Array<{ key: Tab; label: string; saveLabel: string; sub: string }> = [
-  { key: 'overview', label: '1. 概要', saveLabel: '概要を保存', sub: 'イベント名・場所・詳細を入力' },
-  { key: 'slots', label: '2. 予約枠', saveLabel: '', sub: '友だちが選べる日時を追加' },
-  { key: 'publish', label: '3. 公開設定', saveLabel: '公開設定を保存', sub: '承認制・リマインダ・公開' },
-]
+type TabDef = { key: Tab; label: string; saveLabel: string; sub: string }
+
+// Webinar Launch (migration 041): kind='webinar' のときのみ「ウェビナー設定」
+// タブを差し込む。順序は「概要 → 予約枠 → ウェビナー設定 → 公開設定」とし、
+// 既存 standard イベントの並び (概要→予約枠→公開設定) を温存する。
+function buildTabs(kind: 'standard' | 'webinar'): TabDef[] {
+  const base: TabDef[] = [
+    { key: 'overview', label: '1. 概要', saveLabel: '概要を保存', sub: 'イベント名・場所・詳細を入力' },
+    { key: 'slots', label: '2. 予約枠', saveLabel: '', sub: '友だちが選べる日時を追加' },
+  ]
+  if (kind === 'webinar') {
+    base.push({ key: 'webinar', label: '3. ウェビナー設定', saveLabel: '', sub: '動画・CTA・視聴統計' })
+    base.push({ key: 'publish', label: '4. 公開設定', saveLabel: '公開設定を保存', sub: '承認制・リマインダ・公開' })
+  } else {
+    base.push({ key: 'publish', label: '3. 公開設定', saveLabel: '公開設定を保存', sub: '承認制・リマインダ・公開' })
+  }
+  return base
+}
 
 const DEFAULT_DRAFT: EventDetail = {
   id: '',
@@ -29,6 +43,12 @@ const DEFAULT_DRAFT: EventDetail = {
   reminder_hours_before: null,
   is_published: 0,
   sort_order: 0,
+  // Webinar Launch (migration 041) のデフォルト。
+  // 新規作成時にユーザーが「ウェビナー」を選ぶと kind='webinar' に切替わる。
+  kind: 'standard',
+  replay_window_minutes: 1440,
+  attendance_threshold_seconds: null,
+  archive_url: null,
 }
 
 export interface EventFormProps {
@@ -155,6 +175,16 @@ export default function EventForm({ accountId, eventId }: EventFormProps) {
         account_ids: targetType === 'multi-account-dedup'
           ? (accountIdsArr as unknown as EventDetail['account_ids'])
           : null,
+        // Webinar Launch (migration 041): webinar 用パラメータ。
+        // kind は create-only。create 時のみ payload に含めて送る (PUT 側は
+        // worker の updatable から除外されているので含めても無視される)。
+        replay_window_minutes: draft.kind === 'webinar' ? (draft.replay_window_minutes ?? null) : null,
+        attendance_threshold_seconds: draft.kind === 'webinar' ? (draft.attendance_threshold_seconds ?? null) : null,
+        archive_url: draft.kind === 'webinar' ? (draft.archive_url ?? null) : null,
+      }
+      if (!eventId) {
+        // 新規作成時のみ kind を送る (default 'standard')
+        payload.kind = draft.kind ?? 'standard'
       }
       if (eventId) {
         const updated = await eventsApi.updateEvent(accountId, eventId, payload)
@@ -355,33 +385,38 @@ export default function EventForm({ accountId, eventId }: EventFormProps) {
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
         {/* tab nav */}
         <div className="flex border-b border-gray-200">
-          {TABS.map((t) => {
-            const active = tab === t.key
-            const disabled = t.key !== 'overview' && !eventId
-            return (
-              <button
-                key={t.key}
-                disabled={disabled}
-                onClick={() => !disabled && setTab(t.key)}
-                title={disabled ? 'まず「概要」を保存してください' : undefined}
-                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
-                  active
-                    ? 'border-blue-600 text-blue-600 bg-blue-50'
-                    : disabled
-                    ? 'border-transparent text-gray-300 cursor-not-allowed'
-                    : 'border-transparent text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                <div>{t.label}</div>
-                <div className="text-xs font-normal mt-0.5 opacity-80">{t.sub}</div>
-              </button>
-            )
-          })}
+          {(() => {
+            // タブセットは draft.kind に応じて動的に変える。
+            // PUT で kind は変更不可なので、create 時の選択値がそのまま使われる。
+            const tabs = buildTabs(draft.kind === 'webinar' ? 'webinar' : 'standard')
+            return tabs.map((t) => {
+              const active = tab === t.key
+              const disabled = t.key !== 'overview' && !eventId
+              return (
+                <button
+                  key={t.key}
+                  disabled={disabled}
+                  onClick={() => !disabled && setTab(t.key)}
+                  title={disabled ? 'まず「概要」を保存してください' : undefined}
+                  className={`flex-1 px-4 py-3 text-sm font-medium transition-colors border-b-2 ${
+                    active
+                      ? 'border-blue-600 text-blue-600 bg-blue-50'
+                      : disabled
+                      ? 'border-transparent text-gray-300 cursor-not-allowed'
+                      : 'border-transparent text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  <div>{t.label}</div>
+                  <div className="text-xs font-normal mt-0.5 opacity-80">{t.sub}</div>
+                </button>
+              )
+            })
+          })()}
         </div>
 
         {/* tab body */}
         <div className="p-6">
-          {tab === 'overview' && <OverviewTab draft={draft} update={update} accounts={accounts} currentAccountId={accountId} />}
+          {tab === 'overview' && <OverviewTab draft={draft} update={update} accounts={accounts} currentAccountId={accountId} isCreate={!eventId} />}
           {tab === 'slots' && (
             <SlotsTab
               accountId={accountId}
@@ -390,11 +425,14 @@ export default function EventForm({ accountId, eventId }: EventFormProps) {
               setSlots={setSlots}
             />
           )}
+          {tab === 'webinar' && eventId && (
+            <WebinarSettingsTab accountId={accountId} eventId={eventId} event={draft} setEvent={setDraft} />
+          )}
           {tab === 'publish' && <PublishTab draft={draft} update={update} />}
         </div>
 
         {/* tab footer */}
-        {tab !== 'slots' && (
+        {tab !== 'slots' && tab !== 'webinar' && (
           <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
             <div className="text-xs text-gray-500">
               {tab === 'overview' && !eventId && '保存するとイベントが作成され、予約枠タブに進みます'}
@@ -416,7 +454,12 @@ export default function EventForm({ accountId, eventId }: EventFormProps) {
                 disabled={saving}
                 className="px-5 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
               >
-                {saving ? '保存中...' : tab === 'overview' && !eventId ? 'イベントを作成' : TABS.find((x) => x.key === tab)?.saveLabel ?? '保存'}
+                {(() => {
+                  if (saving) return '保存中...'
+                  if (tab === 'overview' && !eventId) return 'イベントを作成'
+                  const tabs = buildTabs(draft.kind === 'webinar' ? 'webinar' : 'standard')
+                  return tabs.find((x) => x.key === tab)?.saveLabel ?? '保存'
+                })()}
               </button>
             </div>
           </div>
@@ -435,11 +478,13 @@ function OverviewTab({
   update,
   accounts,
   currentAccountId,
+  isCreate,
 }: {
   draft: EventDetail
   update: <K extends keyof EventDetail>(k: K, v: EventDetail[K]) => void
   accounts: Array<{ id: string; name: string; country: string | null; isActive: boolean }>
   currentAccountId: string
+  isCreate: boolean
 }) {
   const descLen = (draft.description ?? '').length
   const targetType = draft.target_type ?? 'single'
@@ -449,8 +494,45 @@ function OverviewTab({
       ? (() => { try { return JSON.parse(draft.account_ids) as string[] } catch { return [] } })()
       : []
   const activeAccounts = accounts.filter((a) => a.isActive)
+  const kind = draft.kind === 'webinar' ? 'webinar' : 'standard'
   return (
     <div className="space-y-5">
+      {/* Webinar Launch (migration 041): イベント種別。create 時のみ切替可能。
+          編集後の kind 変更は worker の updatable から除外されているので
+          表示専用にする (PUT で送られても無視される)。 */}
+      {isCreate ? (
+        <div>
+          <div className="text-sm font-medium text-gray-700 mb-2">イベント種別</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => update('kind', 'standard')}
+              className={`p-3 border-2 rounded-lg text-left ${
+                kind === 'standard' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <div className="text-sm font-bold">通常イベント</div>
+              <div className="text-xs text-gray-600">個別面談・対面セミナーなど予約枠ベース</div>
+            </button>
+            <button
+              type="button"
+              onClick={() => update('kind', 'webinar')}
+              className={`p-3 border-2 rounded-lg text-left ${
+                kind === 'webinar' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <div className="text-sm font-bold">ウェビナー</div>
+              <div className="text-xs text-gray-600">録画動画の擬似ライブ配信 + CTA 自動表示</div>
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="text-xs text-gray-500">
+          種別: <span className="font-medium text-gray-700">{kind === 'webinar' ? 'ウェビナー' : '通常イベント'}</span>
+          <span className="ml-2 text-gray-400">(作成後の変更は不可)</span>
+        </div>
+      )}
+
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1.5">
           イベント名 <span className="text-red-500">*</span>
@@ -625,6 +707,62 @@ function OverviewTab({
           </div>
         )}
       </div>
+
+      {/* Webinar Launch (migration 041): kind='webinar' のときのみ動画関連
+          パラメータを overview タブで設定可能にする (新規作成時に reasonable
+          default を入れてもらうため。動画本体のアップロードは「ウェビナー
+          設定」タブで行う)。これらは PUT でも更新できるので edit 後も表示。 */}
+      {kind === 'webinar' && (
+        <div className="border-t border-gray-200 pt-5">
+          <div className="text-sm font-medium text-gray-700 mb-3">ウェビナー基本設定</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                リプレイ視聴可能期間（分）
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={draft.replay_window_minutes ?? ''}
+                onChange={(e) =>
+                  update('replay_window_minutes', e.target.value === '' ? null : Number(e.target.value))
+                }
+                placeholder="1440 (=24時間)"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">動画終了後に視聴を許可する分数。0/空欄 → リプレイ不可。</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                完視聴判定の閾値秒数
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={draft.attendance_threshold_seconds ?? ''}
+                onChange={(e) =>
+                  update('attendance_threshold_seconds', e.target.value === '' ? null : Number(e.target.value))
+                }
+                placeholder="空欄 → 動画の 80% に自動設定"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">この秒数到達で完視聴扱い。空欄なら duration の 80%。</p>
+            </div>
+          </div>
+          <div className="mt-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              アーカイブ URL（公開期間切れ後のリダイレクト先）
+            </label>
+            <input
+              type="url"
+              value={draft.archive_url ?? ''}
+              onChange={(e) => update('archive_url', e.target.value || null)}
+              placeholder="https://... (アーカイブ販売 LP など)"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

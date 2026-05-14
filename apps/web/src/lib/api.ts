@@ -1396,6 +1396,15 @@ export interface EventListItem {
   target_type?: 'single' | 'multi-account-dedup';
   account_ids?: string | string[] | null;
   line_account_id?: string;
+  // Webinar Launch (migration 041). standard 互換のため optional。
+  kind?: EventKind | null;
+  video_r2_key?: string | null;
+  video_duration_seconds?: number | null;
+  video_mime_type?: string | null;
+  video_size_bytes?: number | null;
+  replay_window_minutes?: number | null;
+  attendance_threshold_seconds?: number | null;
+  archive_url?: string | null;
 }
 
 export interface EventDetail {
@@ -1419,6 +1428,76 @@ export interface EventDetail {
   account_ids?: string | string[] | null;
   dedup_priority?: string | string[] | null;
   line_account_id?: string;
+  // Webinar Launch (migration 041). create-only な kind / read-only な
+  // video_* も含めて serializer が返すので UI で表示するため optional。
+  kind?: EventKind | null;
+  video_r2_key?: string | null;
+  video_duration_seconds?: number | null;
+  video_mime_type?: string | null;
+  video_size_bytes?: number | null;
+  replay_window_minutes?: number | null;
+  attendance_threshold_seconds?: number | null;
+  archive_url?: string | null;
+}
+
+// Webinar Launch (migration 041). 設計書 §4.2 の webinar_cta_items 列を
+// snake_case のまま受け取る (worker は SELECT * で返す)。
+export type EventKind = 'standard' | 'webinar';
+export type WebinarCtaDisplayMode = 'banner' | 'modal' | 'sticky';
+export type WebinarCtaActionType = 'url' | 'tag' | 'tracked_link' | 'close';
+
+export interface WebinarCtaItem {
+  id: string;
+  event_id: string;
+  at_seconds: number;
+  display_mode: WebinarCtaDisplayMode;
+  label: string;
+  action_type: WebinarCtaActionType;
+  action_value: string | null;
+  dismiss_after_seconds: number | null;
+  sort_order: number;
+  is_active: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WebinarCtaInput {
+  at_seconds: number;
+  display_mode: WebinarCtaDisplayMode;
+  label: string;
+  action_type: WebinarCtaActionType;
+  action_value?: string | null;
+  dismiss_after_seconds?: number | null;
+  sort_order?: number;
+  is_active?: number;
+}
+
+export interface WebinarStats {
+  duration_seconds: number | null;
+  attendance_threshold_seconds: number | null;
+  bookings: {
+    total: number;
+    opened: number;
+    started: number;
+    completed: number;
+    avg_max_position_seconds: number;
+  };
+  ctas: Array<{
+    cta_id: string;
+    label: string;
+    at_seconds: number;
+    click_unique_count: number;
+    click_total_count: number;
+    ctr_unique: number;
+  }>;
+}
+
+export interface WebinarVideoUploadUrl {
+  upload_url: string;
+  method: 'PUT';
+  r2_key: string;
+  expires_at: string;
+  headers: Record<string, string>;
 }
 
 export interface EventSlot {
@@ -1543,5 +1622,90 @@ export const eventsApi = {
   pendingCount: (accountId: string) =>
     fetchApi<{ count: number }>(
       withAccount('/api/events/admin/events/notifications/pending', accountId),
+    ),
+};
+
+// ============================================================
+// Webinar admin API (migration 041 / routes/webinar.ts)
+// ============================================================
+
+export const webinarApi = {
+  // ---- CTA CRUD ----
+  getCtaList: (eventId: string, accountId: string) =>
+    fetchApi<{ items: WebinarCtaItem[] }>(
+      withAccount(`/api/events/admin/events/${eventId}/cta`, accountId),
+    ),
+  createCta: (eventId: string, accountId: string, payload: WebinarCtaInput) =>
+    fetchApi<WebinarCtaItem>(
+      withAccount(`/api/events/admin/events/${eventId}/cta`, accountId),
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+  updateCta: (
+    eventId: string,
+    ctaId: string,
+    accountId: string,
+    payload: Partial<WebinarCtaInput>,
+  ) =>
+    fetchApi<WebinarCtaItem>(
+      withAccount(`/api/events/admin/events/${eventId}/cta/${ctaId}`, accountId),
+      { method: 'PUT', body: JSON.stringify(payload) },
+    ),
+  deleteCta: (eventId: string, ctaId: string, accountId: string) =>
+    fetchApi<void>(
+      withAccount(`/api/events/admin/events/${eventId}/cta/${ctaId}`, accountId),
+      { method: 'DELETE' },
+    ),
+
+  // ---- Video upload / finalize / delete ----
+  // upload-url: Worker は presigned PUT 風に Worker 自身を通す proxy URL を返す。
+  // フロントは uploadUrl に XMLHttpRequest.PUT で File body を送ると、Worker が
+  // R2 に書き込む。完了後 finalizeVideo で events 行のメタを確定。
+  requestVideoUpload: (
+    eventId: string,
+    accountId: string,
+    payload: { mimeType: string; sizeBytes: number },
+  ) =>
+    fetchApi<WebinarVideoUploadUrl>(
+      withAccount(`/api/events/admin/events/${eventId}/video/upload-url`, accountId),
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          mime_type: payload.mimeType,
+          size_bytes: payload.sizeBytes,
+        }),
+      },
+    ),
+  finalizeVideo: (
+    eventId: string,
+    accountId: string,
+    payload: {
+      durationSeconds: number;
+      sizeBytes: number;
+      mimeType: string;
+      key: string;
+    },
+  ) =>
+    fetchApi<EventListItem>(
+      withAccount(`/api/events/admin/events/${eventId}/video/finalize`, accountId),
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          duration_seconds: payload.durationSeconds,
+          size_bytes: payload.sizeBytes,
+          mime_type: payload.mimeType,
+          r2_key: payload.key,
+        }),
+      },
+    ),
+  deleteVideo: (eventId: string, accountId: string) =>
+    fetchApi<void>(
+      withAccount(`/api/events/admin/events/${eventId}/video`, accountId),
+      { method: 'DELETE' },
+    ),
+
+  // ---- Stats ----
+  getWebinarStats: (eventId: string, accountId: string) =>
+    fetchApi<WebinarStats>(
+      withAccount(`/api/events/admin/events/${eventId}/webinar/stats`, accountId),
     ),
 };
