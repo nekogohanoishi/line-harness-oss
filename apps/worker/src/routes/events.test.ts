@@ -651,6 +651,7 @@ function makeEventDb(state: {
               reminder_day_before_enabled, reminder_hours_before,
               is_published, sort_order,
               target_type, account_ids, dedup_priority,
+              kind, replay_window_minutes, attendance_threshold_seconds, archive_url,
             ] = bound as [
               string, string, string, string | null, string | null, string | null,
               string | null, number,
@@ -658,6 +659,7 @@ function makeEventDb(state: {
               number, number | null,
               number, number,
               string, string | null, string | null,
+              string | undefined, number | null | undefined, number | null | undefined, string | null | undefined,
             ];
             const now = new Date().toISOString();
             state.events.push({
@@ -683,7 +685,12 @@ function makeEventDb(state: {
               target_type: target_type as 'single' | 'multi-account-dedup',
               account_ids,
               dedup_priority,
-            });
+              // Webinar Launch (migration 041)
+              kind: (kind ?? 'standard') as unknown as undefined,
+              replay_window_minutes: (replay_window_minutes ?? null) as unknown as undefined,
+              attendance_threshold_seconds: (attendance_threshold_seconds ?? null) as unknown as undefined,
+              archive_url: (archive_url ?? null) as unknown as undefined,
+            } as EventRow);
             return { success: true, meta: { changes: 1 } };
           }
           if (sql.startsWith('UPDATE events SET deleted_at')) {
@@ -902,6 +909,96 @@ describe('POST /api/events/admin/events', () => {
       body: JSON.stringify({ name: 'X', target_type: 'multi-account-dedup', account_ids: [] }),
     });
     expect(res.status).toBe(422);
+  });
+
+  // Webinar Launch (migration 041): kind / webinar 用パラメータ。
+  test('creates a webinar event with kind=webinar and webinar fields', async () => {
+    const state = { events: [] as EventRow[] };
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events?account_id=la1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Auto-webinar',
+        kind: 'webinar',
+        replay_window_minutes: 720,
+        attendance_threshold_seconds: 1800,
+        archive_url: 'https://example.com/archive',
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as EventRow & {
+      kind?: string;
+      replay_window_minutes?: number | null;
+      attendance_threshold_seconds?: number | null;
+      archive_url?: string | null;
+    };
+    expect(body.kind).toBe('webinar');
+    expect(body.replay_window_minutes).toBe(720);
+    expect(body.attendance_threshold_seconds).toBe(1800);
+    expect(body.archive_url).toBe('https://example.com/archive');
+  });
+
+  test('defaults kind to standard when omitted', async () => {
+    const state = { events: [] as EventRow[] };
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events?account_id=la1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Standard event' }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as EventRow & { kind?: string };
+    expect(body.kind).toBe('standard');
+  });
+
+  test('422 invalid kind value', async () => {
+    const app = setupApp({ events: [] });
+    const res = await app.request('/api/events/admin/events?account_id=la1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'X', kind: 'bogus' }),
+    });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('invalid_kind');
+  });
+
+  test('PUT updates replay_window_minutes/archive_url but ignores kind', async () => {
+    const state = {
+      events: [
+        baseEvent({
+          id: 'e1',
+          line_account_id: 'la1',
+          // pretend this is a webinar event created earlier
+          kind: 'webinar' as unknown as undefined,
+        } as Partial<EventRow>),
+      ],
+    };
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events/e1?account_id=la1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        replay_window_minutes: 2880,
+        attendance_threshold_seconds: 600,
+        archive_url: 'https://example.com/x',
+        // kind 変更は無視される (updatable から除外済)
+        kind: 'standard',
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as EventRow & {
+      kind?: string;
+      replay_window_minutes?: number | null;
+      attendance_threshold_seconds?: number | null;
+      archive_url?: string | null;
+    };
+    expect(body.replay_window_minutes).toBe(2880);
+    expect(body.attendance_threshold_seconds).toBe(600);
+    expect(body.archive_url).toBe('https://example.com/x');
+    // kind は変更されない
+    expect(body.kind).toBe('webinar');
   });
 });
 

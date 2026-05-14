@@ -16,7 +16,9 @@ import {
   EVENT_DESCRIPTION_MAX,
   CUSTOMER_NOTE_MAX,
   EVENT_IDEMPOTENCY_TTL_MINUTES,
+  EVENT_KINDS,
   type EventTargetType,
+  type EventKind,
 } from '../services/event-booking-types.js';
 import { getSlotsWithRemaining } from '../services/event-availability.js';
 import { verifyCallerLineUserId } from '../services/liff-auth.js';
@@ -113,6 +115,27 @@ function validateEventInput(
   if (has('sort_order') && body.sort_order != null) {
     if (!Number.isInteger(body.sort_order)) return { ok: false, code: 'invalid_sort_order' };
   }
+  // Webinar Launch (migration 041): kind / webinar 用 optional フィールド。
+  // kind は create 時のみ受け取り (default 'standard')、PUT 側では updatable
+  // から除外しているので無視される。値域は EVENT_KINDS。
+  if (isCreate && has('kind') && body.kind != null) {
+    if (!EVENT_KINDS.includes(body.kind as EventKind)) {
+      return { ok: false, code: 'invalid_kind' };
+    }
+  }
+  for (const key of ['replay_window_minutes', 'attendance_threshold_seconds'] as const) {
+    if (has(key) && body[key] != null) {
+      const v = body[key];
+      if (!Number.isInteger(v) || (v as number) < 0) {
+        return { ok: false, code: `invalid_${key}` };
+      }
+    }
+  }
+  if (has('archive_url') && body.archive_url != null) {
+    if (typeof body.archive_url !== 'string' || (body.archive_url as string).length > 2000) {
+      return { ok: false, code: 'invalid_archive_url' };
+    }
+  }
   if (has('target_type') && body.target_type != null) {
     if (body.target_type !== 'single' && body.target_type !== 'multi-account-dedup') {
       return { ok: false, code: 'invalid_target_type' };
@@ -155,6 +178,11 @@ events.post('/api/events/admin/events', async (c) => {
   // line_account_id sentinel: multi では account_ids[0] を保存 (NOT NULL 制約回避)
   const lineAccountIdToWrite = targetType === 'multi-account-dedup' ? accountIds![0] : account_id;
 
+  // Webinar Launch (migration 041): kind / replay_window_minutes /
+  // attendance_threshold_seconds / archive_url を optional で受け取る。
+  // video 系 (video_r2_key 等) は events.ts では更新させず、webinar.ts の
+  // finalize/delete でのみ書く。INSERT 時点では NULL のままにしておく。
+  const kindValue = (body.kind as EventKind | undefined) ?? 'standard';
   await c.env.DB
     .prepare(
       `INSERT INTO events (
@@ -163,8 +191,9 @@ events.post('/api/events/admin/events', async (c) => {
          max_bookings_per_friend, requires_approval, cancel_deadline_hours_before,
          reminder_day_before_enabled, reminder_hours_before,
          is_published, sort_order,
-         target_type, account_ids, dedup_priority
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         target_type, account_ids, dedup_priority,
+         kind, replay_window_minutes, attendance_threshold_seconds, archive_url
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id,
@@ -185,6 +214,10 @@ events.post('/api/events/admin/events', async (c) => {
       targetType,
       accountIds ? JSON.stringify(accountIds) : null,
       dedupPriority ? JSON.stringify(dedupPriority) : null,
+      kindValue,
+      (body.replay_window_minutes as number | null | undefined) ?? null,
+      (body.attendance_threshold_seconds as number | null | undefined) ?? null,
+      (body.archive_url as string | null | undefined) ?? null,
     )
     .run();
   const row = await c.env.DB
@@ -286,6 +319,12 @@ events.put('/api/events/admin/events/:id', async (c) => {
     'is_published',
     'sort_order',
     'target_type',
+    // Webinar Launch (migration 041): webinar 用パラメータ。
+    // kind / video_* は意図的に除外 (kind は create-only、video_* は
+    // webinar.ts の finalize/delete でのみ書く)。
+    'replay_window_minutes',
+    'attendance_threshold_seconds',
+    'archive_url',
   ] as const;
   const setClauses: string[] = [];
   const setValues: unknown[] = [];
