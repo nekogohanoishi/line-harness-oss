@@ -219,6 +219,16 @@ function matchConditions(
     }
   }
 
+  // webinar_* 用: eventId / ctaItemId による絞り込み (どちらも optional)
+  // webinar_opened / webinar_started / webinar_completed / webinar_cta_clicked
+  // の payload.eventData には { eventId, bookingId, [ctaItemId], [positionSeconds] } が入る。
+  if (conditions.eventId !== undefined) {
+    if (payload.eventData?.eventId !== conditions.eventId) return false;
+  }
+  if (conditions.ctaItemId !== undefined) {
+    if (payload.eventData?.ctaItemId !== conditions.ctaItemId) return false;
+  }
+
   return true;
 }
 

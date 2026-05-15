@@ -30,8 +30,45 @@ import {
   type WebinarCtaActionType,
 } from '../services/event-booking-types.js';
 import { verifyCallerLineUserId } from '../services/liff-auth.js';
+import { fireEvent } from '../services/event-bus.js';
 
 const webinar = new Hono<Env>();
+
+// ============================================================
+// Helper: fire an automation/scoring event for a webinar tracking event.
+//
+// Looks up the LINE account's channel access token so that send_message
+// actions can succeed; missing tokens are tolerated (no-op for send_message).
+// Errors are caught and logged — webinar tracking endpoints must always
+// return 200 even if the downstream event bus fails.
+// ============================================================
+async function fireWebinarEvent(
+  env: Env['Bindings'],
+  eventType:
+    | 'webinar_opened'
+    | 'webinar_started'
+    | 'webinar_completed'
+    | 'webinar_cta_clicked',
+  friendId: string,
+  accountId: string,
+  eventData: Record<string, unknown>,
+): Promise<void> {
+  try {
+    let accessToken: string | undefined;
+    try {
+      const acc = await env.DB
+        .prepare(`SELECT channel_access_token FROM line_accounts WHERE id = ?`)
+        .bind(accountId)
+        .first<{ channel_access_token: string | null }>();
+      accessToken = acc?.channel_access_token ?? undefined;
+    } catch (e) {
+      console.error('fireWebinarEvent: line_accounts lookup failed', e);
+    }
+    await fireEvent(env.DB, eventType, { friendId, eventData }, accessToken, accountId);
+  } catch (err) {
+    console.error(`fireWebinarEvent ${eventType} failed:`, err);
+  }
+}
 
 // ============================================================
 // Helpers
@@ -874,6 +911,8 @@ webinar.post('/api/liff/webinar/:bookingId/event/opened', async (c) => {
   const b = auth.booking;
   // 初回のみ書く (COALESCE) — 二度目以降は no-op
   const now = new Date().toISOString();
+  // 事前に「初回かどうか」を読む: b.webinar_first_opened_at が null なら初回
+  const isFirst = b.webinar_first_opened_at == null;
   await c.env.DB
     .prepare(
       `UPDATE event_bookings
@@ -882,6 +921,12 @@ webinar.post('/api/liff/webinar/:bookingId/event/opened', async (c) => {
     )
     .bind(now, now, b.booking_id)
     .run();
+  if (isFirst) {
+    await fireWebinarEvent(c.env, 'webinar_opened', b.friend_id, b.account_id, {
+      eventId: b.event_id,
+      bookingId: b.booking_id,
+    });
+  }
   return c.json({ ok: true });
 });
 
@@ -890,6 +935,7 @@ webinar.post('/api/liff/webinar/:bookingId/event/started', async (c) => {
   if (!auth.ok) return bad(c, auth.code, auth.status);
   const b = auth.booking;
   const now = new Date().toISOString();
+  const isFirst = b.webinar_video_started_at == null;
   await c.env.DB
     .prepare(
       `UPDATE event_bookings
@@ -898,6 +944,12 @@ webinar.post('/api/liff/webinar/:bookingId/event/started', async (c) => {
     )
     .bind(now, now, b.booking_id)
     .run();
+  if (isFirst) {
+    await fireWebinarEvent(c.env, 'webinar_started', b.friend_id, b.account_id, {
+      eventId: b.event_id,
+      bookingId: b.booking_id,
+    });
+  }
   return c.json({ ok: true });
 });
 
@@ -959,14 +1011,23 @@ webinar.post('/api/liff/webinar/:bookingId/event/cta-click', async (c) => {
 
   const clickId = crypto.randomUUID();
   const now = new Date().toISOString();
+  const position = Math.floor(pos as number);
   await c.env.DB
     .prepare(
       `INSERT INTO webinar_cta_clicks
          (id, booking_id, cta_item_id, position_seconds, clicked_at)
        VALUES (?, ?, ?, ?, ?)`,
     )
-    .bind(clickId, b.booking_id, ctaId, Math.floor(pos as number), now)
+    .bind(clickId, b.booking_id, ctaId, position, now)
     .run();
+  // CTA クリックは毎回発火 (冪等性は automations 側で扱う場合に備えて
+  // ctaItemId / positionSeconds を eventData に含める)
+  await fireWebinarEvent(c.env, 'webinar_cta_clicked', b.friend_id, b.account_id, {
+    eventId: b.event_id,
+    bookingId: b.booking_id,
+    ctaItemId: ctaId,
+    positionSeconds: position,
+  });
   return c.json({ ok: true });
 });
 
@@ -975,6 +1036,7 @@ webinar.post('/api/liff/webinar/:bookingId/event/completed', async (c) => {
   if (!auth.ok) return bad(c, auth.code, auth.status);
   const b = auth.booking;
   const now = new Date().toISOString();
+  const isFirst = b.webinar_completed_at == null;
   // 既に completed なら no-op (COALESCE)
   await c.env.DB
     .prepare(
@@ -984,6 +1046,12 @@ webinar.post('/api/liff/webinar/:bookingId/event/completed', async (c) => {
     )
     .bind(now, now, b.booking_id)
     .run();
+  if (isFirst) {
+    await fireWebinarEvent(c.env, 'webinar_completed', b.friend_id, b.account_id, {
+      eventId: b.event_id,
+      bookingId: b.booking_id,
+    });
+  }
   return c.json({ ok: true });
 });
 

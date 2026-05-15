@@ -18,6 +18,11 @@ const liffAuthMocks = {
 };
 vi.mock('../services/liff-auth.js', () => liffAuthMocks);
 
+const eventBusMocks = {
+  fireEvent: vi.fn().mockResolvedValue(undefined),
+};
+vi.mock('../services/event-bus.js', () => eventBusMocks);
+
 const { default: webinar } = await import('./webinar.js');
 
 type TestEnv = {
@@ -501,6 +506,8 @@ function makeWebinarEvent(overrides: Partial<EventRow> = {}): EventRow {
 beforeEach(() => {
   liffAuthMocks.verifyCallerLineUserId.mockReset();
   liffAuthMocks.verifyCallerLineUserId.mockResolvedValue(null);
+  eventBusMocks.fireEvent.mockClear();
+  eventBusMocks.fireEvent.mockResolvedValue(undefined);
 });
 
 describe('Admin CTA CRUD', () => {
@@ -811,5 +818,156 @@ describe('LIFF completed idempotency', () => {
     });
     expect(res2.status).toBe(200);
     expect(state.bookings[0].webinar_completed_at).toBe(first);
+  });
+});
+
+// ------------------------------------------------------------
+// Phase 5: automations 連携 — fireEvent が正しい event type / eventData
+// で、かつ冪等に呼ばれることを確認する。
+// ------------------------------------------------------------
+describe('Phase 5: webinar_* automations event firing', () => {
+  function seedLiveBooking(state: State): BookingRow {
+    state.friends.push({ id: 'f1', line_account_id: 'la1', line_user_id: 'U_user_1' });
+    state.slots.push({
+      id: 'sl1', event_id: 'ev1',
+      starts_at: new Date(Date.now() - 60_000).toISOString(),
+      ends_at: new Date(Date.now() + 600_000).toISOString(),
+    });
+    state.events.push(makeWebinarEvent());
+    const booking: BookingRow = {
+      id: 'b1', line_account_id: 'la1', event_id: 'ev1', slot_id: 'sl1', friend_id: 'f1',
+      webinar_first_opened_at: null, webinar_video_started_at: null,
+      webinar_max_position_seconds: 0, webinar_completed_at: null,
+      webinar_last_heartbeat_at: null,
+    };
+    state.bookings.push(booking);
+    return booking;
+  }
+
+  test('opened: fires webinar_opened on first call, no-op on second', async () => {
+    const state = emptyState();
+    seedLiveBooking(state);
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+
+    const res1 = await app.request('/api/liff/webinar/b1/event/opened', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(res1.status).toBe(200);
+    expect(eventBusMocks.fireEvent).toHaveBeenCalledTimes(1);
+    const [, eventType, payload] = eventBusMocks.fireEvent.mock.calls[0];
+    expect(eventType).toBe('webinar_opened');
+    expect(payload.friendId).toBe('f1');
+    expect(payload.eventData).toMatchObject({ eventId: 'ev1', bookingId: 'b1' });
+
+    // 2回目は no-op
+    const res2 = await app.request('/api/liff/webinar/b1/event/opened', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(res2.status).toBe(200);
+    expect(eventBusMocks.fireEvent).toHaveBeenCalledTimes(1);
+  });
+
+  test('started: fires webinar_started once across multiple calls', async () => {
+    const state = emptyState();
+    seedLiveBooking(state);
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+
+    await app.request('/api/liff/webinar/b1/event/started', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token' },
+    });
+    await app.request('/api/liff/webinar/b1/event/started', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token' },
+    });
+    await app.request('/api/liff/webinar/b1/event/started', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token' },
+    });
+
+    expect(eventBusMocks.fireEvent).toHaveBeenCalledTimes(1);
+    expect(eventBusMocks.fireEvent.mock.calls[0][1]).toBe('webinar_started');
+  });
+
+  test('completed: fires webinar_completed once', async () => {
+    const state = emptyState();
+    seedLiveBooking(state);
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+
+    await app.request('/api/liff/webinar/b1/event/completed', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(eventBusMocks.fireEvent).toHaveBeenCalledTimes(1);
+    expect(eventBusMocks.fireEvent.mock.calls[0][1]).toBe('webinar_completed');
+    expect(eventBusMocks.fireEvent.mock.calls[0][2].eventData).toMatchObject({
+      eventId: 'ev1',
+      bookingId: 'b1',
+    });
+
+    await app.request('/api/liff/webinar/b1/event/completed', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(eventBusMocks.fireEvent).toHaveBeenCalledTimes(1);
+  });
+
+  test('cta-click: fires webinar_cta_clicked with ctaItemId in eventData', async () => {
+    const state = emptyState();
+    seedLiveBooking(state);
+    const now = new Date().toISOString();
+    state.ctas.push({
+      id: 'c1', event_id: 'ev1', at_seconds: 30, display_mode: 'modal',
+      label: 'A', action_type: 'url', action_value: 'https://example.com',
+      dismiss_after_seconds: null, sort_order: 0, is_active: 1, deleted_at: null,
+      created_at: now, updated_at: now,
+    });
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+
+    const res = await app.request('/api/liff/webinar/b1/event/cta-click', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token', 'content-type': 'application/json' },
+      body: JSON.stringify({ ctaItemId: 'c1', positionSeconds: 45 }),
+    });
+    expect(res.status).toBe(200);
+    expect(eventBusMocks.fireEvent).toHaveBeenCalledTimes(1);
+    const [, eventType, payload] = eventBusMocks.fireEvent.mock.calls[0];
+    expect(eventType).toBe('webinar_cta_clicked');
+    expect(payload.friendId).toBe('f1');
+    expect(payload.eventData).toMatchObject({
+      eventId: 'ev1',
+      bookingId: 'b1',
+      ctaItemId: 'c1',
+      positionSeconds: 45,
+    });
+  });
+
+  test('cta-click: fires every time (not idempotent)', async () => {
+    const state = emptyState();
+    seedLiveBooking(state);
+    const now = new Date().toISOString();
+    state.ctas.push({
+      id: 'c1', event_id: 'ev1', at_seconds: 30, display_mode: 'modal',
+      label: 'A', action_type: 'url', action_value: 'https://example.com',
+      dismiss_after_seconds: null, sort_order: 0, is_active: 1, deleted_at: null,
+      created_at: now, updated_at: now,
+    });
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+
+    for (let i = 0; i < 3; i++) {
+      await app.request('/api/liff/webinar/b1/event/cta-click', {
+        method: 'POST',
+        headers: { authorization: 'Bearer token', 'content-type': 'application/json' },
+        body: JSON.stringify({ ctaItemId: 'c1', positionSeconds: 45 + i }),
+      });
+    }
+    expect(eventBusMocks.fireEvent).toHaveBeenCalledTimes(3);
   });
 });

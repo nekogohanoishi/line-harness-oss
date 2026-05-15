@@ -225,3 +225,149 @@ describe('fireEvent — send_message action logging', () => {
     expect(String(captured[0].binds[3])).toContain('from-template');
   });
 });
+
+// ------------------------------------------------------------
+// Phase 5: webinar_* イベントが automations を発火させ、
+// conditions.eventId / ctaItemId による絞り込みが効くことを確認する。
+// ------------------------------------------------------------
+describe('fireEvent — webinar_* automations', () => {
+  let captured: CapturedInsert[];
+
+  beforeEach(() => {
+    captured = [];
+    vi.clearAllMocks();
+  });
+
+  it('webinar_completed: fires add_tag action for matching eventId', async () => {
+    const db = await import('@line-crm/db');
+    (db.getActiveAutomationsByEvent as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue([
+      {
+        id: 'auto-w1',
+        line_account_id: 'acc-1',
+        conditions: JSON.stringify({ eventId: 'ev-target' }),
+        actions: JSON.stringify([
+          { type: 'add_tag', params: { tagId: 'tag-completed' } },
+        ]),
+      },
+    ]);
+
+    const dbFake = fakeDb({ friend: { line_user_id: 'U' }, capturedInserts: captured });
+
+    await fireEvent(
+      dbFake,
+      'webinar_completed',
+      {
+        friendId: 'friend-1',
+        eventData: { eventId: 'ev-target', bookingId: 'b1' },
+      },
+      'token',
+      'acc-1',
+    );
+
+    expect((db.addTagToFriend as unknown as { mock: { calls: unknown[][] } }).mock.calls.length).toBe(1);
+    expect((db.addTagToFriend as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][1]).toBe('friend-1');
+    expect((db.addTagToFriend as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][2]).toBe('tag-completed');
+  });
+
+  it('webinar_completed: skips automation when eventId does not match', async () => {
+    const db = await import('@line-crm/db');
+    (db.getActiveAutomationsByEvent as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue([
+      {
+        id: 'auto-w2',
+        line_account_id: 'acc-1',
+        conditions: JSON.stringify({ eventId: 'ev-target' }),
+        actions: JSON.stringify([
+          { type: 'add_tag', params: { tagId: 'tag-completed' } },
+        ]),
+      },
+    ]);
+
+    const dbFake = fakeDb({ friend: { line_user_id: 'U' }, capturedInserts: captured });
+
+    await fireEvent(
+      dbFake,
+      'webinar_completed',
+      {
+        friendId: 'friend-1',
+        eventData: { eventId: 'ev-different', bookingId: 'b1' },
+      },
+      'token',
+      'acc-1',
+    );
+
+    expect((db.addTagToFriend as unknown as { mock: { calls: unknown[][] } }).mock.calls.length).toBe(0);
+  });
+
+  it('webinar_cta_clicked: ctaItemId condition filters automations', async () => {
+    const db = await import('@line-crm/db');
+    (db.getActiveAutomationsByEvent as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue([
+      {
+        id: 'auto-cta1',
+        line_account_id: null,
+        conditions: JSON.stringify({ ctaItemId: 'cta-A' }),
+        actions: JSON.stringify([{ type: 'add_tag', params: { tagId: 'clicked-A' } }]),
+      },
+      {
+        id: 'auto-cta2',
+        line_account_id: null,
+        conditions: JSON.stringify({ ctaItemId: 'cta-B' }),
+        actions: JSON.stringify([{ type: 'add_tag', params: { tagId: 'clicked-B' } }]),
+      },
+      {
+        id: 'auto-cta-all',
+        line_account_id: null,
+        conditions: JSON.stringify({}),
+        actions: JSON.stringify([{ type: 'add_tag', params: { tagId: 'clicked-any' } }]),
+      },
+    ]);
+
+    const dbFake = fakeDb({ friend: { line_user_id: 'U' }, capturedInserts: captured });
+
+    await fireEvent(
+      dbFake,
+      'webinar_cta_clicked',
+      {
+        friendId: 'friend-1',
+        eventData: { eventId: 'ev1', bookingId: 'b1', ctaItemId: 'cta-A', positionSeconds: 30 },
+      },
+      'token',
+      null,
+    );
+
+    const addTagCalls = (db.addTagToFriend as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    // cta-A 一致 と 条件無しの2つが発火する
+    const taggedIds = addTagCalls.map((c) => c[2]);
+    expect(taggedIds).toContain('clicked-A');
+    expect(taggedIds).toContain('clicked-any');
+    expect(taggedIds).not.toContain('clicked-B');
+  });
+
+  it('webinar_opened: empty conditions match all webinars', async () => {
+    const db = await import('@line-crm/db');
+    (db.getActiveAutomationsByEvent as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue([
+      {
+        id: 'auto-open',
+        line_account_id: null,
+        conditions: JSON.stringify({}),
+        actions: JSON.stringify([{ type: 'add_tag', params: { tagId: 'opened-any' } }]),
+      },
+    ]);
+
+    const dbFake = fakeDb({ friend: { line_user_id: 'U' }, capturedInserts: captured });
+
+    await fireEvent(
+      dbFake,
+      'webinar_opened',
+      {
+        friendId: 'friend-1',
+        eventData: { eventId: 'any-event', bookingId: 'b1' },
+      },
+      'token',
+      null,
+    );
+
+    const addTagCalls = (db.addTagToFriend as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(addTagCalls.length).toBe(1);
+    expect(addTagCalls[0][2]).toBe('opened-any');
+  });
+});
