@@ -1748,8 +1748,63 @@ export const webinarApi = {
       { method: 'POST' },
     ),
 
+  // ---- Phase 7b: コメント風固定表示 (fake_comments) ----
+  listFakeComments: (eventId: string, accountId: string) =>
+    fetchApi<{ items: WebinarFakeComment[] }>(
+      withAccount(`/api/events/admin/events/${eventId}/fake-comments`, accountId),
+    ),
+  createFakeComment: (eventId: string, accountId: string, payload: WebinarFakeCommentInput) =>
+    fetchApi<WebinarFakeComment>(
+      withAccount(`/api/events/admin/events/${eventId}/fake-comments`, accountId),
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+  updateFakeComment: (
+    eventId: string,
+    commentId: string,
+    accountId: string,
+    payload: Partial<WebinarFakeCommentInput>,
+  ) =>
+    fetchApi<WebinarFakeComment>(
+      withAccount(`/api/events/admin/events/${eventId}/fake-comments/${commentId}`, accountId),
+      { method: 'PUT', body: JSON.stringify(payload) },
+    ),
+  deleteFakeComment: (eventId: string, commentId: string, accountId: string) =>
+    fetchApi<void>(
+      withAccount(`/api/events/admin/events/${eventId}/fake-comments/${commentId}`, accountId),
+      { method: 'DELETE' },
+    ),
+  bulkCreateFakeComments: (
+    eventId: string,
+    accountId: string,
+    rows: WebinarFakeCommentInput[],
+  ) =>
+    fetchApi<{ inserted_count: number; ids: string[] }>(
+      withAccount(`/api/events/admin/events/${eventId}/fake-comments/bulk`, accountId),
+      { method: 'POST', body: JSON.stringify({ rows }) },
+    ),
 };
-// Phase 7b (migration 043): fake_comments の API/型は次の commit で追加.
+
+// Phase 7b (migration 043): webinar_fake_comments 行を snake_case のまま受け取る。
+export interface WebinarFakeComment {
+  id: string;
+  event_id: string;
+  at_seconds: number;
+  author_name: string;
+  body: string;
+  author_color: string | null;
+  sort_order: number;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WebinarFakeCommentInput {
+  at_seconds: number;
+  author_name: string;
+  body: string;
+  author_color?: string | null;
+  sort_order?: number;
+}
 
 // Phase 6a (migration 042): event_slot_recurrence 行を snake_case のまま受け取る。
 export interface WebinarRecurrenceItem {

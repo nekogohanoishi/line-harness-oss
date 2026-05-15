@@ -27,6 +27,9 @@ import {
   WEBINAR_DEFAULT_ATTENDANCE_RATIO,
   WEBINAR_UPLOAD_URL_TTL_SECONDS,
   WEBINAR_ACTIVE_VIEWER_WINDOW_SECONDS,
+  WEBINAR_FAKE_COMMENT_AUTHOR_MAX,
+  WEBINAR_FAKE_COMMENT_BODY_MAX,
+  WEBINAR_FAKE_COMMENT_BULK_MAX,
   type WebinarCtaDisplayMode,
   type WebinarCtaActionType,
 } from '../services/event-booking-types.js';
@@ -803,6 +806,22 @@ webinar.get('/api/liff/webinar/:bookingId/manifest', async (c) => {
     .bind(b.event_id)
     .all();
 
+  // Phase 7b: fake_comments は show_fake_comments=1 のときだけ載せる
+  // (それ以外は LIFF ペイロード軽量化のため省略).
+  let fakeComments: unknown[] = [];
+  if (b.show_fake_comments === 1) {
+    const { results } = await c.env.DB
+      .prepare(
+        `SELECT id, at_seconds, author_name, body, author_color, sort_order
+           FROM webinar_fake_comments
+          WHERE event_id = ? AND deleted_at IS NULL
+          ORDER BY at_seconds ASC, sort_order ASC, created_at ASC`,
+      )
+      .bind(b.event_id)
+      .all();
+    fakeComments = results ?? [];
+  }
+
   const access = computeAccessState(
     b.slot_starts_at,
     b.video_duration_seconds,
@@ -843,11 +862,14 @@ webinar.get('/api/liff/webinar/:bookingId/manifest', async (c) => {
     access_state: access.state,
     server_now_ts: access.server_now_ts,
     ctas: ctas ?? [],
-    // Phase 7a: live-feel — 同接表示の on/off フラグ. fake comments は
-    // Phase 7b で同じ live_feel オブジェクトに追加する。
+    // Phase 7: live-feel
+    //   show_concurrent_viewers / show_fake_comments=0 のとき array は空配列で
+    //   返し、client は表示制御フラグを見て polling / 表示を抑止する。
     live_feel: {
       show_concurrent_viewers: b.show_concurrent_viewers === 1,
+      show_fake_comments: b.show_fake_comments === 1,
     },
+    fake_comments: fakeComments,
   });
 });
 
@@ -901,7 +923,246 @@ webinar.get('/api/liff/webinar/:bookingId/concurrent', async (c) => {
   });
 });
 
-// Phase 7b: fake_comments CRUD + bulk endpoints は次の commit で追加.
+// ============================================================
+// Admin: fake_comments CRUD + bulk (Phase 7b)
+// ============================================================
+
+interface FakeCommentInput {
+  at_seconds?: number;
+  author_name?: string;
+  body?: string;
+  author_color?: string | null;
+  sort_order?: number;
+}
+
+function validateFakeCommentInput(
+  body: Record<string, unknown>,
+  durationSeconds: number | null,
+  isCreate: boolean,
+): { ok: true } | { ok: false; code: string } {
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(body, k);
+  if (isCreate || has('at_seconds')) {
+    const v = body.at_seconds;
+    if (!Number.isInteger(v) || (v as number) < 0) {
+      return { ok: false, code: 'invalid_at_seconds' };
+    }
+    if (durationSeconds != null && (v as number) > durationSeconds) {
+      return { ok: false, code: 'at_seconds_exceeds_duration' };
+    }
+  }
+  if (isCreate || has('author_name')) {
+    const v = body.author_name;
+    if (
+      typeof v !== 'string' ||
+      v.length === 0 ||
+      v.length > WEBINAR_FAKE_COMMENT_AUTHOR_MAX
+    ) {
+      return { ok: false, code: 'invalid_author_name' };
+    }
+  }
+  if (isCreate || has('body')) {
+    const v = body.body;
+    if (
+      typeof v !== 'string' ||
+      v.length === 0 ||
+      v.length > WEBINAR_FAKE_COMMENT_BODY_MAX
+    ) {
+      return { ok: false, code: 'invalid_body' };
+    }
+  }
+  if (has('author_color') && body.author_color != null) {
+    if (
+      typeof body.author_color !== 'string' ||
+      (body.author_color as string).length > 32
+    ) {
+      return { ok: false, code: 'invalid_author_color' };
+    }
+  }
+  if (has('sort_order') && body.sort_order != null && !Number.isInteger(body.sort_order)) {
+    return { ok: false, code: 'invalid_sort_order' };
+  }
+  return { ok: true };
+}
+
+async function fetchEventDuration(
+  db: D1Database,
+  event_id: string,
+): Promise<number | null> {
+  const row = await db
+    .prepare(`SELECT video_duration_seconds FROM events WHERE id = ?`)
+    .bind(event_id)
+    .first<{ video_duration_seconds: number | null }>();
+  return row?.video_duration_seconds ?? null;
+}
+
+webinar.get('/api/events/admin/events/:id/fake-comments', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+  const { results } = await c.env.DB
+    .prepare(
+      `SELECT * FROM webinar_fake_comments
+        WHERE event_id = ? AND deleted_at IS NULL
+        ORDER BY at_seconds ASC, sort_order ASC, created_at ASC`,
+    )
+    .bind(id)
+    .all();
+  return c.json({ items: results ?? [] });
+});
+
+webinar.post('/api/events/admin/events/:id/fake-comments', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const duration = await fetchEventDuration(c.env.DB, id);
+  const v = validateFakeCommentInput(body, duration, true);
+  if (!v.ok) return bad(c, v.code, 422);
+
+  const commentId = crypto.randomUUID();
+  await c.env.DB
+    .prepare(
+      `INSERT INTO webinar_fake_comments (
+         id, event_id, at_seconds, author_name, body, author_color, sort_order
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      commentId,
+      id,
+      body.at_seconds as number,
+      body.author_name as string,
+      body.body as string,
+      (body.author_color as string | null | undefined) ?? null,
+      (body.sort_order as number | undefined) ?? 0,
+    )
+    .run();
+  const row = await c.env.DB
+    .prepare(`SELECT * FROM webinar_fake_comments WHERE id = ?`)
+    .bind(commentId)
+    .first();
+  return c.json(row, 201);
+});
+
+webinar.put('/api/events/admin/events/:id/fake-comments/:commentId', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  const commentId = c.req.param('commentId');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const existing = await c.env.DB
+    .prepare(
+      `SELECT id FROM webinar_fake_comments
+        WHERE id = ? AND event_id = ? AND deleted_at IS NULL`,
+    )
+    .bind(commentId, id)
+    .first<{ id: string }>();
+  if (!existing) return bad(c, 'not_found', 404);
+
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const duration = await fetchEventDuration(c.env.DB, id);
+  const v = validateFakeCommentInput(body, duration, false);
+  if (!v.ok) return bad(c, v.code, 422);
+
+  const updatable = ['at_seconds', 'author_name', 'body', 'author_color', 'sort_order'] as const;
+  const setClauses: string[] = [];
+  const setValues: unknown[] = [];
+  for (const k of updatable) {
+    if (Object.prototype.hasOwnProperty.call(body, k)) {
+      setClauses.push(`${k} = ?`);
+      setValues.push(body[k]);
+    }
+  }
+  if (setClauses.length === 0) {
+    const row = await c.env.DB
+      .prepare(`SELECT * FROM webinar_fake_comments WHERE id = ?`)
+      .bind(commentId)
+      .first();
+    return c.json(row);
+  }
+  setClauses.push(`updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`);
+  setValues.push(commentId);
+  await c.env.DB
+    .prepare(`UPDATE webinar_fake_comments SET ${setClauses.join(', ')} WHERE id = ?`)
+    .bind(...setValues)
+    .run();
+  const row = await c.env.DB
+    .prepare(`SELECT * FROM webinar_fake_comments WHERE id = ?`)
+    .bind(commentId)
+    .first();
+  return c.json(row);
+});
+
+webinar.delete('/api/events/admin/events/:id/fake-comments/:commentId', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  const commentId = c.req.param('commentId');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const now = new Date().toISOString();
+  const result = await c.env.DB
+    .prepare(
+      `UPDATE webinar_fake_comments
+          SET deleted_at = ?, updated_at = ?
+        WHERE id = ? AND event_id = ? AND deleted_at IS NULL`,
+    )
+    .bind(now, now, commentId, id)
+    .run();
+  if ((result.meta?.changes ?? 0) === 0) return bad(c, 'not_found', 404);
+  return new Response(null, { status: 204 });
+});
+
+// Bulk: 一括追加. body = { rows: [{at_seconds, author_name, body, author_color?}, ...] }
+// 既存行はそのまま, 新規だけ追加 (UPSERT は行わない).
+webinar.post('/api/events/admin/events/:id/fake-comments/bulk', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const body = (await c.req.json().catch(() => ({}))) as { rows?: unknown };
+  const rows = body.rows;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return bad(c, 'invalid_rows', 422);
+  }
+  if (rows.length > WEBINAR_FAKE_COMMENT_BULK_MAX) {
+    return bad(c, 'too_many_rows', 422);
+  }
+  const duration = await fetchEventDuration(c.env.DB, id);
+  // 全行 validate してから 1 行ずつ insert (D1 では batch も使えるが
+  // soft-delete テーブルなので INSERT のみで衝突は起こらない).
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i] as Record<string, unknown>;
+    const v = validateFakeCommentInput(r, duration, true);
+    if (!v.ok) return bad(c, `row_${i}_${v.code}`, 422);
+  }
+  const inserted: string[] = [];
+  for (const r of rows as Array<Record<string, unknown>>) {
+    const newId = crypto.randomUUID();
+    await c.env.DB
+      .prepare(
+        `INSERT INTO webinar_fake_comments (
+           id, event_id, at_seconds, author_name, body, author_color, sort_order
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        newId,
+        id,
+        r.at_seconds as number,
+        r.author_name as string,
+        r.body as string,
+        (r.author_color as string | null | undefined) ?? null,
+        (r.sort_order as number | undefined) ?? 0,
+      )
+      .run();
+    inserted.push(newId);
+  }
+  return c.json({ inserted_count: inserted.length, ids: inserted }, 201);
+});
 
 // ============================================================
 // LIFF: video streaming with Range support

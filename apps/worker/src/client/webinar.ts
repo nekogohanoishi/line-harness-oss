@@ -41,7 +41,15 @@ interface CtaItem {
   sort_order: number;
 }
 
-// Phase 7b の FakeCommentItem 型は次の commit で追加.
+// Phase 7b: コメント風固定表示 (fake comments)
+interface FakeCommentItem {
+  id: string;
+  at_seconds: number;
+  author_name: string;
+  body: string;
+  author_color: string | null;
+  sort_order: number;
+}
 
 interface Manifest {
   booking: {
@@ -71,11 +79,12 @@ interface Manifest {
   access_state: AccessState;
   server_now_ts: number;
   ctas: CtaItem[];
-  // Phase 7a: ライブ感演出 (同接表示).  Phase 7b で show_fake_comments /
-  // fake_comments がここに追加される.
+  // Phase 7: ライブ感演出
   live_feel?: {
     show_concurrent_viewers: boolean;
+    show_fake_comments: boolean;
   };
+  fake_comments?: FakeCommentItem[];
 }
 
 interface Ctx {
@@ -88,6 +97,10 @@ const STATE_TICK_MS = 1000;
 const DRIFT_RESYNC_THRESHOLD_SEC = 3;
 // Phase 7a: 同接視聴者数 polling 間隔. Worker CPU を抑えるため 30s 固定.
 const CONCURRENT_POLL_INTERVAL_MS = 30_000;
+// Phase 7b: コメント縦並びの最大件数. これを超えたら古い順に fade-out.
+const FAKE_COMMENT_MAX_VISIBLE = 10;
+// Phase 7b: コメントを fade-out させずに保持する秒数 (実時間, 動画位置とは別軸).
+const FAKE_COMMENT_AUTO_DISMISS_MS = 12_000;
 
 function escapeHtml(s: string): string {
   const d = document.createElement('div');
@@ -208,6 +221,7 @@ function renderShell(container: HTMLElement, m: Manifest): void {
             <span class="webinar-concurrent-count" data-role="concurrent-count">--</span>
             <span class="webinar-concurrent-label">人が視聴中</span>
           </div>
+          <div class="webinar-fake-comments" data-role="fake-comments" hidden></div>
         </div>
       </div>
       <div class="webinar-cta-banner" data-role="cta-banner" hidden></div>
@@ -242,6 +256,8 @@ interface PlayerHandles {
   // Phase 7a: 同接視聴者数
   concurrentEl: HTMLElement | null;
   concurrentCountEl: HTMLElement | null;
+  // Phase 7b: コメント風固定表示
+  fakeCommentsEl: HTMLElement | null;
 }
 
 function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void {
@@ -261,6 +277,7 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
     modalBackdropEl: container.querySelector('[data-role="modal-backdrop"]'),
     concurrentEl: container.querySelector('[data-role="concurrent"]'),
     concurrentCountEl: container.querySelector('[data-role="concurrent-count"]'),
+    fakeCommentsEl: container.querySelector('[data-role="fake-comments"]'),
   };
 
   const slotStartMs = new Date(manifest.slot.starts_at).getTime();
@@ -301,6 +318,19 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
   let completedReported = !!manifest.booking.completed_at;
   let startedReported = !!manifest.booking.video_started_at;
 
+  // Phase 7b: fake_comments の表示状態。
+  //  - shownFakeComments: 既に流したコメント ID (二重表示防止)
+  //  - lastSeenPosSec: ontimeupdate で前回処理した秒. 戻った/シークされたら再
+  //    投入はしない (同じコメントが何度も流れないように).
+  const shownFakeComments = new Set<string>();
+  let lastSeenPosSec = -1;
+  // sort by at_seconds で安定ソート (本来 manifest 側でソート済み)
+  const fakeCommentsSorted: FakeCommentItem[] = (manifest.fake_comments ?? [])
+    .slice()
+    .sort((a, b) =>
+      a.at_seconds !== b.at_seconds ? a.at_seconds - b.at_seconds : a.sort_order - b.sort_order,
+    );
+  const showFakeComments = manifest.live_feel?.show_fake_comments === true;
   const showConcurrent = manifest.live_feel?.show_concurrent_viewers === true;
 
   function show(el: HTMLElement | null): void {
@@ -461,6 +491,59 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
     }).catch(() => {});
   }
 
+  // Phase 7b: コメント風表示
+  function colorForAuthor(name: string, override: string | null): string {
+    if (override) return override;
+    // ハッシュベースで HSL を生成 (安定 + パステル).
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+    const hue = Math.abs(h) % 360;
+    return `hsl(${hue}, 70%, 55%)`;
+  }
+  function injectFakeComment(cm: FakeCommentItem): void {
+    if (!h.fakeCommentsEl) return;
+    if (shownFakeComments.has(cm.id)) return;
+    shownFakeComments.add(cm.id);
+    show(h.fakeCommentsEl);
+    const row = document.createElement('div');
+    row.className = 'webinar-fake-comment';
+    const color = colorForAuthor(cm.author_name, cm.author_color);
+    row.innerHTML = `
+      <span class="webinar-fake-comment-avatar" style="background:${escapeHtml(color)}">${escapeHtml(
+        cm.author_name.slice(0, 1),
+      )}</span>
+      <span class="webinar-fake-comment-name">${escapeHtml(cm.author_name)}</span>
+      <span class="webinar-fake-comment-body">${escapeHtml(cm.body)}</span>
+    `;
+    h.fakeCommentsEl.appendChild(row);
+    // 最大件数を超えたら古い行を fade-out して削除
+    while (h.fakeCommentsEl.children.length > FAKE_COMMENT_MAX_VISIBLE) {
+      const first = h.fakeCommentsEl.firstElementChild;
+      if (!first) break;
+      first.remove();
+    }
+    // 自動 dismiss (時間経過で fade-out)
+    window.setTimeout(() => {
+      row.classList.add('webinar-fake-comment-fade');
+      window.setTimeout(() => row.remove(), 600);
+    }, FAKE_COMMENT_AUTO_DISMISS_MS);
+  }
+  function handleFakeCommentsAtPosition(pos: number): void {
+    if (!showFakeComments || fakeCommentsSorted.length === 0) return;
+    // 戻った/シークされた場合は再投入しない (lastSeenPosSec を進めるだけ).
+    // ただし最初の tick (lastSeenPosSec === -1) は当該 pos までを全部投入する.
+    if (lastSeenPosSec >= 0 && pos < lastSeenPosSec) {
+      lastSeenPosSec = pos;
+      return;
+    }
+    for (const cm of fakeCommentsSorted) {
+      if (cm.at_seconds <= pos && !shownFakeComments.has(cm.id)) {
+        injectFakeComment(cm);
+      }
+    }
+    lastSeenPosSec = pos;
+  }
+
   // Phase 7a: 同接視聴者数 polling
   function pollConcurrent(): void {
     if (!showConcurrent) return;
@@ -500,6 +583,7 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
       for (const cta of manifest.ctas) {
         if (pos >= cta.at_seconds && !shownCtas.has(cta.id)) showCta(cta);
       }
+      handleFakeCommentsAtPosition(pos);
       if (!completedReported && threshold > 0 && pos >= threshold) {
         fireCompleted();
       }
@@ -555,8 +639,9 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
     if (mode === 'pre_start') {
       setCountdownVisible(-elapsedMs);
       hide(h.playOverlayEl);
-      // Phase 7a: pre_start では live-feel オーバーレイは非表示
+      // Phase 7: pre_start では live-feel オーバーレイは非表示
       hide(h.concurrentEl);
+      hide(h.fakeCommentsEl);
       return;
     }
 

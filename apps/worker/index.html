@@ -637,7 +637,66 @@
       font-variant-numeric: tabular-nums;
     }
 
-    /* Phase 7b のコメント風表示 CSS は次の commit で追加. */
+    /* ========== Phase 7b: コメント風固定表示 ========== */
+    .webinar-fake-comments {
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      pointer-events: none;
+      z-index: 4;
+      max-height: 45%;
+      overflow: hidden;
+      justify-content: flex-end;
+    }
+    .webinar-fake-comment {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      padding: 6px 10px;
+      border-radius: 14px;
+      font-size: 13px;
+      line-height: 1.3;
+      max-width: 90%;
+      animation: webinarFakeCommentIn 0.25s ease both;
+      backdrop-filter: blur(4px);
+    }
+    @keyframes webinarFakeCommentIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .webinar-fake-comment.webinar-fake-comment-fade {
+      opacity: 0;
+      transition: opacity 0.6s ease;
+    }
+    .webinar-fake-comment-avatar {
+      flex-shrink: 0;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 12px;
+      color: #fff;
+    }
+    .webinar-fake-comment-name {
+      font-weight: 700;
+      font-size: 12px;
+      opacity: 0.9;
+      flex-shrink: 0;
+    }
+    .webinar-fake-comment-body {
+      flex: 1;
+      min-width: 0;
+      word-break: break-word;
+    }
   </style>
 </head>
 <body>

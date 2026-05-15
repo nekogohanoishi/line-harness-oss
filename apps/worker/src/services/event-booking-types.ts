@@ -220,4 +220,19 @@ export const WEBINAR_ACTIVE_VIEWER_WINDOW_SECONDS = 120;
 // LIFF client が同接数を polling する間隔。Worker CPU を消費するので 30 秒固定。
 export const WEBINAR_CONCURRENT_POLL_INTERVAL_SECONDS = 30;
 
-// Phase 7b の fake_comments 定数 / 行型は次の commit で追加.
+export const WEBINAR_FAKE_COMMENT_AUTHOR_MAX = 30;
+export const WEBINAR_FAKE_COMMENT_BODY_MAX = 200;
+export const WEBINAR_FAKE_COMMENT_BULK_MAX = 200;
+
+export interface WebinarFakeCommentRow {
+  id: string;
+  event_id: string;
+  at_seconds: number;
+  author_name: string;
+  body: string;
+  author_color: string | null;
+  sort_order: number;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}

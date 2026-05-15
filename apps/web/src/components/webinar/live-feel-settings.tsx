@@ -25,6 +25,9 @@ export default function LiveFeelSettings({ accountId, eventId, event, setEvent }
   const [jitter, setJitter] = useState<number | ''>(
     event.concurrent_jitter_max != null ? event.concurrent_jitter_max : 0,
   )
+  const [showFakeComments, setShowFakeComments] = useState<boolean>(
+    (event.show_fake_comments ?? 0) === 1,
+  )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
@@ -38,6 +41,7 @@ export default function LiveFeelSettings({ accountId, eventId, event, setEvent }
         show_concurrent_viewers: showConcurrent ? 1 : 0,
         concurrent_floor: floor === '' ? 0 : floor,
         concurrent_jitter_max: jitter === '' ? 0 : jitter,
+        show_fake_comments: showFakeComments ? 1 : 0,
       })
       setEvent({ ...event, ...next })
       setSaved(true)
@@ -114,7 +118,21 @@ export default function LiveFeelSettings({ accountId, eventId, event, setEvent }
         </div>
       </div>
 
-      {/* Phase 7b でコメント演出 (fake_comments) のスイッチを追加する */}
+      <div className="border rounded-lg p-4 mb-4">
+        <h3 className="text-sm font-semibold text-gray-700 mb-2">コメント演出</h3>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={showFakeComments}
+            onChange={(e) => setShowFakeComments(e.target.checked)}
+          />
+          <span>動画下部にスクリプト化されたコメントを流す</span>
+        </label>
+        <div className="text-[11px] text-gray-500 mt-1">
+          コメント本文・タイムスタンプは「コメント演出」サブタブで管理します。
+          この設定を OFF にすると、行データはそのまま残しつつ視聴ページには表示されません。
+        </div>
+      </div>
 
       <button
         type="button"

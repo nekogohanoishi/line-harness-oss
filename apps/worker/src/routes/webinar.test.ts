@@ -147,7 +147,20 @@ interface CartStatusRow {
   [k: string]: unknown;
 }
 
-// Phase 7b の FakeCommentRow 型は次の commit で追加.
+// Phase 7b: webinar_fake_comments
+interface FakeCommentRow {
+  id: string;
+  event_id: string;
+  at_seconds: number;
+  author_name: string;
+  body: string;
+  author_color: string | null;
+  sort_order: number;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+  [k: string]: unknown;
+}
 
 interface State {
   events: EventRow[];
@@ -159,6 +172,7 @@ interface State {
   ctaClicks: CtaClickRow[];
   recurrences: RecurrenceRow[];
   cartStatuses: CartStatusRow[];
+  fakeComments: FakeCommentRow[];
 }
 
 function emptyState(): State {
@@ -172,6 +186,7 @@ function emptyState(): State {
     ctaClicks: [],
     recurrences: [],
     cartStatuses: [],
+    fakeComments: [],
   };
 }
 
@@ -339,6 +354,37 @@ function makeDb(state: State): D1Database {
                 }
               : null) as T | null;
           }
+          // Phase 7b: fetchEventDuration — SELECT video_duration_seconds FROM events WHERE id = ?
+          if (
+            sql.includes('SELECT video_duration_seconds FROM events') &&
+            sql.includes('WHERE id = ?')
+          ) {
+            const [id] = bound as [string];
+            const e = state.events.find((x) => x.id === id);
+            return (e ? { video_duration_seconds: e.video_duration_seconds } : null) as T | null;
+          }
+          // Phase 7b: SELECT id FROM webinar_fake_comments WHERE id = ? AND event_id = ? AND deleted_at IS NULL
+          if (
+            sql.includes('FROM webinar_fake_comments') &&
+            sql.includes('event_id = ?') &&
+            sql.includes('deleted_at IS NULL') &&
+            sql.startsWith('SELECT id')
+          ) {
+            const [id, eventId] = bound as [string, string];
+            const fc = state.fakeComments.find(
+              (x) => x.id === id && x.event_id === eventId && x.deleted_at == null,
+            );
+            return (fc ? { id: fc.id } : null) as T | null;
+          }
+          // Phase 7b: SELECT * FROM webinar_fake_comments WHERE id = ?
+          if (
+            sql.includes('SELECT * FROM webinar_fake_comments') &&
+            sql.includes('WHERE id = ?')
+          ) {
+            const [id] = bound as [string];
+            const fc = state.fakeComments.find((x) => x.id === id);
+            return (fc ?? null) as T | null;
+          }
           // Phase 7a: concurrent count — SELECT COUNT(*) AS n FROM event_bookings
           //   WHERE event_id = ? AND webinar_last_heartbeat_at IS NOT NULL AND webinar_last_heartbeat_at >= ?
           if (
@@ -383,6 +429,18 @@ function makeDb(state: State): D1Database {
             const items = state.recurrences
               .filter((r) => r.event_id === event_id)
               .sort((a, b) => a.created_at.localeCompare(b.created_at));
+            return { results: items as unknown as T[] };
+          }
+          // Phase 7b: fake_comments list (admin and LIFF manifest both use deleted_at IS NULL)
+          if (sql.includes('FROM webinar_fake_comments') && sql.includes('event_id = ?')) {
+            const [event_id] = bound as [string];
+            const items = state.fakeComments
+              .filter((c) => c.event_id === event_id && c.deleted_at == null)
+              .sort((a, b) => {
+                if (a.at_seconds !== b.at_seconds) return a.at_seconds - b.at_seconds;
+                if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+                return a.created_at.localeCompare(b.created_at);
+              });
             return { results: items as unknown as T[] };
           }
           // stats: cta aggregation
@@ -528,6 +586,51 @@ function makeDb(state: State): D1Database {
             );
             if (idx === -1) return { success: true, meta: { changes: 0 } };
             state.recurrences.splice(idx, 1);
+            return { success: true, meta: { changes: 1 } };
+          }
+          // Phase 7b: webinar_fake_comments INSERT
+          if (sql.startsWith('INSERT INTO webinar_fake_comments')) {
+            const [id, event_id, at_seconds, author_name, body, author_color, sort_order] = bound as [
+              string, string, number, string, string, string | null, number,
+            ];
+            const now = new Date().toISOString();
+            state.fakeComments.push({
+              id, event_id, at_seconds, author_name, body, author_color, sort_order,
+              deleted_at: null,
+              created_at: now,
+              updated_at: now,
+            });
+            return { success: true, meta: { changes: 1 } };
+          }
+          // Phase 7b: webinar_fake_comments UPDATE (soft-delete + generic update)
+          if (sql.startsWith('UPDATE webinar_fake_comments') && sql.includes('deleted_at = ?')) {
+            const [deleted_at, updated_at, id, event_id] = bound as [string, string, string, string];
+            const c = state.fakeComments.find(
+              (x) => x.id === id && x.event_id === event_id && x.deleted_at == null,
+            );
+            if (!c) return { success: true, meta: { changes: 0 } };
+            c.deleted_at = deleted_at;
+            c.updated_at = updated_at;
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.startsWith('UPDATE webinar_fake_comments SET')) {
+            const id = bound[bound.length - 1] as string;
+            const c = state.fakeComments.find((x) => x.id === id);
+            if (!c) return { success: true, meta: { changes: 0 } };
+            const setPart = sql.substring('UPDATE webinar_fake_comments SET '.length, sql.indexOf(' WHERE'));
+            const cols = setPart.split(',').map((s) => s.trim());
+            let valIdx = 0;
+            for (const col of cols) {
+              const m = /^(\w+)\s*=\s*(\?|strftime)/.exec(col);
+              if (!m) continue;
+              const colName = m[1];
+              if (m[2] === '?') {
+                (c as Record<string, unknown>)[colName] = bound[valIdx];
+                valIdx++;
+              } else {
+                c.updated_at = new Date().toISOString();
+              }
+            }
             return { success: true, meta: { changes: 1 } };
           }
           if (sql.startsWith('INSERT INTO webinar_heartbeats')) {
@@ -1480,10 +1583,148 @@ describe('Phase 7a: concurrent viewer count', () => {
 });
 
 // ============================================================
-// Phase 7a: LIFF manifest reflects show_concurrent_viewers flag
-// (fake_comments related manifest test は Phase 7b commit で追加)
+// Phase 7b: fake_comments CRUD + bulk + manifest payload
 // ============================================================
-describe('Phase 7a: LIFF manifest live-feel', () => {
+describe('Phase 7b: fake_comments admin CRUD', () => {
+  test('POST creates a comment with default sort_order', async () => {
+    const state = emptyState();
+    state.events.push(makeWebinarEvent());
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events/ev1/fake-comments?account_id=la1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        at_seconds: 30,
+        author_name: 'たろう',
+        body: '勉強になります！',
+      }),
+    });
+    expect(res.status).toBe(201);
+    const row = (await res.json()) as FakeCommentRow;
+    expect(row.event_id).toBe('ev1');
+    expect(row.at_seconds).toBe(30);
+    expect(state.fakeComments).toHaveLength(1);
+  });
+
+  test('POST rejects at_seconds exceeding video duration', async () => {
+    const state = emptyState();
+    state.events.push(makeWebinarEvent({ video_duration_seconds: 100 }));
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events/ev1/fake-comments?account_id=la1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ at_seconds: 200, author_name: 'a', body: 'b' }),
+    });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('at_seconds_exceeds_duration');
+  });
+
+  test('POST rejects body too long', async () => {
+    const state = emptyState();
+    state.events.push(makeWebinarEvent());
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events/ev1/fake-comments?account_id=la1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ at_seconds: 0, author_name: 'a', body: 'x'.repeat(201) }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  test('GET lists comments sorted by at_seconds', async () => {
+    const state = emptyState();
+    state.events.push(makeWebinarEvent());
+    const now = new Date().toISOString();
+    state.fakeComments.push(
+      { id: 'fc2', event_id: 'ev1', at_seconds: 90, author_name: 'B', body: 'b', author_color: null, sort_order: 0, deleted_at: null, created_at: now, updated_at: now },
+      { id: 'fc1', event_id: 'ev1', at_seconds: 10, author_name: 'A', body: 'a', author_color: null, sort_order: 0, deleted_at: null, created_at: now, updated_at: now },
+    );
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events/ev1/fake-comments?account_id=la1');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: FakeCommentRow[] };
+    expect(body.items.map((x) => x.id)).toEqual(['fc1', 'fc2']);
+  });
+
+  test('PUT updates body', async () => {
+    const state = emptyState();
+    state.events.push(makeWebinarEvent());
+    const now = new Date().toISOString();
+    state.fakeComments.push({
+      id: 'fc1', event_id: 'ev1', at_seconds: 10, author_name: 'A', body: 'old',
+      author_color: null, sort_order: 0, deleted_at: null, created_at: now, updated_at: now,
+    });
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events/ev1/fake-comments/fc1?account_id=la1', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ body: 'new' }),
+    });
+    expect(res.status).toBe(200);
+    expect(state.fakeComments[0].body).toBe('new');
+  });
+
+  test('DELETE soft-deletes comment', async () => {
+    const state = emptyState();
+    state.events.push(makeWebinarEvent());
+    const now = new Date().toISOString();
+    state.fakeComments.push({
+      id: 'fc1', event_id: 'ev1', at_seconds: 10, author_name: 'A', body: 'b',
+      author_color: null, sort_order: 0, deleted_at: null, created_at: now, updated_at: now,
+    });
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events/ev1/fake-comments/fc1?account_id=la1', {
+      method: 'DELETE',
+    });
+    expect(res.status).toBe(204);
+    expect(state.fakeComments[0].deleted_at).not.toBeNull();
+  });
+
+  test('POST /bulk inserts multiple rows', async () => {
+    const state = emptyState();
+    state.events.push(makeWebinarEvent({ video_duration_seconds: 600 }));
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events/ev1/fake-comments/bulk?account_id=la1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        rows: [
+          { at_seconds: 10, author_name: 'A', body: 'aaa' },
+          { at_seconds: 30, author_name: 'B', body: 'bbb' },
+          { at_seconds: 60, author_name: 'C', body: 'ccc' },
+        ],
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { inserted_count: number; ids: string[] };
+    expect(body.inserted_count).toBe(3);
+    expect(state.fakeComments).toHaveLength(3);
+  });
+
+  test('POST /bulk rejects when any row is invalid', async () => {
+    const state = emptyState();
+    state.events.push(makeWebinarEvent({ video_duration_seconds: 100 }));
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events/ev1/fake-comments/bulk?account_id=la1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        rows: [
+          { at_seconds: 10, author_name: 'A', body: 'aaa' },
+          { at_seconds: 9999, author_name: 'B', body: 'bbb' }, // exceeds duration
+        ],
+      }),
+    });
+    expect(res.status).toBe(422);
+    expect(state.fakeComments).toHaveLength(0);
+  });
+});
+
+// ============================================================
+// Phase 7: manifest payload includes / omits live-feel data
+// ============================================================
+describe('Phase 7: LIFF manifest live-feel', () => {
   function seedLiveBooking(state: State, eventOverrides: Partial<EventRow> = {}): void {
     state.friends.push({ id: 'f1', line_account_id: 'la1', line_user_id: 'U_user_1' });
     state.slots.push({
@@ -1499,6 +1740,53 @@ describe('Phase 7a: LIFF manifest live-feel', () => {
       webinar_last_heartbeat_at: null,
     });
   }
+
+  test('omits fake_comments rows when show_fake_comments=0 (payload light)', async () => {
+    const state = emptyState();
+    seedLiveBooking(state, { show_fake_comments: 0 });
+    const now = new Date().toISOString();
+    // 行は存在するが、show flag が off なので manifest 上は空配列で返す.
+    state.fakeComments.push({
+      id: 'fc1', event_id: 'ev1', at_seconds: 10, author_name: 'A', body: 'a',
+      author_color: null, sort_order: 0, deleted_at: null, created_at: now, updated_at: now,
+    });
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+    const res = await app.request('/api/liff/webinar/b1/manifest', {
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      live_feel: { show_fake_comments: boolean; show_concurrent_viewers: boolean };
+      fake_comments: unknown[];
+    };
+    expect(body.live_feel.show_fake_comments).toBe(false);
+    expect(body.fake_comments).toEqual([]);
+  });
+
+  test('includes fake_comments when show_fake_comments=1', async () => {
+    const state = emptyState();
+    seedLiveBooking(state, { show_fake_comments: 1 });
+    const now = new Date().toISOString();
+    state.fakeComments.push(
+      { id: 'fc2', event_id: 'ev1', at_seconds: 90, author_name: 'B', body: 'b', author_color: null, sort_order: 0, deleted_at: null, created_at: now, updated_at: now },
+      { id: 'fc1', event_id: 'ev1', at_seconds: 10, author_name: 'A', body: 'a', author_color: null, sort_order: 0, deleted_at: null, created_at: now, updated_at: now },
+    );
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+    const res = await app.request('/api/liff/webinar/b1/manifest', {
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      live_feel: { show_fake_comments: boolean };
+      fake_comments: Array<{ id: string; at_seconds: number }>;
+    };
+    expect(body.live_feel.show_fake_comments).toBe(true);
+    expect(body.fake_comments).toHaveLength(2);
+    expect(body.fake_comments[0].id).toBe('fc1');
+    expect(body.fake_comments[1].id).toBe('fc2');
+  });
 
   test('reflects show_concurrent_viewers flag', async () => {
     const state = emptyState();
