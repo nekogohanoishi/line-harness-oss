@@ -26,6 +26,7 @@ import {
   WEBINAR_CTA_ACTION_TYPES,
   WEBINAR_DEFAULT_ATTENDANCE_RATIO,
   WEBINAR_UPLOAD_URL_TTL_SECONDS,
+  WEBINAR_ACTIVE_VIEWER_WINDOW_SECONDS,
   type WebinarCtaDisplayMode,
   type WebinarCtaActionType,
 } from '../services/event-booking-types.js';
@@ -689,6 +690,11 @@ interface BookingForLiff {
   // Phase 6b: カート期間
   cart_relative_close_minutes: number | null;
   cart_expired_redirect_url: string | null;
+  // Phase 7: ライブ感演出
+  concurrent_floor: number;
+  concurrent_jitter_max: number;
+  show_concurrent_viewers: number;
+  show_fake_comments: number;
   // slot
   slot_starts_at: string;
   slot_ends_at: string;
@@ -717,6 +723,8 @@ async function loadBookingForLiff(
          e.video_mime_type, e.video_size_bytes, e.replay_window_minutes,
          e.attendance_threshold_seconds, e.archive_url, e.image_url, e.description,
          e.cart_relative_close_minutes, e.cart_expired_redirect_url,
+         e.concurrent_floor, e.concurrent_jitter_max,
+         e.show_concurrent_viewers, e.show_fake_comments,
          s.starts_at AS slot_starts_at, s.ends_at AS slot_ends_at
         FROM event_bookings b
         JOIN friends f ON f.id = b.friend_id
@@ -835,8 +843,65 @@ webinar.get('/api/liff/webinar/:bookingId/manifest', async (c) => {
     access_state: access.state,
     server_now_ts: access.server_now_ts,
     ctas: ctas ?? [],
+    // Phase 7a: live-feel — 同接表示の on/off フラグ. fake comments は
+    // Phase 7b で同じ live_feel オブジェクトに追加する。
+    live_feel: {
+      show_concurrent_viewers: b.show_concurrent_viewers === 1,
+    },
   });
 });
+
+// ============================================================
+// LIFF: concurrent viewer count (Phase 7a)
+// ============================================================
+// 直近 WEBINAR_ACTIVE_VIEWER_WINDOW_SECONDS 秒以内に heartbeat があった
+// bookings 数を「視聴中」とみなす. WebSocket は使わず Polling 方式。
+//
+// 表示値は max(active, floor) + random(0..jitter_max).
+//   - show_concurrent_viewers=0 の event は 404 (LIFF 側で polling しない)
+//   - access_state が live でも replay でも同じロジックで返す (pre_start /
+//     expired は LIFF 側で polling 停止する想定だが、念のため count=0 を返す)
+webinar.get('/api/liff/webinar/:bookingId/concurrent', async (c) => {
+  const auth = await authorizeLiffBooking(c);
+  if (!auth.ok) return bad(c, auth.code, auth.status);
+  const b = auth.booking;
+
+  if (b.show_concurrent_viewers !== 1) {
+    return bad(c, 'concurrent_disabled', 404);
+  }
+
+  const windowMs = WEBINAR_ACTIVE_VIEWER_WINDOW_SECONDS * 1000;
+  const sinceIso = new Date(Date.now() - windowMs).toISOString();
+
+  // 同 event の bookings のうち、直近 N 秒以内に heartbeat があった人数。
+  // webinar_last_heartbeat_at は event_bookings に MAX で書かれるので
+  // JOIN なしで取得できる。
+  const row = await c.env.DB
+    .prepare(
+      `SELECT COUNT(*) AS n FROM event_bookings
+        WHERE event_id = ?
+          AND webinar_last_heartbeat_at IS NOT NULL
+          AND webinar_last_heartbeat_at >= ?`,
+    )
+    .bind(b.event_id, sinceIso)
+    .first<{ n: number }>();
+  const actual = row?.n ?? 0;
+
+  const floor = Math.max(0, b.concurrent_floor ?? 0);
+  const jitterMax = Math.max(0, b.concurrent_jitter_max ?? 0);
+  const jitter = jitterMax > 0 ? Math.floor(Math.random() * (jitterMax + 1)) : 0;
+  const displayed = Math.max(actual, floor) + jitter;
+
+  return c.json({
+    count: displayed,
+    actual,
+    floor,
+    jitter,
+    window_seconds: WEBINAR_ACTIVE_VIEWER_WINDOW_SECONDS,
+  });
+});
+
+// Phase 7b: fake_comments CRUD + bulk endpoints は次の commit で追加.
 
 // ============================================================
 // LIFF: video streaming with Range support

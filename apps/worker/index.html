@@ -611,6 +611,33 @@
       box-shadow: 0 1px 3px rgba(0,0,0,0.05);
       white-space: pre-wrap;
     }
+
+    /* ========== Phase 7a: 同接視聴者数 ========== */
+    .webinar-concurrent {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      pointer-events: none;
+      backdrop-filter: blur(4px);
+      z-index: 5;
+    }
+    .webinar-concurrent-icon {
+      font-size: 13px;
+    }
+    .webinar-concurrent-count {
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Phase 7b のコメント風表示 CSS は次の commit で追加. */
   </style>
 </head>
 <body>

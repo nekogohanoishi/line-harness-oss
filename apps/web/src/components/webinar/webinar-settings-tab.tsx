@@ -11,6 +11,7 @@ import CtaList from './cta-list'
 import WebinarStats from './webinar-stats'
 import RecurrenceList from './recurrence-list'
 import CartSettings from './cart-settings'
+import LiveFeelSettings from './live-feel-settings'
 
 interface Props {
   accountId: string
@@ -19,13 +20,14 @@ interface Props {
   setEvent: (next: EventDetail) => void
 }
 
-type Subtab = 'video' | 'cta' | 'recurrence' | 'cart' | 'stats'
+type Subtab = 'video' | 'cta' | 'recurrence' | 'cart' | 'live-feel' | 'stats'
 
 const SUBTABS: Array<{ key: Subtab; label: string; sub: string }> = [
   { key: 'video', label: '動画', sub: 'R2 へのアップロード・差し替え' },
   { key: 'cta', label: 'CTA タイムライン', sub: '時間連動で表示するボタン' },
   { key: 'recurrence', label: 'スロット自動生成', sub: '毎日◯時に開催を再現' },
   { key: 'cart', label: 'カート期間', sub: 'CTA URL の切替・閉鎖演出' },
+  { key: 'live-feel', label: 'ライブ感', sub: '同接表示の ON/OFF・床値' },
   { key: 'stats', label: '視聴統計', sub: '予約者・完視聴率・CTA別CTR' },
 ]
 
@@ -124,6 +126,10 @@ export default function WebinarSettingsTab({ accountId, eventId, event, setEvent
 
       {subtab === 'cart' && (
         <CartSettings accountId={accountId} eventId={eventId} event={event} setEvent={setEvent} />
+      )}
+
+      {subtab === 'live-feel' && (
+        <LiveFeelSettings accountId={accountId} eventId={eventId} event={event} setEvent={setEvent} />
       )}
 
       {subtab === 'stats' && (

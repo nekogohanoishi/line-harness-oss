@@ -151,6 +151,21 @@ function validateEventInput(
       return { ok: false, code: 'invalid_cart_expired_redirect_url' };
     }
   }
+  // Phase 7 (migration 043): ライブ感演出
+  for (const key of ['concurrent_floor', 'concurrent_jitter_max'] as const) {
+    if (has(key) && body[key] != null) {
+      const v = body[key];
+      if (!Number.isInteger(v) || (v as number) < 0 || (v as number) > 100000) {
+        return { ok: false, code: `invalid_${key}` };
+      }
+    }
+  }
+  for (const key of ['show_concurrent_viewers', 'show_fake_comments'] as const) {
+    if (has(key) && body[key] != null) {
+      const v = body[key];
+      if (v !== 0 && v !== 1) return { ok: false, code: `invalid_${key}` };
+    }
+  }
   if (has('target_type') && body.target_type != null) {
     if (body.target_type !== 'single' && body.target_type !== 'multi-account-dedup') {
       return { ok: false, code: 'invalid_target_type' };
@@ -343,6 +358,11 @@ events.put('/api/events/admin/events/:id', async (c) => {
     // Phase 6b (migration 042): カート期間管理。
     'cart_relative_close_minutes',
     'cart_expired_redirect_url',
+    // Phase 7 (migration 043): ライブ感演出。
+    'concurrent_floor',
+    'concurrent_jitter_max',
+    'show_concurrent_viewers',
+    'show_fake_comments',
   ] as const;
   const setClauses: string[] = [];
   const setValues: unknown[] = [];

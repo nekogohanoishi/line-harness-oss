@@ -77,6 +77,15 @@ export interface EventRow {
   replay_window_minutes: number | null;
   attendance_threshold_seconds: number | null;
   archive_url: string | null;
+  // Phase 7 (migration 043): ライブ感演出機能 (live-feel)
+  //   - concurrent_floor          : 同接視聴者数の表示最低値 (fake floor)
+  //   - concurrent_jitter_max     : 表示値に [0, N] のランダム加算 (自然な変動)
+  //   - show_concurrent_viewers   : 同接表示の on/off (0/1, default 0)
+  //   - show_fake_comments        : コメント演出の on/off (0/1, default 0)
+  concurrent_floor: number;
+  concurrent_jitter_max: number;
+  show_concurrent_viewers: number;
+  show_fake_comments: number;
 }
 
 export interface EventSlotRow {
@@ -201,3 +210,14 @@ export interface WebinarCtaClickRow {
 export const WEBINAR_HEARTBEAT_INTERVAL_SECONDS = 30;
 export const WEBINAR_DEFAULT_ATTENDANCE_RATIO = 0.8;
 export const WEBINAR_UPLOAD_URL_TTL_SECONDS = 15 * 60;
+
+// ===========================================================
+// Phase 7 (migration 043): ライブ感演出
+// ===========================================================
+// 「直近 N 秒以内に heartbeat があった bookings 数」をアクティブ視聴者と
+// みなす。heartbeat は 30 秒間隔なので 2 分余裕を取れば取りこぼしが少ない。
+export const WEBINAR_ACTIVE_VIEWER_WINDOW_SECONDS = 120;
+// LIFF client が同接数を polling する間隔。Worker CPU を消費するので 30 秒固定。
+export const WEBINAR_CONCURRENT_POLL_INTERVAL_SECONDS = 30;
+
+// Phase 7b の fake_comments 定数 / 行型は次の commit で追加.

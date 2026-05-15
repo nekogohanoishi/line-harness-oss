@@ -47,6 +47,11 @@ interface EventRow {
   account_ids: string | null;
   image_url: string | null;
   description: string | null;
+  // Phase 7 (migration 043) — defaults applied in makeWebinarEvent
+  concurrent_floor?: number;
+  concurrent_jitter_max?: number;
+  show_concurrent_viewers?: number;
+  show_fake_comments?: number;
   [k: string]: unknown;
 }
 
@@ -141,6 +146,8 @@ interface CartStatusRow {
   updated_at: string;
   [k: string]: unknown;
 }
+
+// Phase 7b の FakeCommentRow 型は次の commit で追加.
 
 interface State {
   events: EventRow[];
@@ -247,6 +254,10 @@ function makeDb(state: State): D1Database {
               description: e.description,
               cart_relative_close_minutes: (e as Record<string, unknown>).cart_relative_close_minutes ?? null,
               cart_expired_redirect_url: (e as Record<string, unknown>).cart_expired_redirect_url ?? null,
+              concurrent_floor: (e as Record<string, unknown>).concurrent_floor ?? 0,
+              concurrent_jitter_max: (e as Record<string, unknown>).concurrent_jitter_max ?? 0,
+              show_concurrent_viewers: (e as Record<string, unknown>).show_concurrent_viewers ?? 0,
+              show_fake_comments: (e as Record<string, unknown>).show_fake_comments ?? 0,
               slot_starts_at: s.starts_at,
               slot_ends_at: s.ends_at,
             } as T;
@@ -327,6 +338,21 @@ function makeDb(state: State): D1Database {
                   attendance_threshold_seconds: e.attendance_threshold_seconds,
                 }
               : null) as T | null;
+          }
+          // Phase 7a: concurrent count — SELECT COUNT(*) AS n FROM event_bookings
+          //   WHERE event_id = ? AND webinar_last_heartbeat_at IS NOT NULL AND webinar_last_heartbeat_at >= ?
+          if (
+            sql.includes('COUNT(*) AS n FROM event_bookings') &&
+            sql.includes('webinar_last_heartbeat_at')
+          ) {
+            const [eventId, sinceIso] = bound as [string, string];
+            const n = state.bookings.filter(
+              (b) =>
+                b.event_id === eventId &&
+                b.webinar_last_heartbeat_at != null &&
+                b.webinar_last_heartbeat_at >= sinceIso,
+            ).length;
+            return { n } as T;
           }
           return null;
         },
@@ -654,6 +680,11 @@ function makeWebinarEvent(overrides: Partial<EventRow> = {}): EventRow {
     account_ids: null,
     image_url: null,
     description: null,
+    // Phase 7 (migration 043) defaults
+    concurrent_floor: 0,
+    concurrent_jitter_max: 0,
+    show_concurrent_viewers: 0,
+    show_fake_comments: 0,
     ...overrides,
   };
 }
@@ -1344,5 +1375,143 @@ describe('Phase 6b: cart period', () => {
     const body = (await res.json()) as { redirect_url: string; cart_state: string };
     expect(body.cart_state).toBe('closed');
     expect(body.redirect_url).toBe('https://example.com/next-webinar');
+  });
+});
+
+// ============================================================
+// Phase 7a: concurrent viewer count
+// ============================================================
+describe('Phase 7a: concurrent viewer count', () => {
+  function seedConcurrentBooking(
+    state: State,
+    opts: {
+      show?: 0 | 1;
+      floor?: number;
+      jitter?: number;
+    } = {},
+  ): void {
+    state.friends.push({ id: 'f1', line_account_id: 'la1', line_user_id: 'U_user_1' });
+    state.slots.push({
+      id: 'sl1', event_id: 'ev1',
+      starts_at: new Date(Date.now() - 60_000).toISOString(),
+      ends_at: new Date(Date.now() + 600_000).toISOString(),
+    });
+    state.events.push(makeWebinarEvent({
+      show_concurrent_viewers: opts.show ?? 1,
+      concurrent_floor: opts.floor ?? 0,
+      concurrent_jitter_max: opts.jitter ?? 0,
+    } as Partial<EventRow>));
+    state.bookings.push({
+      id: 'b1', line_account_id: 'la1', event_id: 'ev1', slot_id: 'sl1', friend_id: 'f1',
+      webinar_first_opened_at: null, webinar_video_started_at: null,
+      webinar_max_position_seconds: 0, webinar_completed_at: null,
+      webinar_last_heartbeat_at: null,
+    });
+  }
+
+  test('returns 404 when show_concurrent_viewers=0', async () => {
+    const state = emptyState();
+    seedConcurrentBooking(state, { show: 0 });
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+    const res = await app.request('/api/liff/webinar/b1/concurrent', {
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('concurrent_disabled');
+  });
+
+  test('counts active viewers within the heartbeat window', async () => {
+    const state = emptyState();
+    seedConcurrentBooking(state);
+    // Add 2 extra bookings on the same event: one recent heartbeat, one old.
+    const recent = new Date(Date.now() - 30_000).toISOString();
+    const tooOld = new Date(Date.now() - 10 * 60_000).toISOString();
+    state.bookings[0].webinar_last_heartbeat_at = recent;
+    state.bookings.push({
+      id: 'b2', line_account_id: 'la1', event_id: 'ev1', slot_id: 'sl1', friend_id: 'f1',
+      webinar_first_opened_at: null, webinar_video_started_at: null,
+      webinar_max_position_seconds: 0, webinar_completed_at: null,
+      webinar_last_heartbeat_at: recent,
+    });
+    state.bookings.push({
+      id: 'b3', line_account_id: 'la1', event_id: 'ev1', slot_id: 'sl1', friend_id: 'f1',
+      webinar_first_opened_at: null, webinar_video_started_at: null,
+      webinar_max_position_seconds: 0, webinar_completed_at: null,
+      webinar_last_heartbeat_at: tooOld,
+    });
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+    const res = await app.request('/api/liff/webinar/b1/concurrent', {
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { count: number; actual: number; floor: number };
+    expect(body.actual).toBe(2);
+    expect(body.count).toBeGreaterThanOrEqual(2);
+    expect(body.floor).toBe(0);
+  });
+
+  test('applies floor when actual viewers are below floor', async () => {
+    const state = emptyState();
+    seedConcurrentBooking(state, { floor: 50 });
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+    const res = await app.request('/api/liff/webinar/b1/concurrent', {
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { count: number; actual: number; floor: number; jitter: number };
+    expect(body.actual).toBe(0);
+    expect(body.floor).toBe(50);
+    // jitter=0 なので count はちょうど floor
+    expect(body.count).toBe(50);
+  });
+
+  test('returns 401 when unauthorized', async () => {
+    const state = emptyState();
+    seedConcurrentBooking(state);
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValueOnce(null);
+    const res = await app.request('/api/liff/webinar/b1/concurrent');
+    expect(res.status).toBe(401);
+  });
+});
+
+// ============================================================
+// Phase 7a: LIFF manifest reflects show_concurrent_viewers flag
+// (fake_comments related manifest test は Phase 7b commit で追加)
+// ============================================================
+describe('Phase 7a: LIFF manifest live-feel', () => {
+  function seedLiveBooking(state: State, eventOverrides: Partial<EventRow> = {}): void {
+    state.friends.push({ id: 'f1', line_account_id: 'la1', line_user_id: 'U_user_1' });
+    state.slots.push({
+      id: 'sl1', event_id: 'ev1',
+      starts_at: new Date(Date.now() - 60_000).toISOString(),
+      ends_at: new Date(Date.now() + 600_000).toISOString(),
+    });
+    state.events.push(makeWebinarEvent(eventOverrides));
+    state.bookings.push({
+      id: 'b1', line_account_id: 'la1', event_id: 'ev1', slot_id: 'sl1', friend_id: 'f1',
+      webinar_first_opened_at: null, webinar_video_started_at: null,
+      webinar_max_position_seconds: 0, webinar_completed_at: null,
+      webinar_last_heartbeat_at: null,
+    });
+  }
+
+  test('reflects show_concurrent_viewers flag', async () => {
+    const state = emptyState();
+    seedLiveBooking(state, { show_concurrent_viewers: 1, concurrent_floor: 25 });
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+    const res = await app.request('/api/liff/webinar/b1/manifest', {
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      live_feel: { show_concurrent_viewers: boolean };
+    };
+    expect(body.live_feel.show_concurrent_viewers).toBe(true);
   });
 });

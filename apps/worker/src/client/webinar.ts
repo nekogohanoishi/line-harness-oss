@@ -41,6 +41,8 @@ interface CtaItem {
   sort_order: number;
 }
 
+// Phase 7b の FakeCommentItem 型は次の commit で追加.
+
 interface Manifest {
   booking: {
     id: string;
@@ -69,6 +71,11 @@ interface Manifest {
   access_state: AccessState;
   server_now_ts: number;
   ctas: CtaItem[];
+  // Phase 7a: ライブ感演出 (同接表示).  Phase 7b で show_fake_comments /
+  // fake_comments がここに追加される.
+  live_feel?: {
+    show_concurrent_viewers: boolean;
+  };
 }
 
 interface Ctx {
@@ -79,6 +86,8 @@ interface Ctx {
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const STATE_TICK_MS = 1000;
 const DRIFT_RESYNC_THRESHOLD_SEC = 3;
+// Phase 7a: 同接視聴者数 polling 間隔. Worker CPU を抑えるため 30s 固定.
+const CONCURRENT_POLL_INTERVAL_MS = 30_000;
 
 function escapeHtml(s: string): string {
   const d = document.createElement('div');
@@ -194,6 +203,11 @@ function renderShell(container: HTMLElement, m: Manifest): void {
             <button class="webinar-play-btn" data-role="play-btn">▶ 視聴を開始する</button>
             <p class="webinar-play-hint">タップして再生（iOS の自動再生制限のため）</p>
           </div>
+          <div class="webinar-concurrent" data-role="concurrent" hidden>
+            <span class="webinar-concurrent-icon">👥</span>
+            <span class="webinar-concurrent-count" data-role="concurrent-count">--</span>
+            <span class="webinar-concurrent-label">人が視聴中</span>
+          </div>
         </div>
       </div>
       <div class="webinar-cta-banner" data-role="cta-banner" hidden></div>
@@ -225,6 +239,9 @@ interface PlayerHandles {
   ctaModalEl: HTMLElement | null;
   ctaModalBodyEl: HTMLElement | null;
   modalBackdropEl: HTMLElement | null;
+  // Phase 7a: 同接視聴者数
+  concurrentEl: HTMLElement | null;
+  concurrentCountEl: HTMLElement | null;
 }
 
 function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void {
@@ -242,6 +259,8 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
     ctaModalEl: container.querySelector('[data-role="cta-modal"]'),
     ctaModalBodyEl: container.querySelector('[data-role="modal-body"]'),
     modalBackdropEl: container.querySelector('[data-role="modal-backdrop"]'),
+    concurrentEl: container.querySelector('[data-role="concurrent"]'),
+    concurrentCountEl: container.querySelector('[data-role="concurrent-count"]'),
   };
 
   const slotStartMs = new Date(manifest.slot.starts_at).getTime();
@@ -277,9 +296,12 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
   const shownCtas = new Set<string>();
   let hbTimer: number | null = null;
   let stateTimer: number | null = null;
+  let concurrentTimer: number | null = null;
   let lastReportedPos = 0;
   let completedReported = !!manifest.booking.completed_at;
   let startedReported = !!manifest.booking.video_started_at;
+
+  const showConcurrent = manifest.live_feel?.show_concurrent_viewers === true;
 
   function show(el: HTMLElement | null): void {
     if (el) el.hidden = false;
@@ -439,6 +461,23 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
     }).catch(() => {});
   }
 
+  // Phase 7a: 同接視聴者数 polling
+  function pollConcurrent(): void {
+    if (!showConcurrent) return;
+    fetch(`/api/liff/webinar/${encodeURIComponent(ctx.bookingId)}/concurrent`, {
+      headers: { Authorization: `Bearer ${ctx.idToken}` },
+    })
+      .then((r) => (r.ok ? (r.json() as Promise<{ count: number }>) : null))
+      .then((json) => {
+        if (!json || !h.concurrentCountEl || !h.concurrentEl) return;
+        h.concurrentCountEl.textContent = String(json.count);
+        show(h.concurrentEl);
+      })
+      .catch(() => {
+        // 失敗は無視 (LIFF ペイロード軽量化のため hide のままで OK)
+      });
+  }
+
   function fireCompleted(): void {
     if (completedReported) return;
     completedReported = true;
@@ -516,6 +555,8 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
     if (mode === 'pre_start') {
       setCountdownVisible(-elapsedMs);
       hide(h.playOverlayEl);
+      // Phase 7a: pre_start では live-feel オーバーレイは非表示
+      hide(h.concurrentEl);
       return;
     }
 
@@ -534,6 +575,10 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
 
     if (mode === 'live') {
       setLiveMode();
+      // Phase 7a: 同接表示はライブモードでのみ。 replay モードでは hide.
+      if (showConcurrent && h.concurrentCountEl?.textContent !== '--') {
+        show(h.concurrentEl);
+      }
       if (!h.videoEl) return;
       const elapsedSec = elapsedMs / 1000;
       if (h.videoEl.paused) {
@@ -552,6 +597,8 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
     } else {
       // replay
       setReplayMode();
+      // Phase 7a: replay では同接非表示 (擬似ライブ感の都合)
+      hide(h.concurrentEl);
       if (h.videoEl && h.videoEl.paused && !userHasInteracted) {
         show(h.playOverlayEl);
       }
@@ -567,9 +614,19 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
       clearInterval(stateTimer);
       stateTimer = null;
     }
+    if (concurrentTimer) {
+      clearInterval(concurrentTimer);
+      concurrentTimer = null;
+    }
   }
 
   stateTimer = window.setInterval(tick, STATE_TICK_MS);
   hbTimer = window.setInterval(fireHeartbeat, HEARTBEAT_INTERVAL_MS);
+  // Phase 7a: 同接表示。ライブ・リプレイ両方で動かし、pre_start / expired で
+  // tick() 側が hide する。最初の値は manifest 取得直後に拾う。
+  if (showConcurrent) {
+    pollConcurrent();
+    concurrentTimer = window.setInterval(pollConcurrent, CONCURRENT_POLL_INTERVAL_MS);
+  }
   tick();
 }

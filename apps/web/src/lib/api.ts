@@ -1441,6 +1441,11 @@ export interface EventDetail {
   // Phase 6b (migration 042). カート期間管理。
   cart_relative_close_minutes?: number | null;
   cart_expired_redirect_url?: string | null;
+  // Phase 7 (migration 043). ライブ感演出。
+  concurrent_floor?: number | null;
+  concurrent_jitter_max?: number | null;
+  show_concurrent_viewers?: number | null;
+  show_fake_comments?: number | null;
 }
 
 // Webinar Launch (migration 041). 設計書 §4.2 の webinar_cta_items 列を
@@ -1742,7 +1747,9 @@ export const webinarApi = {
       withAccount(`/api/events/admin/events/${eventId}/recurrence/${recId}/run-now`, accountId),
       { method: 'POST' },
     ),
+
 };
+// Phase 7b (migration 043): fake_comments の API/型は次の commit で追加.
 
 // Phase 6a (migration 042): event_slot_recurrence 行を snake_case のまま受け取る。
 export interface WebinarRecurrenceItem {
