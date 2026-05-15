@@ -6,7 +6,17 @@ import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 
-type AutomationEventType = "friend_add" | "tag_change" | "score_threshold" | "cv_fire" | "message_received" | "calendar_booked"
+type AutomationEventType =
+  | "friend_add"
+  | "tag_change"
+  | "score_threshold"
+  | "cv_fire"
+  | "message_received"
+  | "calendar_booked"
+  | "webinar_opened"
+  | "webinar_started"
+  | "webinar_completed"
+  | "webinar_cta_clicked"
 
 interface AutomationAction {
   type: "add_tag" | "remove_tag" | "start_scenario" | "send_message" | "send_webhook" | "switch_rich_menu"
@@ -33,6 +43,10 @@ const eventTypeOptions: { value: AutomationEventType; label: string }[] = [
   { value: 'cv_fire', label: 'CV発火' },
   { value: 'message_received', label: 'メッセージ受信' },
   { value: 'calendar_booked', label: 'カレンダー予約' },
+  { value: 'webinar_opened', label: 'ウェビナー視聴開始(LIFFアクセス)' },
+  { value: 'webinar_started', label: 'ウェビナー視聴開始(動画再生)' },
+  { value: 'webinar_completed', label: 'ウェビナー完視聴' },
+  { value: 'webinar_cta_clicked', label: 'ウェビナーCTAクリック' },
 ]
 
 const eventTypeLabelMap: Record<AutomationEventType, string> = {
@@ -42,6 +56,10 @@ const eventTypeLabelMap: Record<AutomationEventType, string> = {
   cv_fire: 'CV発火',
   message_received: 'メッセージ受信',
   calendar_booked: 'カレンダー予約',
+  webinar_opened: 'ウェビナー視聴開始(LIFFアクセス)',
+  webinar_started: 'ウェビナー視聴開始(動画再生)',
+  webinar_completed: 'ウェビナー完視聴',
+  webinar_cta_clicked: 'ウェビナーCTAクリック',
 }
 
 const eventTypeBadgeColor: Record<AutomationEventType, string> = {
@@ -51,6 +69,10 @@ const eventTypeBadgeColor: Record<AutomationEventType, string> = {
   cv_fire: 'bg-red-100 text-red-700',
   message_received: 'bg-purple-100 text-purple-700',
   calendar_booked: 'bg-indigo-100 text-indigo-700',
+  webinar_opened: 'bg-teal-100 text-teal-700',
+  webinar_started: 'bg-teal-100 text-teal-700',
+  webinar_completed: 'bg-emerald-100 text-emerald-700',
+  webinar_cta_clicked: 'bg-orange-100 text-orange-700',
 }
 
 interface CreateFormState {
@@ -293,6 +315,18 @@ export default function AutomationsPage() {
                 value={form.conditionsJson}
                 onChange={(e) => setForm({ ...form, conditionsJson: e.target.value })}
               />
+              {form.eventType.startsWith('webinar_') && (
+                <p className="mt-1 text-[11px] text-gray-500">
+                  例: <code className="font-mono">{'{"eventId": "<ウェビナーイベントID>"}'}</code>
+                  {form.eventType === 'webinar_cta_clicked' && (
+                    <>
+                      {' '}/{' '}
+                      <code className="font-mono">{'{"eventId": "...", "ctaItemId": "<CTA ID>"}'}</code>
+                    </>
+                  )}
+                  。空 {'{}'} で全ウェビナーに発火。
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">優先度</label>
