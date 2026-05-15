@@ -162,8 +162,25 @@ export async function runUpdate(repoDir: string): Promise<void> {
     s.start("Admin UI 再デプロイ中...");
     const webDir = join(repoDir, "apps/web");
     await execa("pnpm", ["run", "build"], { cwd: webDir });
+    // Notes on these flags:
+    // - `--commit-dirty=true`: wrangler.toml が一時 patch されている間に
+    //   pages deploy が動くため、dirty 警告で先に進めなくなるのを回避
+    //   (setup.ts の deploy-admin.ts でも同様のフラグを使っている)。
+    // - `--commit-message`: 直近の git commit メッセージに日本語が含まれていると
+    //   Cloudflare Pages API が「Invalid commit message, it must be a valid
+    //   UTF-8 string」を返すケースがあったため、ASCII固定文言で上書きする。
+    // - `--branch=main`: Pages の production deploy として記録するため。
     await wrangler(
-      ["pages", "deploy", "out", "--project-name", adminProjectName],
+      [
+        "pages",
+        "deploy",
+        "out",
+        "--project-name",
+        adminProjectName,
+        "--commit-dirty=true",
+        "--commit-message=LINE Harness update via deploy:update",
+        "--branch=main",
+      ],
       { cwd: webDir },
     );
     s.stop("Admin UI 再デプロイ完了");
