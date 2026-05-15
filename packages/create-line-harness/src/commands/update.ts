@@ -138,9 +138,21 @@ export async function runUpdate(repoDir: string): Promise<void> {
       s.stop("マイグレーション完了（変更なし）");
     }
 
-    // Redeploy Worker
+    // Redeploy Worker.
+    //
+    // `wrangler deploy` reads `dist/line_harness/wrangler.json` (vite build
+    // 成果物) preferentially over the source `wrangler.toml`. If we patch
+    // `wrangler.toml` but skip the vite build, wrangler will pick up the
+    // STALE dist json (still containing `YOUR_DEV_ACCOUNT_ID`) and the deploy
+    // fails routing. So we run the build step first, mirroring the
+    // `vite build && wrangler deploy` pattern in apps/worker/package.json.
+    s.start("Worker 再ビルド中...");
+    const workerDir = join(repoDir, "apps/worker");
+    await execa("pnpm", ["run", "build"], { cwd: workerDir });
+    s.stop("Worker 再ビルド完了");
+
     s.start("Worker 再デプロイ中...");
-    await wrangler(["deploy", "--name", projectName], { cwd: join(repoDir, "apps/worker") });
+    await wrangler(["deploy", "--name", projectName], { cwd: workerDir });
     s.stop("Worker 再デプロイ完了");
 
     // Rebuild and redeploy Admin UI
