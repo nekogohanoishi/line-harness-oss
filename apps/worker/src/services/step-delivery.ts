@@ -16,6 +16,131 @@ import type { LineClient } from '@line-crm/line-sdk';
 import type { Message } from '@line-crm/line-sdk';
 import { jitterDeliveryTime, addJitter, sleep } from './stealth.js';
 
+// ===========================================================
+// Phase 6c: Webinar countdown / cart countdown 用ヘルパ
+// ===========================================================
+
+export interface WebinarTemplateContext {
+  // 直近の confirmed booking の slot.starts_at (UTC ISO8601, Z) と event 名
+  bookingStartsAt?: string | null;
+  bookingId?: string | null;
+  workerUrl?: string | null;
+  // 直近 active cart の closes_at (UTC ISO8601, Z)
+  cartClosesAt?: string | null;
+}
+
+// 残り時間を「あと N 分」「あと N 時間 M 分」「あと N 日」表記にフォーマット。
+// すでに過去 → "終了"。 1 分未満 → "もうすぐ".
+export function formatRemainingJa(targetIso: string, now: Date = new Date()): string {
+  const tMs = new Date(targetIso).getTime();
+  if (!Number.isFinite(tMs)) return '';
+  const diffMs = tMs - now.getTime();
+  if (diffMs <= 0) return '終了';
+  const totalMin = Math.floor(diffMs / 60_000);
+  if (totalMin < 1) return 'もうすぐ';
+  if (totalMin < 60) return `あと${totalMin}分`;
+  const totalHr = Math.floor(totalMin / 60);
+  if (totalHr < 24) {
+    const remMin = totalMin - totalHr * 60;
+    return remMin === 0 ? `あと${totalHr}時間` : `あと${totalHr}時間${remMin}分`;
+  }
+  const days = Math.floor(totalHr / 24);
+  return `あと${days}日`;
+}
+
+// UTC ISO8601 を JST clock の "YYYY-MM-DD HH:MM" に整形。
+export function formatDateTimeJa(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const jst = new Date(d.getTime() + 9 * 3600_000);
+  const y = jst.getUTCFullYear();
+  const mo = String(jst.getUTCMonth() + 1).padStart(2, '0');
+  const da = String(jst.getUTCDate()).padStart(2, '0');
+  const h = String(jst.getUTCHours()).padStart(2, '0');
+  const mi = String(jst.getUTCMinutes()).padStart(2, '0');
+  return `${y}-${mo}-${da} ${h}:${mi}`;
+}
+
+// 直近の未開催 or 開催中の confirmed booking を探す。
+// "未開催" = slot.starts_at が現在より未来、または starts_at が過去でも完視聴前。
+// シンプルに「starts_at が最も近い未来の confirmed booking」を1つ返す。
+// 同じ友だちが複数 webinar に予約していてもどれか1つで OK ([{{webinar_starts_in}} は
+// 「次に来る webinar」を意味するという素直な定義])。
+export async function findActiveBookingForFriend(
+  db: D1Database,
+  friendId: string,
+  now: Date = new Date(),
+): Promise<{ booking_id: string; event_id: string; starts_at: string; ends_at: string } | null> {
+  const nowIso = now.toISOString();
+  const row = await db
+    .prepare(
+      `SELECT b.id AS booking_id, b.event_id, s.starts_at, s.ends_at
+         FROM event_bookings b
+         JOIN event_slots s ON s.id = b.slot_id
+        WHERE b.friend_id = ?
+          AND b.status = 'confirmed'
+          AND s.deleted_at IS NULL
+          AND s.ends_at > ?
+        ORDER BY s.starts_at ASC
+        LIMIT 1`,
+    )
+    .bind(friendId, nowIso)
+    .first<{ booking_id: string; event_id: string; starts_at: string; ends_at: string }>();
+  return row ?? null;
+}
+
+// 直近の "open" cart status を返す (purchased ではない closes_at 未来).
+export async function findActiveCartStatusForFriend(
+  db: D1Database,
+  friendId: string,
+  now: Date = new Date(),
+): Promise<{ booking_id: string; event_id: string; closes_at: string } | null> {
+  const nowIso = now.toISOString();
+  const row = await db
+    .prepare(
+      `SELECT booking_id, event_id, closes_at
+         FROM event_cart_status
+        WHERE friend_id = ?
+          AND opened_at IS NOT NULL
+          AND closes_at IS NOT NULL
+          AND closes_at > ?
+          AND purchased_at IS NULL
+        ORDER BY closes_at ASC
+        LIMIT 1`,
+    )
+    .bind(friendId, nowIso)
+    .first<{ booking_id: string; event_id: string; closes_at: string }>();
+  return row ?? null;
+}
+
+// Webinar/cart 関連の動的コンテキストを 1 回のクエリ群で組み立てる。
+// 受け取った friend に対して、active な webinar booking / active cart を引き、
+// expandVariables 用のテンプレ context を返す。
+export async function buildWebinarTemplateContext(
+  db: D1Database,
+  friendId: string,
+  workerUrl?: string,
+  now: Date = new Date(),
+): Promise<WebinarTemplateContext> {
+  const ctx: WebinarTemplateContext = { workerUrl: workerUrl ?? null };
+  try {
+    const b = await findActiveBookingForFriend(db, friendId, now);
+    if (b) {
+      ctx.bookingId = b.booking_id;
+      ctx.bookingStartsAt = b.starts_at;
+    }
+  } catch (e) {
+    console.error('[step-delivery] findActiveBookingForFriend failed:', e);
+  }
+  try {
+    const cart = await findActiveCartStatusForFriend(db, friendId, now);
+    if (cart) ctx.cartClosesAt = cart.closes_at;
+  } catch (e) {
+    console.error('[step-delivery] findActiveCartStatusForFriend failed:', e);
+  }
+  return ctx;
+}
+
 /**
  * Replace template variables in message content.
  *
@@ -25,11 +150,22 @@ import { jitterDeliveryTime, addJitter, sleep } from './stealth.js';
  * - {{friend_id}}           → friend's internal ID
  * - {{auth_url:CHANNEL_ID}} → full /auth/line URL with uid for cross-account linking
  * - {{metadata.KEY}}       → friend's metadata value (from form responses etc.)
+ *
+ * Phase 6c (webinar countdown / cart countdown) は webinarCtx 経由で渡す:
+ * - {{webinar_starts_in}}   → "あと3時間20分" 等の残り時間 (booking が無ければ空)
+ * - {{webinar_starts_at}}   → "2026-05-16 20:00" (JST clock)
+ * - {{webinar_url}}         → LIFF 視聴 URL `{workerUrl}/liff/webinar/{bookingId}`
+ * - {{cart_closes_in}}      → "あと45分" 等
+ * - {{cart_closes_at}}      → "2026-05-16 22:00"
+ *
+ * webinarCtx が省略された場合、対応プレースホルダは空文字に置換される (テンプレが
+ * 壊れない方向の挙動 = 「webinar に紐付かない通常メッセージ」でも安全).
  */
 export function expandVariables(
   content: string,
   friend: { id: string; display_name: string | null; user_id: string | null; ref_code?: string | null; metadata?: Record<string, unknown> | string | null },
   apiOrigin?: string,
+  webinarCtx?: WebinarTemplateContext,
 ): string {
   let result = content;
   result = result.replace(/\{\{name\}\}/g, friend.display_name || '');
@@ -69,6 +205,29 @@ export function expandVariables(
       return `${apiOrigin}/auth/line?${params.toString()}`;
     });
   }
+  // Phase 6c: webinar / cart 関連変数。webinarCtx が undefined のキーは空文字。
+  // {{webinar_starts_in}}
+  result = result.replace(/\{\{webinar_starts_in\}\}/g, () => {
+    return webinarCtx?.bookingStartsAt ? formatRemainingJa(webinarCtx.bookingStartsAt) : '';
+  });
+  // {{webinar_starts_at}}
+  result = result.replace(/\{\{webinar_starts_at\}\}/g, () => {
+    return webinarCtx?.bookingStartsAt ? formatDateTimeJa(webinarCtx.bookingStartsAt) : '';
+  });
+  // {{webinar_url}}: workerUrl が無い場合は LIFF パスのみ返す (相対 URL)
+  result = result.replace(/\{\{webinar_url\}\}/g, () => {
+    if (!webinarCtx?.bookingId) return '';
+    const path = `/liff/webinar/${encodeURIComponent(webinarCtx.bookingId)}`;
+    return webinarCtx.workerUrl ? `${webinarCtx.workerUrl.replace(/\/$/, '')}${path}` : path;
+  });
+  // {{cart_closes_in}}
+  result = result.replace(/\{\{cart_closes_in\}\}/g, () => {
+    return webinarCtx?.cartClosesAt ? formatRemainingJa(webinarCtx.cartClosesAt) : '';
+  });
+  // {{cart_closes_at}}
+  result = result.replace(/\{\{cart_closes_at\}\}/g, () => {
+    return webinarCtx?.cartClosesAt ? formatDateTimeJa(webinarCtx.cartClosesAt) : '';
+  });
   return result;
 }
 
@@ -213,7 +372,9 @@ async function processSingleDelivery(
   // Expand template variables ({{name}}, {{uid}}, {{auth_url:CHANNEL_ID}}, {{metadata.KEY}}, etc.)
   const resolvedMeta = await resolveMetadata(db, { user_id: (friend as unknown as Record<string, string | null>).user_id, metadata: (friend as unknown as Record<string, string | null>).metadata });
   const friendWithMeta = { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1];
-  const expandedContent = expandVariables(resolved.messageContent, friendWithMeta, workerUrl);
+  // Phase 6c: webinar / cart 動的変数の context を組み立てる。
+  const webinarCtx = await buildWebinarTemplateContext(db, friend.id, workerUrl);
+  const expandedContent = expandVariables(resolved.messageContent, friendWithMeta, workerUrl, webinarCtx);
   // Auto-wrap URLs with tracking links (text with URLs → Flex with button)
   let trackedType: string = resolved.messageType;
   let trackedContent = expandedContent;
