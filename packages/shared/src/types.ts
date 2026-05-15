@@ -803,7 +803,11 @@ export type AutomationEventType =
   | "score_threshold"
   | "cv_fire"
   | "message_received"
-  | "calendar_booked";
+  | "calendar_booked"
+  | "webinar_opened"
+  | "webinar_started"
+  | "webinar_completed"
+  | "webinar_cta_clicked";
 
 export interface AutomationAction {
   type: "add_tag" | "remove_tag" | "start_scenario" | "send_message" | "send_webhook" | "switch_rich_menu";
