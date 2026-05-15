@@ -110,6 +110,38 @@ interface CtaClickRow {
   clicked_at: string;
 }
 
+// Phase 6a: event_slot_recurrence
+interface RecurrenceRow {
+  id: string;
+  event_id: string;
+  pattern_type: 'daily' | 'weekly';
+  weekdays_json: string | null;
+  times_json: string;
+  duration_minutes: number;
+  capacity: number | null;
+  generate_days_ahead: number;
+  timezone: string;
+  is_active: number;
+  last_generated_through: string | null;
+  created_at: string;
+  updated_at: string;
+  [k: string]: unknown;
+}
+
+// Phase 6b: event_cart_status
+interface CartStatusRow {
+  id: string;
+  event_id: string;
+  booking_id: string;
+  friend_id: string;
+  opened_at: string | null;
+  closes_at: string | null;
+  purchased_at: string | null;
+  created_at: string;
+  updated_at: string;
+  [k: string]: unknown;
+}
+
 interface State {
   events: EventRow[];
   slots: SlotRow[];
@@ -118,6 +150,8 @@ interface State {
   ctas: CtaRow[];
   heartbeats: HeartbeatRow[];
   ctaClicks: CtaClickRow[];
+  recurrences: RecurrenceRow[];
+  cartStatuses: CartStatusRow[];
 }
 
 function emptyState(): State {
@@ -129,6 +163,8 @@ function emptyState(): State {
     ctas: [],
     heartbeats: [],
     ctaClicks: [],
+    recurrences: [],
+    cartStatuses: [],
   };
 }
 
@@ -209,17 +245,52 @@ function makeDb(state: State): D1Database {
               archive_url: e.archive_url,
               image_url: e.image_url,
               description: e.description,
+              cart_relative_close_minutes: (e as Record<string, unknown>).cart_relative_close_minutes ?? null,
+              cart_expired_redirect_url: (e as Record<string, unknown>).cart_expired_redirect_url ?? null,
               slot_starts_at: s.starts_at,
               slot_ends_at: s.ends_at,
             } as T;
           }
-          // SELECT id FROM webinar_cta_items WHERE id = ? AND event_id = ? AND deleted_at IS NULL
-          if (sql.includes('SELECT id FROM webinar_cta_items')) {
+          // Phase 6b: SELECT id, opened_at, closes_at FROM event_cart_status WHERE booking_id = ?
+          // または SELECT closes_at, purchased_at FROM event_cart_status WHERE booking_id = ?
+          if (sql.includes('FROM event_cart_status') && sql.includes('WHERE booking_id = ?')) {
+            const [bookingId] = bound as [string];
+            const cs = state.cartStatuses.find((x) => x.booking_id === bookingId);
+            if (!cs) return null as T | null;
+            return {
+              id: cs.id,
+              opened_at: cs.opened_at,
+              closes_at: cs.closes_at,
+              purchased_at: cs.purchased_at,
+            } as T;
+          }
+          // Phase 6a: SELECT id FROM event_slot_recurrence WHERE id = ? AND event_id = ?
+          if (sql.includes('FROM event_slot_recurrence') && sql.includes('WHERE id = ?')) {
+            const [recId, eventId] = bound as [string, string?];
+            const r = state.recurrences.find(
+              (x) => x.id === recId && (eventId == null || x.event_id === eventId),
+            );
+            return (r ? { id: r.id, ...r } : null) as T | null;
+          }
+          // SELECT id [, action_type, action_value] FROM webinar_cta_items
+          //   WHERE id = ? AND event_id = ? AND deleted_at IS NULL
+          // (Phase 6b: cta-click ハンドラが action_type/action_value も SELECT する)
+          if (
+            sql.startsWith('SELECT id') &&
+            sql.includes('FROM webinar_cta_items') &&
+            sql.includes('event_id = ?') &&
+            sql.includes('deleted_at IS NULL')
+          ) {
             const [id, event_id] = bound as [string, string];
             const cta = state.ctas.find(
               (c) => c.id === id && c.event_id === event_id && c.deleted_at == null,
             );
-            return (cta ? { id: cta.id } : null) as T | null;
+            if (!cta) return null as T | null;
+            return {
+              id: cta.id,
+              action_type: cta.action_type,
+              action_value: cta.action_value,
+            } as T;
           }
           // SELECT * FROM webinar_cta_items WHERE id = ?
           if (sql.includes('SELECT * FROM webinar_cta_items') && sql.includes('WHERE id = ?')) {
@@ -278,6 +349,14 @@ function makeDb(state: State): D1Database {
               .sort((a, b) =>
                 a.at_seconds !== b.at_seconds ? a.at_seconds - b.at_seconds : a.sort_order - b.sort_order,
               );
+            return { results: items as unknown as T[] };
+          }
+          // Phase 6a: recurrence list (admin)
+          if (sql.includes('FROM event_slot_recurrence') && sql.includes('event_id = ?')) {
+            const [event_id] = bound as [string];
+            const items = state.recurrences
+              .filter((r) => r.event_id === event_id)
+              .sort((a, b) => a.created_at.localeCompare(b.created_at));
             return { results: items as unknown as T[] };
           }
           // stats: cta aggregation
@@ -347,6 +426,82 @@ function makeDb(state: State): D1Database {
                 c.updated_at = new Date().toISOString();
               }
             }
+            return { success: true, meta: { changes: 1 } };
+          }
+          // Phase 6b: event_cart_status INSERT/UPDATE
+          if (sql.startsWith('INSERT INTO event_cart_status')) {
+            const [id, event_id, booking_id, friend_id, opened_at, closes_at] = bound as [
+              string, string, string, string, string, string,
+            ];
+            // UNIQUE(booking_id) チェック
+            if (state.cartStatuses.some((x) => x.booking_id === booking_id)) {
+              throw new Error('UNIQUE constraint failed: event_cart_status.booking_id');
+            }
+            const now = new Date().toISOString();
+            state.cartStatuses.push({
+              id, event_id, booking_id, friend_id, opened_at, closes_at,
+              purchased_at: null,
+              created_at: now,
+              updated_at: now,
+            });
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.startsWith('UPDATE event_cart_status')) {
+            const id = bound[bound.length - 1] as string;
+            const cs = state.cartStatuses.find((x) => x.id === id);
+            if (!cs) return { success: true, meta: { changes: 0 } };
+            const setPart = sql.substring('UPDATE event_cart_status'.length).match(/SET\s+([\s\S]*?)\s+WHERE/i);
+            if (!setPart) return { success: true, meta: { changes: 0 } };
+            const cols = setPart[1].split(',').map((s) => s.trim());
+            let valIdx = 0;
+            for (const col of cols) {
+              const match = /^(\w+)\s*=\s*\?/.exec(col);
+              if (!match) continue;
+              (cs as Record<string, unknown>)[match[1]] = bound[valIdx];
+              valIdx++;
+            }
+            return { success: true, meta: { changes: 1 } };
+          }
+          // Phase 6a: event_slot_recurrence INSERT/UPDATE/DELETE
+          if (sql.startsWith('INSERT INTO event_slot_recurrence')) {
+            const [id, event_id, pattern_type, weekdays_json, times_json,
+                   duration_minutes, capacity, generate_days_ahead, timezone, is_active] = bound as [
+              string, string, 'daily' | 'weekly', string | null, string,
+              number, number | null, number, string, number,
+            ];
+            const now = new Date().toISOString();
+            state.recurrences.push({
+              id, event_id, pattern_type, weekdays_json, times_json,
+              duration_minutes, capacity, generate_days_ahead, timezone, is_active,
+              last_generated_through: null,
+              created_at: now,
+              updated_at: now,
+            });
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.startsWith('UPDATE event_slot_recurrence')) {
+            const id = bound[bound.length - 1] as string;
+            const r = state.recurrences.find((x) => x.id === id);
+            if (!r) return { success: true, meta: { changes: 0 } };
+            const setPart = sql.substring('UPDATE event_slot_recurrence'.length).match(/SET\s+([\s\S]*?)\s+WHERE/i);
+            if (!setPart) return { success: true, meta: { changes: 0 } };
+            const cols = setPart[1].split(',').map((s) => s.trim());
+            let valIdx = 0;
+            for (const col of cols) {
+              const match = /^(\w+)\s*=\s*\?/.exec(col);
+              if (!match) continue;
+              (r as Record<string, unknown>)[match[1]] = bound[valIdx];
+              valIdx++;
+            }
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.startsWith('DELETE FROM event_slot_recurrence')) {
+            const [recId, eventId] = bound as [string, string];
+            const idx = state.recurrences.findIndex(
+              (x) => x.id === recId && x.event_id === eventId,
+            );
+            if (idx === -1) return { success: true, meta: { changes: 0 } };
+            state.recurrences.splice(idx, 1);
             return { success: true, meta: { changes: 1 } };
           }
           if (sql.startsWith('INSERT INTO webinar_heartbeats')) {
@@ -969,5 +1124,225 @@ describe('Phase 5: webinar_* automations event firing', () => {
       });
     }
     expect(eventBusMocks.fireEvent).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ============================================================
+// Phase 6a: event_slot_recurrence CRUD HTTP routes
+// ============================================================
+describe('Phase 6a: recurrence CRUD', () => {
+  test('POST /recurrence creates rule with normalized times_json', async () => {
+    const state = emptyState();
+    state.events.push(makeWebinarEvent());
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events/ev1/recurrence?account_id=la1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pattern_type: 'daily',
+        times: ['10:00', '20:00'],
+        duration_minutes: 60,
+        capacity: 50,
+        generate_days_ahead: 7,
+      }),
+    });
+    expect(res.status).toBe(201);
+    const row = (await res.json()) as RecurrenceRow;
+    expect(row.event_id).toBe('ev1');
+    expect(JSON.parse(row.times_json)).toEqual(['10:00', '20:00']);
+    expect(state.recurrences).toHaveLength(1);
+  });
+
+  test('POST /recurrence rejects invalid time format', async () => {
+    const state = emptyState();
+    state.events.push(makeWebinarEvent());
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events/ev1/recurrence?account_id=la1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pattern_type: 'daily',
+        times: ['25:99'],
+        duration_minutes: 60,
+      }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  test('GET /recurrence lists rules; DELETE removes one', async () => {
+    const state = emptyState();
+    state.events.push(makeWebinarEvent());
+    const app = setupApp(state);
+    // create 2
+    await app.request('/api/events/admin/events/ev1/recurrence?account_id=la1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pattern_type: 'daily', times: ['10:00'], duration_minutes: 60 }),
+    });
+    await app.request('/api/events/admin/events/ev1/recurrence?account_id=la1', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pattern_type: 'weekly', weekdays: [1, 3, 5], times: ['12:00'], duration_minutes: 30 }),
+    });
+    const listRes = await app.request('/api/events/admin/events/ev1/recurrence?account_id=la1');
+    expect(listRes.status).toBe(200);
+    const list = (await listRes.json()) as { items: RecurrenceRow[] };
+    expect(list.items).toHaveLength(2);
+
+    const target = list.items[0];
+    const delRes = await app.request(
+      `/api/events/admin/events/ev1/recurrence/${target.id}?account_id=la1`,
+      { method: 'DELETE' },
+    );
+    expect(delRes.status).toBe(204);
+    expect(state.recurrences).toHaveLength(1);
+  });
+});
+
+// ============================================================
+// Phase 6b: cart period management — completed creates cart, cta-click returns redirect_url
+// ============================================================
+describe('Phase 6b: cart period', () => {
+  function seedLiveBookingWithCart(
+    state: State,
+    opts: { cartMinutes?: number | null; expiredRedirect?: string | null } = {},
+  ): BookingRow {
+    state.friends.push({ id: 'f1', line_account_id: 'la1', line_user_id: 'U_user_1' });
+    state.slots.push({
+      id: 'sl1', event_id: 'ev1',
+      starts_at: new Date(Date.now() - 60_000).toISOString(),
+      ends_at: new Date(Date.now() + 600_000).toISOString(),
+    });
+    state.events.push(makeWebinarEvent({
+      cart_relative_close_minutes: opts.cartMinutes ?? null,
+      cart_expired_redirect_url: opts.expiredRedirect ?? null,
+    } as Partial<EventRow>));
+    const booking: BookingRow = {
+      id: 'b1', line_account_id: 'la1', event_id: 'ev1', slot_id: 'sl1', friend_id: 'f1',
+      webinar_first_opened_at: null, webinar_video_started_at: null,
+      webinar_max_position_seconds: 0, webinar_completed_at: null,
+      webinar_last_heartbeat_at: null,
+    };
+    state.bookings.push(booking);
+    return booking;
+  }
+
+  test('completed creates event_cart_status with closes_at = now + cart_relative_close_minutes', async () => {
+    const state = emptyState();
+    seedLiveBookingWithCart(state, { cartMinutes: 60 });
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+
+    const before = Date.now();
+    const res = await app.request('/api/liff/webinar/b1/event/completed', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; cart: { opened_at: string; closes_at: string; already_open: boolean } | null };
+    expect(body.cart).not.toBeNull();
+    expect(body.cart!.already_open).toBe(false);
+    expect(state.cartStatuses).toHaveLength(1);
+    const cs = state.cartStatuses[0];
+    const diffMs = new Date(cs.closes_at!).getTime() - new Date(cs.opened_at!).getTime();
+    expect(diffMs).toBe(60 * 60_000);
+    // closes_at is roughly 60 min after the request
+    expect(new Date(cs.closes_at!).getTime() - before).toBeGreaterThan(59 * 60_000);
+  });
+
+  test('completed second call does not re-open cart (already_open=true, no new row)', async () => {
+    const state = emptyState();
+    seedLiveBookingWithCart(state, { cartMinutes: 30 });
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+
+    await app.request('/api/liff/webinar/b1/event/completed', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(state.cartStatuses).toHaveLength(1);
+    const firstOpenedAt = state.cartStatuses[0].opened_at;
+
+    await new Promise((r) => setTimeout(r, 5));
+    const res = await app.request('/api/liff/webinar/b1/event/completed', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token' },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { cart: { already_open: boolean } | null };
+    expect(body.cart!.already_open).toBe(true);
+    // opened_at は変化しない
+    expect(state.cartStatuses[0].opened_at).toBe(firstOpenedAt);
+    expect(state.cartStatuses).toHaveLength(1);
+  });
+
+  test('cta-click returns action_value when cart is open', async () => {
+    const state = emptyState();
+    seedLiveBookingWithCart(state, {
+      cartMinutes: 60,
+      expiredRedirect: 'https://example.com/expired',
+    });
+    const now = new Date().toISOString();
+    state.ctas.push({
+      id: 'c1', event_id: 'ev1', at_seconds: 30, display_mode: 'modal',
+      label: 'A', action_type: 'url', action_value: 'https://example.com/buy',
+      dismiss_after_seconds: null, sort_order: 0, is_active: 1, deleted_at: null,
+      created_at: now, updated_at: now,
+    });
+    // pre-existing open cart
+    state.cartStatuses.push({
+      id: 'cs1', event_id: 'ev1', booking_id: 'b1', friend_id: 'f1',
+      opened_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      closes_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+      purchased_at: null,
+      created_at: now, updated_at: now,
+    });
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+
+    const res = await app.request('/api/liff/webinar/b1/event/cta-click', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token', 'content-type': 'application/json' },
+      body: JSON.stringify({ ctaItemId: 'c1', positionSeconds: 45 }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { redirect_url: string; cart_state: string };
+    expect(body.cart_state).toBe('open');
+    expect(body.redirect_url).toBe('https://example.com/buy');
+  });
+
+  test('cta-click returns cart_expired_redirect_url when cart is closed', async () => {
+    const state = emptyState();
+    seedLiveBookingWithCart(state, {
+      cartMinutes: 60,
+      expiredRedirect: 'https://example.com/next-webinar',
+    });
+    const now = new Date().toISOString();
+    state.ctas.push({
+      id: 'c1', event_id: 'ev1', at_seconds: 30, display_mode: 'modal',
+      label: 'A', action_type: 'url', action_value: 'https://example.com/buy',
+      dismiss_after_seconds: null, sort_order: 0, is_active: 1, deleted_at: null,
+      created_at: now, updated_at: now,
+    });
+    // expired cart (closes_at in the past)
+    state.cartStatuses.push({
+      id: 'cs1', event_id: 'ev1', booking_id: 'b1', friend_id: 'f1',
+      opened_at: new Date(Date.now() - 2 * 3600_000).toISOString(),
+      closes_at: new Date(Date.now() - 3600_000).toISOString(),
+      purchased_at: null,
+      created_at: now, updated_at: now,
+    });
+    const app = setupApp(state);
+    liffAuthMocks.verifyCallerLineUserId.mockResolvedValue('U_user_1');
+
+    const res = await app.request('/api/liff/webinar/b1/event/cta-click', {
+      method: 'POST',
+      headers: { authorization: 'Bearer token', 'content-type': 'application/json' },
+      body: JSON.stringify({ ctaItemId: 'c1', positionSeconds: 45 }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { redirect_url: string; cart_state: string };
+    expect(body.cart_state).toBe('closed');
+    expect(body.redirect_url).toBe('https://example.com/next-webinar');
   });
 });

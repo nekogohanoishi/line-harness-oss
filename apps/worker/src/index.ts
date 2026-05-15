@@ -19,6 +19,7 @@ import { processDueReminders } from './services/booking-reminders.js';
 import { runExpirer } from './services/booking-expirer.js';
 import { processDueEventReminders } from './services/event-booking-reminders.js';
 import { runEventBookingExpirer } from './services/event-booking-expirer.js';
+import { runAllRecurrenceGeneration } from './services/event-slot-generator.js';
 import { sendEventBookingNotification } from './services/event-booking-notifier.js';
 import { sendBookingNotification } from './services/booking-notifier.js';
 import { DEFAULT_ACCOUNT_SETTINGS } from './services/booking-types.js';
@@ -603,6 +604,22 @@ async function scheduled(
       );
     } catch (e) {
       console.error('event-booking-expirer error:', e);
+    }
+  }
+
+  // Webinar slot auto-generation (Phase 6a) — 6h cron tick.
+  // event_slot_recurrence の active ルールに従って先 N 日分の event_slots を生成。
+  // idempotent: 既存 slot と starts_at が一致する組合せはスキップする。
+  if (event.cron === '0 */6 * * *') {
+    try {
+      const result = await runAllRecurrenceGeneration(env.DB, { now: new Date() });
+      if (result.total > 0) {
+        console.log(
+          `[slot-generator] total=${result.total} inserted=${result.inserted} skipped=${result.skippedDuplicate} errors=${result.errors}`,
+        );
+      }
+    } catch (e) {
+      console.error('slot-generator error:', e);
     }
   }
 

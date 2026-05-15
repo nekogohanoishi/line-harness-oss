@@ -31,6 +31,10 @@ import {
 } from '../services/event-booking-types.js';
 import { verifyCallerLineUserId } from '../services/liff-auth.js';
 import { fireEvent } from '../services/event-bus.js';
+import {
+  generateSlotsForRecurrence,
+  type RecurrenceRow,
+} from '../services/event-slot-generator.js';
 
 const webinar = new Hono<Env>();
 
@@ -682,6 +686,9 @@ interface BookingForLiff {
   archive_url: string | null;
   image_url: string | null;
   description: string | null;
+  // Phase 6b: カート期間
+  cart_relative_close_minutes: number | null;
+  cart_expired_redirect_url: string | null;
   // slot
   slot_starts_at: string;
   slot_ends_at: string;
@@ -709,6 +716,7 @@ async function loadBookingForLiff(
          e.kind, e.name, e.video_r2_key, e.video_duration_seconds,
          e.video_mime_type, e.video_size_bytes, e.replay_window_minutes,
          e.attendance_threshold_seconds, e.archive_url, e.image_url, e.description,
+         e.cart_relative_close_minutes, e.cart_expired_redirect_url,
          s.starts_at AS slot_starts_at, s.ends_at AS slot_ends_at
         FROM event_bookings b
         JOIN friends f ON f.id = b.friend_id
@@ -999,14 +1007,15 @@ webinar.post('/api/liff/webinar/:bookingId/event/cta-click', async (c) => {
   if (typeof ctaId !== 'string' || ctaId.length === 0) return bad(c, 'invalid_cta_item_id', 422);
   if (!Number.isFinite(pos) || (pos as number) < 0) return bad(c, 'invalid_position', 422);
 
-  // CTA が同一 event に属するか確認 (booking 跨ぎ防止)
+  // CTA が同一 event に属するか確認 (booking 跨ぎ防止). action_type / action_value も併せて
+  // 取得し、Phase 6b のカート期間切替判定に使う。
   const cta = await c.env.DB
     .prepare(
-      `SELECT id FROM webinar_cta_items
+      `SELECT id, action_type, action_value FROM webinar_cta_items
         WHERE id = ? AND event_id = ? AND deleted_at IS NULL`,
     )
     .bind(ctaId, b.event_id)
-    .first<{ id: string }>();
+    .first<{ id: string; action_type: string; action_value: string | null }>();
   if (!cta) return bad(c, 'cta_not_found', 404);
 
   const clickId = crypto.randomUUID();
@@ -1028,7 +1037,43 @@ webinar.post('/api/liff/webinar/:bookingId/event/cta-click', async (c) => {
     ctaItemId: ctaId,
     positionSeconds: position,
   });
-  return c.json({ ok: true });
+
+  // Phase 6b: action_type='url' / 'tracked_link' のときカート期間切替を判定。
+  //   - cart_open  (closes_at > now かつ purchased_at IS NULL): action_value
+  //   - cart_closed: cart_expired_redirect_url があればそちら、なければ action_value
+  //   - cart_relative_close_minutes が未設定の event: action_value そのまま (=切替なし)
+  let redirectUrl: string | null = null;
+  let cartState: 'no_cart' | 'open' | 'closed' = 'no_cart';
+  if (
+    (cta.action_type === 'url' || cta.action_type === 'tracked_link') &&
+    cta.action_value
+  ) {
+    if (b.cart_relative_close_minutes && b.cart_relative_close_minutes > 0) {
+      const status = await c.env.DB
+        .prepare(
+          `SELECT closes_at, purchased_at FROM event_cart_status WHERE booking_id = ?`,
+        )
+        .bind(b.booking_id)
+        .first<{ closes_at: string | null; purchased_at: string | null }>();
+      const closesMs = status?.closes_at ? new Date(status.closes_at).getTime() : null;
+      const isOpen =
+        status != null &&
+        status.purchased_at == null &&
+        closesMs != null &&
+        closesMs > Date.now();
+      if (isOpen) {
+        cartState = 'open';
+        redirectUrl = cta.action_value;
+      } else {
+        cartState = 'closed';
+        redirectUrl = b.cart_expired_redirect_url ?? cta.action_value;
+      }
+    } else {
+      redirectUrl = cta.action_value;
+    }
+  }
+
+  return c.json({ ok: true, redirect_url: redirectUrl, cart_state: cartState });
 });
 
 webinar.post('/api/liff/webinar/:bookingId/event/completed', async (c) => {
@@ -1052,7 +1097,349 @@ webinar.post('/api/liff/webinar/:bookingId/event/completed', async (c) => {
       bookingId: b.booking_id,
     });
   }
-  return c.json({ ok: true });
+
+  // Phase 6b: 視聴完了時にカート期間を開く。
+  //   events.cart_relative_close_minutes が NULL なら何もしない。
+  //   既に event_cart_status の opened_at が打たれていれば再度開かない (冪等)。
+  let cart: {
+    opened_at: string;
+    closes_at: string;
+    already_open: boolean;
+  } | null = null;
+  if (b.cart_relative_close_minutes && b.cart_relative_close_minutes > 0) {
+    const existing = await c.env.DB
+      .prepare(
+        `SELECT id, opened_at, closes_at FROM event_cart_status WHERE booking_id = ?`,
+      )
+      .bind(b.booking_id)
+      .first<{ id: string; opened_at: string | null; closes_at: string | null }>();
+    if (existing && existing.opened_at) {
+      cart = {
+        opened_at: existing.opened_at,
+        closes_at: existing.closes_at ?? '',
+        already_open: true,
+      };
+    } else {
+      const closesAtMs = Date.now() + b.cart_relative_close_minutes * 60_000;
+      const closesAtIso = new Date(closesAtMs).toISOString();
+      const updatedAt = now;
+      if (existing) {
+        await c.env.DB
+          .prepare(
+            `UPDATE event_cart_status
+                SET opened_at = ?, closes_at = ?, updated_at = ?
+              WHERE id = ?`,
+          )
+          .bind(now, closesAtIso, updatedAt, existing.id)
+          .run();
+      } else {
+        const cartId = crypto.randomUUID();
+        try {
+          await c.env.DB
+            .prepare(
+              `INSERT INTO event_cart_status
+                 (id, event_id, booking_id, friend_id, opened_at, closes_at)
+               VALUES (?, ?, ?, ?, ?, ?)`,
+            )
+            .bind(cartId, b.event_id, b.booking_id, b.friend_id, now, closesAtIso)
+            .run();
+        } catch (e) {
+          // 並列実行で UNIQUE(booking_id) に衝突したら opened_at が既にある側を優先
+          console.error('event_cart_status insert race fallback:', e);
+        }
+      }
+      cart = { opened_at: now, closes_at: closesAtIso, already_open: false };
+    }
+  }
+
+  return c.json({ ok: true, cart });
 });
+
+// ============================================================
+// Phase 6a: event_slot_recurrence CRUD (admin)
+// ============================================================
+
+interface RecurrenceInput {
+  pattern_type?: string;
+  weekdays?: number[] | null;
+  weekdays_json?: string | null;
+  times?: string[];
+  times_json?: string;
+  duration_minutes?: number;
+  capacity?: number | null;
+  generate_days_ahead?: number;
+  timezone?: string;
+  is_active?: number;
+}
+
+function validateRecurrenceInput(
+  body: Record<string, unknown>,
+  isCreate: boolean,
+): { ok: true; weekdaysJson: string | null; timesJson: string } | { ok: false; code: string } {
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(body, k);
+
+  if (isCreate || has('pattern_type')) {
+    const v = body.pattern_type;
+    if (v !== 'daily' && v !== 'weekly') return { ok: false, code: 'invalid_pattern_type' };
+  }
+
+  // times: array of "HH:MM"。受け取りは times (array) または times_json (string).
+  let timesJson = '';
+  if (isCreate || has('times') || has('times_json')) {
+    let arr: unknown;
+    if (has('times')) {
+      arr = body.times;
+    } else if (has('times_json') && typeof body.times_json === 'string') {
+      try {
+        arr = JSON.parse(body.times_json as string);
+      } catch {
+        return { ok: false, code: 'invalid_times_json' };
+      }
+    } else if (isCreate) {
+      return { ok: false, code: 'times_required' };
+    }
+    if (!Array.isArray(arr) || arr.length === 0) {
+      return { ok: false, code: 'invalid_times' };
+    }
+    for (const t of arr) {
+      if (typeof t !== 'string' || !/^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) {
+        return { ok: false, code: 'invalid_times' };
+      }
+    }
+    timesJson = JSON.stringify(arr);
+  }
+
+  // weekdays: array of 0..6 (weekly のみ意味あり)
+  let weekdaysJson: string | null = null;
+  if (has('weekdays') || has('weekdays_json')) {
+    let arr: unknown = null;
+    if (has('weekdays')) {
+      arr = body.weekdays;
+    } else if (typeof body.weekdays_json === 'string') {
+      try {
+        arr = JSON.parse(body.weekdays_json as string);
+      } catch {
+        return { ok: false, code: 'invalid_weekdays_json' };
+      }
+    }
+    if (arr != null) {
+      if (!Array.isArray(arr)) return { ok: false, code: 'invalid_weekdays' };
+      for (const w of arr as unknown[]) {
+        if (typeof w !== 'number' || !Number.isInteger(w) || w < 0 || w > 6) {
+          return { ok: false, code: 'invalid_weekdays' };
+        }
+      }
+      weekdaysJson = JSON.stringify(arr);
+    }
+  }
+
+  if (isCreate || has('duration_minutes')) {
+    const v = body.duration_minutes;
+    if (!Number.isInteger(v) || (v as number) <= 0 || (v as number) > 24 * 60) {
+      return { ok: false, code: 'invalid_duration_minutes' };
+    }
+  }
+
+  if (has('capacity') && body.capacity != null) {
+    const v = body.capacity;
+    if (!Number.isInteger(v) || (v as number) < 0) {
+      return { ok: false, code: 'invalid_capacity' };
+    }
+  }
+
+  if (has('generate_days_ahead')) {
+    const v = body.generate_days_ahead;
+    if (!Number.isInteger(v) || (v as number) < 1 || (v as number) > 365) {
+      return { ok: false, code: 'invalid_generate_days_ahead' };
+    }
+  }
+
+  if (has('timezone') && body.timezone != null) {
+    if (typeof body.timezone !== 'string' || (body.timezone as string).length > 64) {
+      return { ok: false, code: 'invalid_timezone' };
+    }
+  }
+
+  if (has('is_active') && body.is_active !== 0 && body.is_active !== 1) {
+    return { ok: false, code: 'invalid_is_active' };
+  }
+
+  return { ok: true, weekdaysJson, timesJson };
+}
+
+webinar.get('/api/events/admin/events/:id/recurrence', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+  const { results } = await c.env.DB
+    .prepare(
+      `SELECT * FROM event_slot_recurrence
+        WHERE event_id = ?
+        ORDER BY created_at ASC`,
+    )
+    .bind(id)
+    .all();
+  return c.json({ items: results ?? [] });
+});
+
+webinar.post('/api/events/admin/events/:id/recurrence', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const v = validateRecurrenceInput(body, true);
+  if (!v.ok) return bad(c, v.code, 422);
+
+  const recId = crypto.randomUUID();
+  await c.env.DB
+    .prepare(
+      `INSERT INTO event_slot_recurrence (
+         id, event_id, pattern_type, weekdays_json, times_json,
+         duration_minutes, capacity, generate_days_ahead, timezone, is_active
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      recId,
+      id,
+      body.pattern_type as string,
+      v.weekdaysJson,
+      v.timesJson,
+      body.duration_minutes as number,
+      (body.capacity as number | null | undefined) ?? null,
+      (body.generate_days_ahead as number | undefined) ?? 14,
+      (body.timezone as string | undefined) ?? 'Asia/Tokyo',
+      (body.is_active as number | undefined) ?? 1,
+    )
+    .run();
+  const row = await c.env.DB
+    .prepare(`SELECT * FROM event_slot_recurrence WHERE id = ?`)
+    .bind(recId)
+    .first();
+  return c.json(row, 201);
+});
+
+webinar.put('/api/events/admin/events/:id/recurrence/:recId', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  const recId = c.req.param('recId');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const existing = await c.env.DB
+    .prepare(`SELECT id FROM event_slot_recurrence WHERE id = ? AND event_id = ?`)
+    .bind(recId, id)
+    .first<{ id: string }>();
+  if (!existing) return bad(c, 'not_found', 404);
+
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const v = validateRecurrenceInput(body, false);
+  if (!v.ok) return bad(c, v.code, 422);
+
+  const updates: Array<[string, unknown]> = [];
+  if (Object.prototype.hasOwnProperty.call(body, 'pattern_type')) {
+    updates.push(['pattern_type', body.pattern_type]);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(body, 'weekdays') ||
+    Object.prototype.hasOwnProperty.call(body, 'weekdays_json')
+  ) {
+    updates.push(['weekdays_json', v.weekdaysJson]);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(body, 'times') ||
+    Object.prototype.hasOwnProperty.call(body, 'times_json')
+  ) {
+    updates.push(['times_json', v.timesJson]);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'duration_minutes')) {
+    updates.push(['duration_minutes', body.duration_minutes]);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'capacity')) {
+    updates.push(['capacity', body.capacity ?? null]);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'generate_days_ahead')) {
+    updates.push(['generate_days_ahead', body.generate_days_ahead]);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'timezone')) {
+    updates.push(['timezone', body.timezone]);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'is_active')) {
+    updates.push(['is_active', body.is_active]);
+  }
+
+  if (updates.length === 0) {
+    const row = await c.env.DB
+      .prepare(`SELECT * FROM event_slot_recurrence WHERE id = ?`)
+      .bind(recId)
+      .first();
+    return c.json(row);
+  }
+  const now = new Date().toISOString();
+  const setClauses = updates.map(([k]) => `${k} = ?`);
+  setClauses.push(`updated_at = ?`);
+  const values = updates.map(([, v]) => v);
+  values.push(now);
+  values.push(recId);
+  await c.env.DB
+    .prepare(
+      `UPDATE event_slot_recurrence SET ${setClauses.join(', ')} WHERE id = ?`,
+    )
+    .bind(...values)
+    .run();
+  const row = await c.env.DB
+    .prepare(`SELECT * FROM event_slot_recurrence WHERE id = ?`)
+    .bind(recId)
+    .first();
+  return c.json(row);
+});
+
+webinar.delete('/api/events/admin/events/:id/recurrence/:recId', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  const recId = c.req.param('recId');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const result = await c.env.DB
+    .prepare(`DELETE FROM event_slot_recurrence WHERE id = ? AND event_id = ?`)
+    .bind(recId, id)
+    .run();
+  if ((result.meta?.changes ?? 0) === 0) return bad(c, 'not_found', 404);
+  return new Response(null, { status: 204 });
+});
+
+// 手動実行 (テスト・運用補助用). cron を待たずに即座に生成する。
+webinar.post('/api/events/admin/events/:id/recurrence/:recId/run-now', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const id = c.req.param('id');
+  const recId = c.req.param('recId');
+  if (!(await ownsEvent(c.env.DB, id, account_id))) return bad(c, 'not_found', 404);
+
+  const rec = await c.env.DB
+    .prepare(`SELECT * FROM event_slot_recurrence WHERE id = ? AND event_id = ?`)
+    .bind(recId, id)
+    .first<RecurrenceRow>();
+  if (!rec) return bad(c, 'not_found', 404);
+
+  const result = await generateSlotsForRecurrence(c.env.DB, rec);
+  return c.json(result);
+});
+
+// ============================================================
+// Phase 6b: cart period status helpers
+// ============================================================
+// 視聴完了 (POST /event/completed) のハンドラから event_cart_status を作成する
+// ヘルパは routes/webinar.ts 内 completed ハンドラ側に inline で実装する
+// (`events.cart_relative_close_minutes` をその場で確認するだけのため).
+//
+// CTA クリック時に redirect_url を判定するのも cta-click ハンドラ側に inline。
+//
+// このセクションには Phase 6b 用の追加 endpoint は持たない (events 設定の更新は
+// 既存 events.ts の updateEvent endpoint が cart_relative_close_minutes /
+// cart_expired_redirect_url カラムを通すように events.ts 側で対応する).
 
 export default webinar;
