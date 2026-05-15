@@ -372,16 +372,17 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
 
   function triggerCta(cta: CtaItem): void {
     const pos = h.videoEl ? Math.floor(h.videoEl.currentTime) : 0;
-    fetch(`/api/liff/webinar/${encodeURIComponent(ctx.bookingId)}/event/cta-click`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${ctx.idToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ctaItemId: cta.id, positionSeconds: pos }),
-    }).catch(() => {});
-    if (cta.action_type === 'url' && cta.action_value) {
-      window.open(cta.action_value, '_blank');
-    } else if (cta.action_type === 'tracked_link' && cta.action_value) {
-      window.open(cta.action_value, '_blank');
-    } else if (cta.action_type === 'close') {
+    // Phase 6b: Worker 側でカート期間に応じた redirect_url を返すので、それを尊重する。
+    // レスポンスを待ってから window.open すると LINE 内で popup ブロックされる端末が
+    // あるため、本物の URL は先に開く準備 (preliminary open) してから差し替える方が
+    // 安全だが、簡素化のため fetch を await した上で開く。LIFF 内ブラウザは popup 制限が
+    // 厳しくないため動作する。
+    if (cta.action_type === 'close') {
+      void fetch(`/api/liff/webinar/${encodeURIComponent(ctx.bookingId)}/event/cta-click`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${ctx.idToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ctaItemId: cta.id, positionSeconds: pos }),
+      }).catch(() => {});
       if (typeof liff !== 'undefined' && liff.isInClient && liff.isInClient()) {
         try {
           liff.closeWindow();
@@ -389,8 +390,31 @@ function startPlayer(container: HTMLElement, manifest: Manifest, ctx: Ctx): void
           /* silent */
         }
       }
+      return;
     }
-    // tag は Worker 側で別 endpoint 経由 (TODO: タグ付与の同期 API は v2)
+    if (cta.action_type === 'url' || cta.action_type === 'tracked_link') {
+      // カート切替判定は Worker 側 (cart_relative_close_minutes が設定された event のみ)
+      fetch(`/api/liff/webinar/${encodeURIComponent(ctx.bookingId)}/event/cta-click`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${ctx.idToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ctaItemId: cta.id, positionSeconds: pos }),
+      })
+        .then((r) => r.ok ? r.json() as Promise<{ redirect_url: string | null }> : null)
+        .then((json) => {
+          const url = json?.redirect_url ?? cta.action_value;
+          if (url) window.open(url, '_blank');
+        })
+        .catch(() => {
+          if (cta.action_value) window.open(cta.action_value, '_blank');
+        });
+      return;
+    }
+    // tag etc. は別 endpoint 経由 (TODO: タグ付与の同期 API は v2)
+    fetch(`/api/liff/webinar/${encodeURIComponent(ctx.bookingId)}/event/cta-click`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ctx.idToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ctaItemId: cta.id, positionSeconds: pos }),
+    }).catch(() => {});
   }
 
   function fireStarted(): void {

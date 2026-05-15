@@ -9,6 +9,8 @@ import { webinarApi, type EventDetail, type EventListItem, type WebinarCtaItem }
 import VideoUpload from './video-upload'
 import CtaList from './cta-list'
 import WebinarStats from './webinar-stats'
+import RecurrenceList from './recurrence-list'
+import CartSettings from './cart-settings'
 
 interface Props {
   accountId: string
@@ -17,11 +19,13 @@ interface Props {
   setEvent: (next: EventDetail) => void
 }
 
-type Subtab = 'video' | 'cta' | 'stats'
+type Subtab = 'video' | 'cta' | 'recurrence' | 'cart' | 'stats'
 
 const SUBTABS: Array<{ key: Subtab; label: string; sub: string }> = [
   { key: 'video', label: '動画', sub: 'R2 へのアップロード・差し替え' },
   { key: 'cta', label: 'CTA タイムライン', sub: '時間連動で表示するボタン' },
+  { key: 'recurrence', label: 'スロット自動生成', sub: '毎日◯時に開催を再現' },
+  { key: 'cart', label: 'カート期間', sub: 'CTA URL の切替・閉鎖演出' },
   { key: 'stats', label: '視聴統計', sub: '予約者・完視聴率・CTA別CTR' },
 ]
 
@@ -112,6 +116,14 @@ export default function WebinarSettingsTab({ accountId, eventId, event, setEvent
             />
           )}
         </div>
+      )}
+
+      {subtab === 'recurrence' && (
+        <RecurrenceList accountId={accountId} eventId={eventId} />
+      )}
+
+      {subtab === 'cart' && (
+        <CartSettings accountId={accountId} eventId={eventId} event={event} setEvent={setEvent} />
       )}
 
       {subtab === 'stats' && (

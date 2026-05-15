@@ -136,6 +136,21 @@ function validateEventInput(
       return { ok: false, code: 'invalid_archive_url' };
     }
   }
+  // Phase 6b (migration 042): カート期間管理。
+  if (has('cart_relative_close_minutes') && body.cart_relative_close_minutes != null) {
+    const v = body.cart_relative_close_minutes;
+    if (!Number.isInteger(v) || (v as number) <= 0 || (v as number) > 60 * 24 * 30) {
+      return { ok: false, code: 'invalid_cart_relative_close_minutes' };
+    }
+  }
+  if (has('cart_expired_redirect_url') && body.cart_expired_redirect_url != null) {
+    if (
+      typeof body.cart_expired_redirect_url !== 'string' ||
+      (body.cart_expired_redirect_url as string).length > 2000
+    ) {
+      return { ok: false, code: 'invalid_cart_expired_redirect_url' };
+    }
+  }
   if (has('target_type') && body.target_type != null) {
     if (body.target_type !== 'single' && body.target_type !== 'multi-account-dedup') {
       return { ok: false, code: 'invalid_target_type' };
@@ -325,6 +340,9 @@ events.put('/api/events/admin/events/:id', async (c) => {
     'replay_window_minutes',
     'attendance_threshold_seconds',
     'archive_url',
+    // Phase 6b (migration 042): カート期間管理。
+    'cart_relative_close_minutes',
+    'cart_expired_redirect_url',
   ] as const;
   const setClauses: string[] = [];
   const setValues: unknown[] = [];

@@ -1438,6 +1438,9 @@ export interface EventDetail {
   replay_window_minutes?: number | null;
   attendance_threshold_seconds?: number | null;
   archive_url?: string | null;
+  // Phase 6b (migration 042). カート期間管理。
+  cart_relative_close_minutes?: number | null;
+  cart_expired_redirect_url?: string | null;
 }
 
 // Webinar Launch (migration 041). 設計書 §4.2 の webinar_cta_items 列を
@@ -1708,4 +1711,63 @@ export const webinarApi = {
     fetchApi<WebinarStats>(
       withAccount(`/api/events/admin/events/${eventId}/webinar/stats`, accountId),
     ),
+
+  // ---- Phase 6a: 予約枠の自動生成ルール ----
+  listRecurrence: (eventId: string, accountId: string) =>
+    fetchApi<{ items: WebinarRecurrenceItem[] }>(
+      withAccount(`/api/events/admin/events/${eventId}/recurrence`, accountId),
+    ),
+  createRecurrence: (eventId: string, accountId: string, payload: WebinarRecurrenceInput) =>
+    fetchApi<WebinarRecurrenceItem>(
+      withAccount(`/api/events/admin/events/${eventId}/recurrence`, accountId),
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+  updateRecurrence: (
+    eventId: string,
+    recId: string,
+    accountId: string,
+    payload: Partial<WebinarRecurrenceInput>,
+  ) =>
+    fetchApi<WebinarRecurrenceItem>(
+      withAccount(`/api/events/admin/events/${eventId}/recurrence/${recId}`, accountId),
+      { method: 'PUT', body: JSON.stringify(payload) },
+    ),
+  deleteRecurrence: (eventId: string, recId: string, accountId: string) =>
+    fetchApi<void>(
+      withAccount(`/api/events/admin/events/${eventId}/recurrence/${recId}`, accountId),
+      { method: 'DELETE' },
+    ),
+  runRecurrenceNow: (eventId: string, recId: string, accountId: string) =>
+    fetchApi<{ inserted: number; skippedDuplicate: number; errors: number; lastGeneratedThrough: string | null }>(
+      withAccount(`/api/events/admin/events/${eventId}/recurrence/${recId}/run-now`, accountId),
+      { method: 'POST' },
+    ),
 };
+
+// Phase 6a (migration 042): event_slot_recurrence 行を snake_case のまま受け取る。
+export interface WebinarRecurrenceItem {
+  id: string;
+  event_id: string;
+  pattern_type: 'daily' | 'weekly';
+  weekdays_json: string | null;
+  times_json: string;
+  duration_minutes: number;
+  capacity: number | null;
+  generate_days_ahead: number;
+  timezone: string;
+  is_active: number;
+  last_generated_through: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WebinarRecurrenceInput {
+  pattern_type: 'daily' | 'weekly';
+  weekdays?: number[] | null;
+  times: string[];
+  duration_minutes: number;
+  capacity?: number | null;
+  generate_days_ahead?: number;
+  timezone?: string;
+  is_active?: number;
+}
