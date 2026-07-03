@@ -25,6 +25,11 @@ bucket_name = "line-harness-images"
 [triggers]
 crons = ["*/5 * * * *", "0 */6 * * *"]
 
+[vars]
+WORKER_URL = "https://line-harness.nekogohanoishi.workers.dev"
+ADMIN_ORIGIN = "https://line-harness-admin-ee5e2a72.pages.dev"
+ADMIN_ALLOW_CROSS_SITE = "true"
+
 # ═══════════════════════════════════════════════════════════════
 # 本番環境 (aiagent.mini@)
 # 使い方: npx wrangler deploy --env production --name your-worker-name
@@ -48,3 +53,8 @@ bucket_name = "line-harness-images"
 
 [env.production.triggers]
 crons = ["*/5 * * * *", "0 */6 * * *"]
+
+[env.production.vars]
+WORKER_URL = "https://line-harness.nekogohanoishi.workers.dev"
+ADMIN_ORIGIN = "https://line-harness-admin-ee5e2a72.pages.dev"
+ADMIN_ALLOW_CROSS_SITE = "true"
