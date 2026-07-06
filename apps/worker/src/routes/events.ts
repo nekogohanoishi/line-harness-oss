@@ -23,6 +23,7 @@ import {
 import { getSlotsWithRemaining } from '../services/event-availability.js';
 import { verifyCallerLineUserId } from '../services/liff-auth.js';
 import { computeIdentityKey } from '../lib/identity-key.js';
+import { notifyAdminsOfBooking } from '../services/admin-booking-notifier.js';
 import {
   reserveEventIdempotency,
   finalizeEventIdempotencyResponse,
@@ -887,11 +888,11 @@ events.post('/api/liff/events/:id/bookings', async (c) => {
   // 算出に必要 (broadcasts dedup と同じ識別ロジック)。
   const friend = await c.env.DB
     .prepare(
-      `SELECT id, user_id, picture_url FROM friends
+      `SELECT id, user_id, picture_url, display_name FROM friends
         WHERE line_user_id = ? AND line_account_id = ? AND is_following = 1`,
     )
     .bind(callerLineUserId, account_id)
-    .first<{ id: string; user_id: string | null; picture_url: string | null }>();
+    .first<{ id: string; user_id: string | null; picture_url: string | null; display_name: string | null }>();
   if (!friend) return bad(c, 'friend_not_found', 404);
 
   // Reserve idempotency key BEFORE the booking work to dedupe concurrent
@@ -1144,6 +1145,28 @@ events.post('/api/liff/events/:id/bookings', async (c) => {
     }
   } catch (e) {
     console.error('[event-booking] notify failed', e);
+  }
+
+  // best-effort admin notification: 予約発生を運営者の LINE に push する。
+  // requires_approval=1 のリクエストを放置して expire させないための導線。
+  // 失敗しても booking 本体は成功のまま返す。
+  try {
+    const acc2 = await c.env.DB
+      .prepare(`SELECT channel_access_token FROM line_accounts WHERE id = ?`)
+      .bind(account_id)
+      .first<{ channel_access_token: string }>();
+    if (acc2?.channel_access_token) {
+      await notifyAdminsOfBooking(c.env.DB, acc2.channel_access_token, account_id, {
+        eventName: event.name,
+        startsAtJst: startsAtJst(slot.starts_at),
+        friendDisplayName: friend.display_name ?? '(名前未取得)',
+        customerNote: body.customer_note ?? null,
+        status,
+        adminUrl: c.env.ADMIN_ORIGIN ? `${c.env.ADMIN_ORIGIN}/events/bookings` : undefined,
+      });
+    }
+  } catch (e) {
+    console.error('[event-booking] admin notify failed', e);
   }
 
   return finalize(201, { id, status });
