@@ -73,4 +73,37 @@ describe('renderEventNotificationText', () => {
     expect(text).toContain('会場: 渋谷');
     expect(text).not.toContain('https://');
   });
+
+  test('historyUrl があれば予約履歴リンクを付与する（received_confirmed）', () => {
+    const text = renderEventNotificationText('received_confirmed', {
+      ...baseCtx,
+      historyUrl: 'https://liff.line.me/L1?page=event-me',
+    });
+    expect(text).toContain('▼予約の確認・キャンセルはこちら');
+    expect(text).toContain('https://liff.line.me/L1?page=event-me');
+  });
+
+  test('historyUrl が無ければ従来文言のまま（received_confirmed）', () => {
+    const text = renderEventNotificationText('received_confirmed', baseCtx);
+    expect(text).not.toContain('▼予約の確認・キャンセルはこちら');
+    expect(text).not.toContain('liff.line.me');
+  });
+
+  test('historyUrl はリマインダ文言にも付与される', () => {
+    const text = renderEventNotificationText('reminder_hours_before', {
+      ...baseCtx,
+      hoursBefore: 2,
+      historyUrl: 'https://liff.line.me/L1?page=event-me',
+    });
+    expect(text).toContain('▼予約の確認・キャンセルはこちら');
+    expect(text).toContain('https://liff.line.me/L1?page=event-me');
+  });
+
+  test('rejected / cancelled_by_admin は historyUrl があってもリンクを出さない', () => {
+    const ctxWithUrl = { ...baseCtx, historyUrl: 'https://liff.line.me/L1?page=event-me' };
+    const rejected = renderEventNotificationText('rejected', ctxWithUrl);
+    const cancelledByAdmin = renderEventNotificationText('cancelled_by_admin', ctxWithUrl);
+    expect(rejected).not.toContain('liff.line.me');
+    expect(cancelledByAdmin).not.toContain('liff.line.me');
+  });
 });

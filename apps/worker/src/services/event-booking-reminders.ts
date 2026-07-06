@@ -104,6 +104,7 @@ interface DueEventReminderRow {
   venue_url: string | null;
   starts_at: string;
   channel_access_token: string;
+  liff_id: string | null;
   line_user_id: string;
   reminder_hours_before: number | null;
 }
@@ -111,6 +112,13 @@ interface DueEventReminderRow {
 function startsAtJstFmt(utcIso: string): string {
   const jst = new Date(new Date(utcIso).getTime() + JST_OFFSET_MS).toISOString();
   return `${jst.slice(0, 10)} ${jst.slice(11, 16)}`;
+}
+
+// 予約者向け通知に添える「予約履歴ページ」リンク。liff_id が無ければ null
+// (呼び出し側は従来通りリンク無し文言にフォールバックする)。
+function buildEventHistoryUrl(liffId: string | null): string | null {
+  if (!liffId) return null;
+  return `https://liff.line.me/${liffId}?page=event-me`;
 }
 
 function notificationKindFor(reminderKind: EventReminderKind): EventNotificationKind {
@@ -134,7 +142,7 @@ export async function processDueEventReminders(
       `SELECT r.id, r.booking_id, r.kind, r.retry_count,
               e.name AS event_name, e.venue_name, e.venue_url, e.reminder_hours_before,
               s.starts_at,
-              la.channel_access_token,
+              la.channel_access_token, la.liff_id,
               f.line_user_id
          FROM event_booking_reminders r
          INNER JOIN event_bookings b ON b.id = r.booking_id
@@ -181,6 +189,7 @@ export async function processDueEventReminders(
           venueName: row.venue_name,
           venueUrl: row.venue_url,
           hoursBefore: row.reminder_hours_before ?? 0,
+          historyUrl: buildEventHistoryUrl(row.liff_id),
         },
       });
       await db

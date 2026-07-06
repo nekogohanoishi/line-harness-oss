@@ -15,6 +15,8 @@ export interface EventNotificationContext {
   venueName?: string | null;
   venueUrl?: string | null;
   hoursBefore?: number;
+  /** LIFF の予約履歴ページ URL。無ければ従来通りリンク行を出さない。 */
+  historyUrl?: string | null;
 }
 
 export function renderEventNotificationText(
@@ -24,22 +26,23 @@ export function renderEventNotificationText(
   const venueLine = ctx.venueName ? `\n会場: ${ctx.venueName}` : '';
   const venueUrlLine = ctx.venueUrl ? `\n${ctx.venueUrl}` : '';
   const detail = `\nイベント: ${ctx.eventName}\n日時: ${ctx.startsAtJst}${venueLine}${venueUrlLine}`;
+  const historyLine = ctx.historyUrl ? `\n\n▼予約の確認・キャンセルはこちら\n${ctx.historyUrl}` : '';
   switch (kind) {
     case 'received_pending':
-      return `イベント申込みを受け付けました。${detail}\n\n運営の承認をお待ちください。`;
+      return `イベント申込みを受け付けました。${detail}\n\n運営の承認をお待ちください。${historyLine}`;
     case 'received_confirmed':
-      return `イベント予約が確定しました。${detail}\n\n変更・キャンセルは予約履歴画面からお願いします。`;
+      return `イベント予約が確定しました。${detail}\n\n変更・キャンセルは予約履歴画面からお願いします。${historyLine}`;
     case 'confirmed':
-      return `イベント予約が確定しました。${detail}\n\n変更・キャンセルは予約履歴画面からお願いします。`;
+      return `イベント予約が確定しました。${detail}\n\n変更・キャンセルは予約履歴画面からお願いします。${historyLine}`;
     case 'rejected':
       return `申し訳ございません、今回のイベント予約はお受けできませんでした。${detail}`;
     case 'cancelled_by_admin':
       return `運営側でイベント予約をキャンセルさせていただきました。${detail}\n\n詳細は LINE にてご連絡ください。`;
     case 'reminder_day_before':
-      return `【リマインド】明日イベントが開催されます。${detail}`;
+      return `【リマインド】明日イベントが開催されます。${detail}${historyLine}`;
     case 'reminder_hours_before': {
       const hours = ctx.hoursBefore ?? 0;
-      return `【リマインド】まもなくイベント開始です（あと ${hours} 時間）。${detail}`;
+      return `【リマインド】まもなくイベント開始です（あと ${hours} 時間）。${detail}${historyLine}`;
     }
   }
 }
