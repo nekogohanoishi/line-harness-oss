@@ -727,21 +727,29 @@ events.post('/api/liff/events/me/:bookingId/cancel', async (c) => {
   const callerLineUserId = await verifyCallerLineUserId(c.req.header('Authorization'), c.env);
   if (!callerLineUserId) return bad(c, 'unauthorized', 401);
   const friend = await c.env.DB
-    .prepare(`SELECT id FROM friends WHERE line_user_id = ? AND line_account_id = ?`)
+    .prepare(`SELECT id, display_name FROM friends WHERE line_user_id = ? AND line_account_id = ?`)
     .bind(callerLineUserId, account_id)
-    .first<{ id: string }>();
+    .first<{ id: string; display_name: string | null }>();
   if (!friend) return bad(c, 'friend_not_found', 404);
 
   const row = await c.env.DB
     .prepare(
-      `SELECT b.id, b.status, e.cancel_deadline_hours_before, s.starts_at AS slot_starts_at
+      `SELECT b.id, b.status, b.customer_note, e.name AS event_name,
+              e.cancel_deadline_hours_before, s.starts_at AS slot_starts_at
          FROM event_bookings b
          JOIN events e ON e.id = b.event_id
          JOIN event_slots s ON s.id = b.slot_id
         WHERE b.id = ? AND b.friend_id = ? AND b.line_account_id = ?`,
     )
     .bind(c.req.param('bookingId'), friend.id, account_id)
-    .first<{ id: string; status: string; cancel_deadline_hours_before: number | null; slot_starts_at: string }>();
+    .first<{
+      id: string;
+      status: string;
+      customer_note: string | null;
+      event_name: string;
+      cancel_deadline_hours_before: number | null;
+      slot_starts_at: string;
+    }>();
   if (!row) return bad(c, 'not_found', 404);
   if (row.status !== 'requested' && row.status !== 'confirmed') return bad(c, 'invalid_state', 409);
   if (row.cancel_deadline_hours_before == null) return bad(c, 'cancel_not_allowed', 403);
@@ -759,6 +767,29 @@ events.post('/api/liff/events/me/:bookingId/cancel', async (c) => {
     .bind(nowIso, nowIso, row.id)
     .run();
   await cancelPendingRemindersFor(c.env.DB, row.id);
+
+  // best-effort admin notification: 友だちキャンセルは Admin UI のポーリング
+  // 頼みだと気付きにくく、枠が空いたことを運営者が把握できないため push する。
+  // 失敗してもキャンセル処理自体は成功のまま返す。
+  try {
+    const acc = await c.env.DB
+      .prepare(`SELECT channel_access_token FROM line_accounts WHERE id = ?`)
+      .bind(account_id)
+      .first<{ channel_access_token: string }>();
+    if (acc?.channel_access_token) {
+      await notifyAdminsOfBooking(c.env.DB, acc.channel_access_token, account_id, {
+        eventName: row.event_name,
+        startsAtJst: startsAtJst(row.slot_starts_at),
+        friendDisplayName: friend.display_name ?? '(名前未取得)',
+        customerNote: row.customer_note,
+        status: 'cancelled',
+        adminUrl: c.env.ADMIN_ORIGIN ? `${c.env.ADMIN_ORIGIN}/events/bookings` : undefined,
+      });
+    }
+  } catch (e) {
+    console.error('[event-booking] admin cancel notify failed', e);
+  }
+
   return c.json({ ok: true });
 });
 
@@ -873,6 +904,14 @@ const JST_OFFSET_MS = 9 * 3600_000;
 function startsAtJst(utcIso: string): string {
   const jst = new Date(new Date(utcIso).getTime() + JST_OFFSET_MS).toISOString();
   return `${jst.slice(0, 10)} ${jst.slice(11, 16)}`;
+}
+
+// 予約者向け通知に添える「予約履歴ページ」リンク。liff_id が無いアカウント
+// (LIFF 未設定) では組み立てられないので null を返し、呼び出し側は従来通り
+// リンク無し文言にフォールバックする。
+function buildEventHistoryUrl(liffId: string | null): string | null {
+  if (!liffId) return null;
+  return `https://liff.line.me/${liffId}?page=event-me`;
 }
 
 events.post('/api/liff/events/:id/bookings', async (c) => {
@@ -1122,12 +1161,21 @@ events.post('/api/liff/events/:id/bookings', async (c) => {
     await insertRemindersForBooking(c.env.DB, id, reminders);
   }
 
+  // line_accounts は通知2種で共用 (channel_access_token + liff_id)。
+  // 取得自体も best-effort: 失敗時は両通知をスキップし booking は成功のまま返す。
+  let acc: { channel_access_token: string; liff_id: string | null } | null = null;
+  try {
+    acc = await c.env.DB
+      .prepare(`SELECT channel_access_token, liff_id FROM line_accounts WHERE id = ?`)
+      .bind(account_id)
+      .first<{ channel_access_token: string; liff_id: string | null }>();
+  } catch (e) {
+    console.error('[event-booking] line_accounts lookup failed', e);
+  }
+  const historyUrl = buildEventHistoryUrl(acc?.liff_id ?? null);
+
   // best-effort notification: do not fail the booking if push fails.
   try {
-    const acc = await c.env.DB
-      .prepare(`SELECT channel_access_token FROM line_accounts WHERE id = ?`)
-      .bind(account_id)
-      .first<{ channel_access_token: string }>();
     if (acc?.channel_access_token) {
       const kind: EventNotificationKind =
         status === 'requested' ? 'received_pending' : 'received_confirmed';
@@ -1140,6 +1188,7 @@ events.post('/api/liff/events/:id/bookings', async (c) => {
           startsAtJst: startsAtJst(slot.starts_at),
           venueName: event.venue_name,
           venueUrl: event.venue_url,
+          historyUrl,
         },
       });
     }
@@ -1151,12 +1200,8 @@ events.post('/api/liff/events/:id/bookings', async (c) => {
   // requires_approval=1 のリクエストを放置して expire させないための導線。
   // 失敗しても booking 本体は成功のまま返す。
   try {
-    const acc2 = await c.env.DB
-      .prepare(`SELECT channel_access_token FROM line_accounts WHERE id = ?`)
-      .bind(account_id)
-      .first<{ channel_access_token: string }>();
-    if (acc2?.channel_access_token) {
-      await notifyAdminsOfBooking(c.env.DB, acc2.channel_access_token, account_id, {
+    if (acc?.channel_access_token) {
+      await notifyAdminsOfBooking(c.env.DB, acc.channel_access_token, account_id, {
         eventName: event.name,
         startsAtJst: startsAtJst(slot.starts_at),
         friendDisplayName: friend.display_name ?? '(名前未取得)',
@@ -1291,7 +1336,7 @@ async function notifyBookingFriend(
       .prepare(
         `SELECT e.name AS event_name, e.venue_name, e.venue_url,
                 s.starts_at AS slot_starts_at,
-                la.channel_access_token,
+                la.channel_access_token, la.liff_id,
                 f.line_user_id
            FROM event_bookings b
            JOIN events e ON e.id = b.event_id
@@ -1307,6 +1352,7 @@ async function notifyBookingFriend(
         venue_url: string | null;
         slot_starts_at: string;
         channel_access_token: string;
+        liff_id: string | null;
         line_user_id: string;
       }>();
     if (!row || !row.channel_access_token) return;
@@ -1319,6 +1365,7 @@ async function notifyBookingFriend(
         startsAtJst: startsAtJst(row.slot_starts_at),
         venueName: row.venue_name,
         venueUrl: row.venue_url,
+        historyUrl: buildEventHistoryUrl(row.liff_id),
       },
     });
   } catch (e) {

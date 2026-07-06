@@ -100,6 +100,7 @@ interface FriendRow {
   line_user_id: string;
   user_id?: string | null;
   picture_url?: string | null;
+  display_name?: string | null;
 }
 
 function makeEventDb(state: {
@@ -130,11 +131,13 @@ function makeEventDb(state: {
             );
             return (acc ? { id: acc.id } : null) as T | null;
           }
-          // SELECT channel_access_token FROM line_accounts WHERE id = ?
-          if (sql.startsWith('SELECT channel_access_token FROM line_accounts')) {
+          // SELECT channel_access_token[, liff_id] FROM line_accounts WHERE id = ?
+          if (sql.includes('channel_access_token') && sql.includes('FROM line_accounts') && sql.includes('WHERE id = ?')) {
             const [id] = bound as [string];
             const acc = (state.accounts ?? []).find((a) => a.id === id);
-            return (acc ? { channel_access_token: acc.channel_access_token ?? '' } : null) as T | null;
+            return (acc
+              ? { channel_access_token: acc.channel_access_token ?? '', liff_id: acc.liff_id ?? null }
+              : null) as T | null;
           }
           // SELECT id [, user_id] FROM friends WHERE line_user_id = ? AND line_account_id = ?
           if (sql.includes('FROM friends')) {
@@ -152,6 +155,9 @@ function makeEventDb(state: {
                 user_id: f.user_id ?? null,
                 picture_url: f.picture_url ?? null,
               } as T;
+            }
+            if (sql.includes('display_name')) {
+              return { id: f.id, display_name: f.display_name ?? null } as T;
             }
             return { id: f.id } as T;
           }
@@ -193,6 +199,7 @@ function makeEventDb(state: {
               venue_url: e.venue_url,
               slot_starts_at: s.starts_at,
               channel_access_token: la.channel_access_token ?? '',
+              liff_id: la.liff_id ?? null,
               line_user_id: f.line_user_id,
             } as T;
           }
@@ -311,6 +318,8 @@ function makeEventDb(state: {
             return {
               id: b.id,
               status: b.status,
+              customer_note: (b as Record<string, unknown>).customer_note ?? null,
+              event_name: e.name,
               cancel_deadline_hours_before: e.cancel_deadline_hours_before,
               slot_starts_at: s.starts_at,
             } as T;

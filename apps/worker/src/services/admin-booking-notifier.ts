@@ -17,8 +17,8 @@ export interface AdminBookingNotifyParams {
   startsAtJst: string;
   friendDisplayName: string;
   customerNote: string | null;
-  /** 'requested' なら承認が必要な旨を含める */
-  status: 'requested' | 'confirmed';
+  /** 'requested'/'confirmed' は予約発生、'cancelled' は友だち起点のキャンセル */
+  status: 'requested' | 'confirmed' | 'cancelled';
   adminUrl?: string;
 }
 
@@ -29,11 +29,15 @@ export function renderAdminBookingNotificationText(p: AdminBookingNotifyParams):
   const header =
     p.status === 'requested'
       ? '📅 新しい予約リクエストが届きました（要承認）'
-      : '📅 新しい予約が確定しました';
+      : p.status === 'cancelled'
+        ? '📅 予約がキャンセルされました'
+        : '📅 新しい予約が確定しました';
   const actionLine =
     p.status === 'requested'
       ? `\n\n放置すると期限切れになります。管理画面から承認/却下してください。`
-      : '';
+      : p.status === 'cancelled'
+        ? `\n\n枠が空きました。`
+        : '';
   const urlLine = p.adminUrl ? `\n${p.adminUrl}` : '';
   return `${header}\n\nイベント: ${p.eventName}\n日時: ${p.startsAtJst}\nお名前: ${p.friendDisplayName}さん${noteLine}${actionLine}${urlLine}`;
 }

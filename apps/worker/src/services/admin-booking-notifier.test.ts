@@ -36,6 +36,23 @@ describe('renderAdminBookingNotificationText', () => {
     const text = renderAdminBookingNotificationText({ ...baseParams, customerNote: null });
     expect(text).not.toContain('備考:');
   });
+
+  test('cancelled はキャンセル文言と「枠が空きました」を含み、要承認/期限切れは含まない', () => {
+    const text = renderAdminBookingNotificationText({ ...baseParams, status: 'cancelled' });
+    expect(text).toContain('予約がキャンセルされました');
+    expect(text).toContain('ロードマップ作成会');
+    expect(text).toContain('2026-07-10 21:00');
+    expect(text).toContain('山田太郎さん');
+    expect(text).toContain('枠が空きました。');
+    expect(text).toContain('https://admin.example.com/events/bookings');
+    expect(text).not.toContain('要承認');
+    expect(text).not.toContain('期限切れ');
+  });
+
+  test('cancelled でも customerNote があれば備考行を出す', () => {
+    const text = renderAdminBookingNotificationText({ ...baseParams, status: 'cancelled' });
+    expect(text).toContain('備考: 答案の書き方で悩んでいます');
+  });
 });
 
 // 最小限の D1 モック: prepare(sql).bind(...).first()/all() チェーンを再現
