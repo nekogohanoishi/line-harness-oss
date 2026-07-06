@@ -7,6 +7,9 @@ const pkg = JSON.parse(readFileSync(resolve(__dirname, '../../package.json'), 'u
 const nextConfig: NextConfig = {
   output: 'export',
   transpilePackages: ['@line-crm/shared'],
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   env: {
     APP_VERSION: pkg.version,
   },

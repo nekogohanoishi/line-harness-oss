@@ -19,10 +19,12 @@ import {
   enrollFriendInScenario,
   jstNow,
   getFriendScore,
+  getFriendById,
 } from '@line-crm/db';
 import { LineClient } from '@line-crm/line-sdk';
 import type { Message } from '@line-crm/line-sdk';
 import { sendAdConversions } from './ad-conversion.js';
+import { expandVariables, resolveMetadata } from './step-delivery.js';
 
 export interface EventPayload {
   friendId?: string;
@@ -213,15 +215,16 @@ function matchConditions(
 
   // keyword_exact（完全一致）
   if (conditions.keyword_exact) {
-    const text = (payload.eventData?.text || '').trim();
+    const text = typeof payload.eventData?.text === 'string' ? payload.eventData.text.trim() : '';
     if (text !== conditions.keyword_exact) {
       return false;
     }
   }
 
   // webinar_* 用: eventId / ctaItemId による絞り込み (どちらも optional)
-  // webinar_opened / webinar_started / webinar_completed / webinar_cta_clicked
-  // の payload.eventData には { eventId, bookingId, [ctaItemId], [positionSeconds] } が入る。
+  // webinar_opened / webinar_started / webinar_completed / webinar_cta_clicked /
+  // webinar_abandoned の payload.eventData には
+  // { eventId, bookingId, [ctaItemId], [positionSeconds] } が入る。
   if (conditions.eventId !== undefined) {
     if (payload.eventData?.eventId !== conditions.eventId) return false;
   }
@@ -260,10 +263,7 @@ async function executeAction(
 
     case 'send_message': {
       if (!lineAccessToken || !friendId) break;
-      const friend = await db
-        .prepare('SELECT line_user_id FROM friends WHERE id = ?')
-        .bind(friendId)
-        .first<{ line_user_id: string }>();
+      const friend = await getFriendById(db, friendId);
       if (!friend) break;
       const lineClient = new LineClient(lineAccessToken);
 
@@ -282,6 +282,14 @@ async function executeAction(
           resolvedContent = tpl.message_content;
         }
       }
+      const resolvedMeta = await resolveMetadata(db, {
+        user_id: (friend as unknown as Record<string, string | null>).user_id,
+        metadata: (friend as unknown as Record<string, string | null>).metadata,
+      });
+      resolvedContent = expandVariables(
+        resolvedContent,
+        { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1],
+      );
 
       let msg: Message;
       let logContent: string;
@@ -393,8 +401,9 @@ async function executeAction(
           .replace(/\r/g, '\\r')
           .replace(/\t/g, '\\t')
           .replace(/[\u0000-\u001f]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
-      const raw = (action.params.data || '{}')
-        .replace(/\{\{message\}\}/g, escapeForJsonString(payload.eventData?.text || ''));
+      const dataTemplate = typeof action.params.data === 'string' ? action.params.data : '{}';
+      const incomingText = typeof payload.eventData?.text === 'string' ? payload.eventData.text : '';
+      const raw = dataTemplate.replace(/\{\{message\}\}/g, escapeForJsonString(incomingText));
       const patch = JSON.parse(raw) as Record<string, unknown>;
       const merged = { ...current, ...patch };
       await db

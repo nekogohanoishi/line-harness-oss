@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { verifySignature, LineClient } from '@line-crm/line-sdk';
-import type { WebhookRequestBody, WebhookEvent, TextEventMessage } from '@line-crm/line-sdk';
+import type { Message, WebhookRequestBody, WebhookEvent, TextEventMessage } from '@line-crm/line-sdk';
+import { createStickerMessageContent } from '@line-crm/shared';
 import {
   upsertFriend,
   updateFriendFollowStatus,
@@ -18,10 +19,31 @@ import {
   addTagToFriend,
   getEntryRouteByRefCode,
   getMessageTemplateById,
+  createFormSubmission,
+  getFormById,
+  getScenarioById,
 } from '@line-crm/db';
-import type { EntryRoute } from '@line-crm/db';
+import type { EntryRoute, Friend } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
-import { buildMessage, expandVariables } from '../services/step-delivery.js';
+import {
+  REGISTRATION_SURVEY_QUESTIONS,
+  buildInlineSurveyAnswerLogText,
+  buildSurveyAnswerConfirmationText,
+  buildSurveyAnswerLogText,
+  buildSurveyAnswerSummaryText,
+  buildSurveyQuestionMessageFromQuestions,
+  normalizeSurveyQuestions,
+  parseInlineSurveyPostbackData,
+  parseSurveyPostbackData,
+} from '../services/intro-message.js';
+import {
+  buildMessage,
+  buildWebinarTemplateContext,
+  expandVariables,
+  messageToLogPayload,
+  resolveMetadata,
+} from '../services/step-delivery.js';
+import { applySurveyAnswerTags } from '../services/survey-answer-tags.js';
 import type { Env } from '../index.js';
 
 const webhook = new Hono<Env>();
@@ -31,6 +53,372 @@ const webhook = new Hono<Env>();
 // bursty batched deliveries (~100 events × ~5 KB) while still well below the
 // 128 MB Cloudflare Workers memory ceiling.
 const MAX_WEBHOOK_BODY_SIZE = 1024 * 1024; // 1 MiB
+
+type InlineSurveyPayload = NonNullable<ReturnType<typeof parseInlineSurveyPostbackData>>;
+
+function parseFriendMetadata(metadata: string | null | undefined): Record<string, unknown> {
+  if (!metadata) return {};
+  try {
+    const parsed = JSON.parse(metadata) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+async function logIncomingPostback(
+  db: D1Database,
+  friendId: string,
+  content: string,
+  lineAccountId: string | null,
+  createdAt: string,
+): Promise<void> {
+  try {
+    await db
+      .prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, line_account_id, created_at)
+         VALUES (?, ?, 'incoming', 'text', ?, NULL, NULL, 'postback', ?, ?)`,
+      )
+      .bind(crypto.randomUUID(), friendId, content, lineAccountId ?? null, createdAt)
+      .run();
+  } catch (err) {
+    console.error('Failed to log incoming postback', err);
+  }
+}
+
+async function handleInlineSurveyPostback(
+  db: D1Database,
+  lineClient: LineClient,
+  replyToken: string,
+  friend: Friend,
+  payload: InlineSurveyPayload,
+  lineAccountId: string | null,
+): Promise<void> {
+  const now = jstNow();
+  await logIncomingPostback(
+    db,
+    friend.id,
+    buildInlineSurveyAnswerLogText(payload),
+    lineAccountId,
+    now,
+  );
+  const metadata = {
+    ...parseFriendMetadata(friend.metadata),
+    initial_survey_answer: payload.answer,
+    initial_survey_answer_label: payload.answerLabel,
+    initial_survey_form_id: payload.formId,
+    initial_survey_ref: payload.ref,
+    initial_survey_answered_at: now,
+  };
+
+  await db
+    .prepare('UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?')
+    .bind(JSON.stringify(metadata), now, friend.id)
+    .run();
+
+  if (payload.formId) {
+    const form = await getFormById(db, payload.formId);
+    if (form?.is_active) {
+      await createFormSubmission(db, {
+        formId: payload.formId,
+        friendId: friend.id,
+        data: JSON.stringify({
+          answer: payload.answer,
+          answer_label: payload.answerLabel,
+          source: 'line_inline_survey',
+          ref: payload.ref,
+        }),
+      });
+
+      if (form.on_submit_tag_id) {
+        await addTagToFriend(db, friend.id, form.on_submit_tag_id);
+      }
+      if (form.on_submit_scenario_id) {
+        await enrollFriendInScenario(db, friend.id, form.on_submit_scenario_id);
+      }
+    }
+  }
+
+  const responseText = `${buildSurveyAnswerConfirmationText(payload.answerLabel)}\n\n回答ありがとうございます。`;
+  await lineClient.replyMessage(replyToken, [{ type: 'text', text: responseText }]);
+  await db
+    .prepare(
+      `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, line_account_id, created_at)
+       VALUES (?, ?, 'outgoing', 'text', ?, NULL, NULL, 'reply', 'survey', ?, ?)`,
+    )
+    .bind(crypto.randomUUID(), friend.id, responseText, lineAccountId ?? null, now)
+    .run();
+}
+
+async function handleSurveyPostback(
+  db: D1Database,
+  lineClient: LineClient,
+  replyToken: string,
+  friend: Friend,
+  payload: NonNullable<ReturnType<typeof parseSurveyPostbackData>>,
+  lineAccountId: string | null,
+  workerUrl?: string,
+): Promise<void> {
+  const now = jstNow();
+  const form = await getFormById(db, payload.formId);
+  const questions = normalizeSurveyQuestions(form?.fields ?? REGISTRATION_SURVEY_QUESTIONS);
+  const question = questions[payload.questionIndex];
+  if (!question || !question.options.includes(payload.answer)) {
+    await logIncomingPostback(
+      db,
+      friend.id,
+      question
+        ? buildSurveyAnswerLogText(question, payload.answer)
+        : `アンケート回答\n回答を確認できませんでした：${payload.answer}`,
+      lineAccountId,
+      now,
+    );
+    const responseText = '回答を確認できませんでした。もう一度アンケートのボタンから選んでください。';
+    await lineClient.replyMessage(replyToken, [{ type: 'text', text: responseText }]);
+    await db
+      .prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, line_account_id, created_at)
+         VALUES (?, ?, 'outgoing', 'text', ?, NULL, NULL, 'reply', 'survey', ?, ?)`,
+      )
+      .bind(crypto.randomUUID(), friend.id, responseText, lineAccountId ?? null, now)
+      .run();
+    return;
+  }
+  await logIncomingPostback(
+    db,
+    friend.id,
+    buildSurveyAnswerLogText(question, payload.answer),
+    lineAccountId,
+    now,
+  );
+  const existingMetadata = parseFriendMetadata(friend.metadata);
+  const existingSurveyAnswers =
+    existingMetadata.survey_answers &&
+    typeof existingMetadata.survey_answers === 'object' &&
+    !Array.isArray(existingMetadata.survey_answers)
+      ? existingMetadata.survey_answers as Record<string, unknown>
+      : {};
+  const existingAnswersForForm =
+    existingSurveyAnswers[payload.formId] &&
+    typeof existingSurveyAnswers[payload.formId] === 'object' &&
+    !Array.isArray(existingSurveyAnswers[payload.formId])
+      ? existingSurveyAnswers[payload.formId] as Record<string, unknown>
+      : {};
+  const answers = {
+    ...existingAnswersForForm,
+    [question.name]: payload.answer,
+  };
+  const isRegistrationSurvey =
+    form?.name === '登録時アンケート' ||
+    existingMetadata.initial_survey_form_id === payload.formId;
+  const isLastQuestion = payload.questionIndex === questions.length - 1;
+  const metadata = {
+    ...existingMetadata,
+    ...answers,
+    survey_answers: {
+      ...existingSurveyAnswers,
+      [payload.formId]: answers,
+    },
+    last_survey_form_id: payload.formId,
+    last_survey_answered_at: isLastQuestion ? now : existingMetadata.last_survey_answered_at,
+    ...(isRegistrationSurvey
+      ? {
+          registration_survey_answers: answers,
+          initial_survey_form_id: payload.formId,
+          initial_survey_answered_at: isLastQuestion ? now : existingMetadata.initial_survey_answered_at,
+          initial_survey_pending_at: existingMetadata.initial_survey_pending_at ?? now,
+        }
+      : {}),
+  };
+
+  await db
+    .prepare('UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?')
+    .bind(JSON.stringify(metadata), now, friend.id)
+    .run();
+
+  try {
+    await applySurveyAnswerTags(db, friend.id, answers, questions);
+  } catch (err) {
+    console.error('Failed to apply survey answer tags', err);
+  }
+
+  const nextQuestionIndex = payload.questionIndex + 1;
+  const confirmationText = buildSurveyAnswerConfirmationText(payload.answer, question);
+  if (nextQuestionIndex < questions.length) {
+    const nextMessage = buildSurveyQuestionMessageFromQuestions(
+      payload.formId,
+      nextQuestionIndex,
+      questions,
+    );
+    await lineClient.replyMessage(replyToken, [
+      { type: 'text', text: confirmationText },
+      nextMessage as any,
+    ]);
+    await db
+      .prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, line_account_id, created_at)
+         VALUES (?, ?, 'outgoing', 'text', ?, NULL, NULL, 'reply', 'survey', ?, ?)`,
+      )
+      .bind(crypto.randomUUID(), friend.id, confirmationText, lineAccountId ?? null, now)
+      .run();
+    const logPayload = messageToLogPayload(nextMessage as any);
+    await db
+      .prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, line_account_id, created_at)
+         VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, 'reply', 'survey', ?, ?)`,
+      )
+      .bind(crypto.randomUUID(), friend.id, logPayload.messageType, logPayload.content, lineAccountId ?? null, now)
+      .run();
+    return;
+  }
+
+  let scenarioReplies: Array<{
+    message: Message;
+    stepId: string;
+    templateIdAtSend: string | null;
+  }> = [];
+  if (form?.is_active) {
+    await createFormSubmission(db, {
+      formId: payload.formId,
+      friendId: friend.id,
+      data: JSON.stringify(answers),
+    });
+    if (form.on_submit_tag_id) {
+      await addTagToFriend(db, friend.id, form.on_submit_tag_id);
+    }
+    if (form.on_submit_scenario_id) {
+      const friendWithUpdatedMetadata = {
+        ...friend,
+        metadata: JSON.stringify(metadata),
+      };
+      scenarioReplies = await buildImmediateScenarioReplyMessages(
+        db,
+        friendWithUpdatedMetadata,
+        form.on_submit_scenario_id,
+        workerUrl,
+      );
+    }
+  }
+
+  const responseText =
+    form?.on_submit_message_content?.trim() ||
+    'ご回答ありがとうございました！\nいただいた内容をもとに、お役立ち情報をお届けします。';
+  const answerSummaryText = `${confirmationText}\n\n${buildSurveyAnswerSummaryText(answers, questions)}`;
+  const scenarioRepliesToSend = scenarioReplies.slice(0, Math.max(0, 5 - 2));
+  await lineClient.replyMessage(replyToken, [
+    { type: 'text', text: answerSummaryText },
+    { type: 'text', text: responseText },
+    ...scenarioRepliesToSend.map(({ message }) => message),
+  ]);
+  await db
+    .prepare(
+      `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, line_account_id, created_at)
+       VALUES (?, ?, 'outgoing', 'text', ?, NULL, NULL, 'reply', 'survey', ?, ?)`,
+    )
+    .bind(crypto.randomUUID(), friend.id, answerSummaryText, lineAccountId ?? null, now)
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, line_account_id, created_at)
+       VALUES (?, ?, 'outgoing', 'text', ?, NULL, NULL, 'reply', 'survey', ?, ?)`,
+    )
+    .bind(crypto.randomUUID(), friend.id, responseText, lineAccountId ?? null, now)
+    .run();
+  for (const scenarioReply of scenarioRepliesToSend) {
+    const logPayload = messageToLogPayload(scenarioReply.message);
+    await db
+      .prepare(
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, line_account_id, template_id_at_send, created_at)
+         VALUES (?, ?, 'outgoing', ?, ?, NULL, ?, 'reply', 'scenario', ?, ?, ?)`,
+      )
+      .bind(
+        crypto.randomUUID(),
+        friend.id,
+        logPayload.messageType,
+        logPayload.content,
+        scenarioReply.stepId,
+        lineAccountId ?? null,
+        scenarioReply.templateIdAtSend,
+        now,
+      )
+      .run();
+  }
+}
+
+async function buildImmediateScenarioReplyMessages(
+  db: D1Database,
+  friend: Friend,
+  scenarioId: string,
+  workerUrl?: string,
+): Promise<Array<{ message: Message; stepId: string; templateIdAtSend: string | null }>> {
+  const scenario = await getScenarioById(db, scenarioId);
+  if (!scenario?.is_active) return [];
+
+  const firstStep = scenario.steps[0] ?? null;
+  if (!firstStep) return [];
+
+  const enrolledAtJst = new Date(Date.now() + 9 * 60 * 60_000);
+  const firstScheduledAt = computeNextDeliveryAt(
+    { delivery_mode: scenario.delivery_mode ?? 'relative' },
+    firstStep,
+    { enrolledAt: enrolledAtJst, previousDeliveredAt: enrolledAtJst, now: enrolledAtJst },
+  );
+  if (firstScheduledAt.getTime() > enrolledAtJst.getTime()) {
+    await enrollFriendInScenario(db, friend.id, scenarioId);
+    return [];
+  }
+
+  const enrollment = await enrollFriendInScenario(db, friend.id, scenarioId);
+  if (!enrollment) return [];
+
+  const resolved = await resolveStepContent(db, firstStep);
+  const resolvedMeta = await resolveMetadata(db, {
+    user_id: (friend as unknown as Record<string, string | null>).user_id,
+    metadata: (friend as unknown as Record<string, string | null>).metadata,
+  });
+  const webinarCtx = await buildWebinarTemplateContext(db, friend.id, workerUrl);
+  const expandedContent = expandVariables(
+    resolved.messageContent,
+    { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1],
+    workerUrl,
+    webinarCtx,
+  );
+
+  let messageType = resolved.messageType;
+  let messageContent = expandedContent;
+  if (workerUrl) {
+    const { autoTrackContent } = await import('../services/auto-track.js');
+    const tracked = await autoTrackContent(db, resolved.messageType, expandedContent, workerUrl);
+    messageType = tracked.messageType;
+    messageContent = tracked.content;
+  }
+
+  const message = buildMessage(messageType, messageContent);
+  const nextStep = scenario.steps[1] ?? null;
+  if (nextStep) {
+    const nextDeliveryAt = computeNextDeliveryAt(
+      { delivery_mode: scenario.delivery_mode ?? 'relative' },
+      nextStep,
+      { enrolledAt: enrolledAtJst, previousDeliveredAt: enrolledAtJst, now: enrolledAtJst },
+    );
+    await advanceFriendScenario(
+      db,
+      enrollment.id,
+      firstStep.step_order,
+      nextDeliveryAt.toISOString().slice(0, -1) + '+09:00',
+    );
+  } else {
+    await completeFriendScenario(db, enrollment.id);
+  }
+
+  if (firstStep.on_reach_tag_id) {
+    await addTagToFriend(db, friend.id, firstStep.on_reach_tag_id);
+  }
+
+  return [{ message, stepId: firstStep.id, templateIdAtSend: resolved.templateIdAtSend }];
+}
 
 webhook.post('/webhook', async (c) => {
   // Pre-read size guard: reject before reading the body if Content-Length is oversized.
@@ -161,6 +549,9 @@ async function handleEvent(
 
     console.log(`[follow] profile=${profile?.displayName ?? 'null'}`);
 
+    const friendBeforeFollow = await getFriendByLineUserId(db, userId);
+    const isRepeatFollow = friendBeforeFollow?.is_following === 0;
+
     const friend = await upsertFriend(db, {
       lineUserId: userId,
       displayName: profile?.displayName ?? null,
@@ -199,10 +590,13 @@ async function handleEvent(
     const referralRoute: EntryRoute | null = friendRefCode
       ? await getEntryRouteByRefCode(db, friendRefCode)
       : null;
-    const runAccountScenarios =
-      !referralRoute || referralRoute.run_account_friend_add_scenarios !== 0;
 
-    // friend_add シナリオに登録（このアカウントのシナリオのみ）
+    const runAccountScenarios =
+      (!referralRoute || referralRoute.run_account_friend_add_scenarios !== 0);
+
+    // friend_add シナリオに登録（このアカウントのシナリオのみ）。
+    // LINE は新規友だち追加だけでなくブロック解除でも follow webhook を送るため、
+    // repeat follow では既存の未完了登録を完了扱いにして、同じシナリオを最初から再開する。
     // Skip entirely when a referral link explicitly overrides (run_account_friend_add_scenarios=0).
     const scenarios = runAccountScenarios ? await getScenarios(db) : [];
     for (const scenario of scenarios) {
@@ -210,7 +604,18 @@ async function handleEvent(
       const scenarioAccountMatch = !scenario.line_account_id || !lineAccountId || scenario.line_account_id === lineAccountId;
       if (scenario.trigger_type === 'friend_add' && scenario.is_active && scenarioAccountMatch) {
         try {
-          // INSERT OR IGNORE handles dedup via UNIQUE(friend_id, scenario_id)
+          if (isRepeatFollow) {
+            await db
+              .prepare(
+                `DELETE FROM friend_scenarios
+                 WHERE friend_id = ? AND scenario_id = ?`,
+              )
+              .bind(friend.id, scenario.id)
+              .run();
+          }
+
+          // INSERT OR IGNORE handles normal dedup via UNIQUE(friend_id, scenario_id).
+          // Repeat follow has already cleared the old row so block解除 starts over.
           const friendScenario = await enrollFriendInScenario(db, friend.id, scenario.id);
           if (!friendScenario) continue; // already enrolled
 
@@ -237,48 +642,91 @@ async function handleEvent(
               friendScenario.status === 'active';
             if (firstStep && shouldSendImmediately) {
               try {
-                // Resolve template_id → templates table (参照型)
-                const resolved = await resolveStepContent(db, firstStep);
-                const { resolveMetadata } = await import('../services/step-delivery.js');
-                const resolvedMeta = await resolveMetadata(db, { user_id: (friend as unknown as Record<string, string | null>).user_id, metadata: (friend as unknown as Record<string, string | null>).metadata });
-                const expandedContent = expandVariables(resolved.messageContent, { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1]);
-                const message = buildMessage(resolved.messageType, expandedContent);
-                await lineClient.replyMessage(event.replyToken, [message]);
-                console.log(`Immediate delivery: sent step ${firstStep.id} to ${userId}`);
+                const immediateDeliveries: Array<{
+                  step: NonNullable<typeof firstStep>;
+                  message: Message;
+                  templateIdAtSend: string | null;
+                }> = [];
+                let lastSentStep: NonNullable<typeof firstStep> | null = null;
+                let nextPendingStep: NonNullable<typeof firstStep> | null = null;
+                let previousDeliveredAt = enrolledAtJst;
 
-                // Log what was actually delivered (post buildMessage normalization)
-                // so the dashboard chat view mirrors LINE 1:1.
-                const logId = crypto.randomUUID();
-                const { messageToLogPayload: logPayload1 } = await import('../services/step-delivery.js');
-                const wbScenarioPayload = logPayload1(message);
-                await db
-                  .prepare(
-                    `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, template_id_at_send, created_at)
-                     VALUES (?, ?, 'outgoing', ?, ?, NULL, ?, 'reply', 'scenario', ?, ?)`,
-                  )
-                  .bind(logId, friend.id, wbScenarioPayload.messageType, wbScenarioPayload.content, firstStep.id, resolved.templateIdAtSend, jstNow())
-                  .run();
+                for (const step of steps) {
+                  if (immediateDeliveries.length >= 5) {
+                    nextPendingStep = step;
+                    break;
+                  }
+                  if (step.condition_type) {
+                    nextPendingStep = step;
+                    break;
+                  }
+                  const scheduledAt = computeNextDeliveryAt(
+                    { delivery_mode: deliveryMode },
+                    step,
+                    { enrolledAt: enrolledAtJst, previousDeliveredAt, now: enrolledAtJst },
+                  );
+                  if (scheduledAt.getTime() > enrolledAtJst.getTime()) {
+                    nextPendingStep = step;
+                    break;
+                  }
 
-                // Advance or complete the friend_scenario — step 2 のスケジュールも
-                // computeNextDeliveryAt で計算する（elapsed/absolute_time で正しく動かすため）
-                const secondStep = steps[1] ?? null;
-                if (secondStep) {
+                  const resolved = await resolveStepContent(db, step);
+                  const resolvedMeta = await resolveMetadata(db, {
+                    user_id: (friend as unknown as Record<string, string | null>).user_id,
+                    metadata: (friend as unknown as Record<string, string | null>).metadata,
+                  });
+                  const expandedContent = expandVariables(
+                    resolved.messageContent,
+                    { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1],
+                  );
+                  const message = buildMessage(resolved.messageType, expandedContent);
+                  immediateDeliveries.push({ step, message, templateIdAtSend: resolved.templateIdAtSend });
+                  lastSentStep = step;
+                  previousDeliveredAt = enrolledAtJst;
+                }
+
+                if (!lastSentStep || immediateDeliveries.length === 0) continue;
+
+                await lineClient.replyMessage(event.replyToken, immediateDeliveries.map(({ message }) => message));
+                console.log(`Immediate delivery: sent ${immediateDeliveries.length} step(s) to ${userId}`);
+
+                for (const delivery of immediateDeliveries) {
+                  const logPayload = messageToLogPayload(delivery.message);
+                  await db
+                    .prepare(
+                      `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, template_id_at_send, created_at)
+                       VALUES (?, ?, 'outgoing', ?, ?, NULL, ?, 'reply', 'scenario', ?, ?)`,
+                    )
+                    .bind(
+                      crypto.randomUUID(),
+                      friend.id,
+                      logPayload.messageType,
+                      logPayload.content,
+                      delivery.step.id,
+                      delivery.templateIdAtSend,
+                      jstNow(),
+                    )
+                    .run();
+                }
+
+                if (nextPendingStep) {
                   const nextDeliveryDate = computeNextDeliveryAt(
                     { delivery_mode: deliveryMode },
-                    secondStep,
-                    { enrolledAt: enrolledAtJst, previousDeliveredAt: enrolledAtJst, now: enrolledAtJst },
+                    nextPendingStep,
+                    { enrolledAt: enrolledAtJst, previousDeliveredAt, now: enrolledAtJst },
                   );
-                  await advanceFriendScenario(db, friendScenario.id, firstStep.step_order, nextDeliveryDate.toISOString().slice(0, -1) + '+09:00');
+                  await advanceFriendScenario(db, friendScenario.id, lastSentStep.step_order, nextDeliveryDate.toISOString().slice(0, -1) + '+09:00');
                 } else {
                   await completeFriendScenario(db, friendScenario.id);
                 }
 
-                // 到達タグ付与 (advance / complete の後)
-                if (firstStep.on_reach_tag_id) {
-                  try {
-                    await addTagToFriend(db, friend.id, firstStep.on_reach_tag_id);
-                  } catch (err) {
-                    console.error(`[scenario] tag attach failed step=${firstStep.id}:`, err);
+                for (const delivery of immediateDeliveries) {
+                  if (delivery.step.on_reach_tag_id) {
+                    try {
+                      await addTagToFriend(db, friend.id, delivery.step.on_reach_tag_id);
+                    } catch (err) {
+                      console.error(`[scenario] tag attach failed step=${delivery.step.id}:`, err);
+                    }
                   }
                 }
               } catch (err) {
@@ -292,7 +740,7 @@ async function handleEvent(
     }
 
     // Referral link side-effects (intro push + dedicated scenario)
-    if (referralRoute) {
+    if (referralRoute && !isRepeatFollow) {
       // Intro push from referral link
       if (referralRoute.intro_template_id) {
         try {
@@ -319,7 +767,9 @@ async function handleEvent(
     }
 
     // イベントバス発火: friend_add（replyToken は Step 0 で使用済みの可能性あり）
-    await fireEvent(db, 'friend_add', { friendId: friend.id, eventData: { displayName: friend.display_name } }, lineAccessToken, lineAccountId);
+    if (!isRepeatFollow) {
+      await fireEvent(db, 'friend_add', { friendId: friend.id, eventData: { displayName: friend.display_name } }, lineAccessToken, lineAccountId);
+    }
     return;
   }
 
@@ -343,6 +793,41 @@ async function handleEvent(
 
     const postbackData = (event as unknown as { postback: { data: string } }).postback.data;
 
+    const survey = parseSurveyPostbackData(postbackData);
+    if (survey) {
+      try {
+        await handleSurveyPostback(
+          db,
+          lineClient,
+          event.replyToken,
+          friend,
+          survey,
+          lineAccountId,
+          workerUrl,
+        );
+      } catch (err) {
+        console.error('Failed to handle survey postback', err);
+      }
+      return;
+    }
+
+    const inlineSurvey = parseInlineSurveyPostbackData(postbackData);
+    if (inlineSurvey) {
+      try {
+        await handleInlineSurveyPostback(
+          db,
+          lineClient,
+          event.replyToken,
+          friend,
+          inlineSurvey,
+          lineAccountId,
+        );
+      } catch (err) {
+        console.error('Failed to handle inline survey postback', err);
+      }
+      return;
+    }
+
     // Match postback data against auto_replies (exact match on keyword)
     const autoReplyQuery = lineAccountId
       ? `SELECT * FROM auto_replies WHERE is_active = 1 AND (line_account_id IS NULL OR line_account_id = ?) ORDER BY created_at ASC`
@@ -359,20 +844,9 @@ async function handleEvent(
       }>();
 
     // postback の incoming 自体を messages_log に記録する。Rich Menu のタップで
-     // 利用者が "コスト比較" などのアクションを起こした事実を chat 履歴で可視化する。
-     // delivery_type='push' は厳密には push ではないが、incoming/non-test として
-     // 既存 chat list / 詳細 SQL のフィルタを通すための妥当な値 (auto_reply text 同様)。
-    try {
-      await db
-        .prepare(
-          `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, line_account_id, created_at)
-           VALUES (?, ?, 'incoming', 'text', ?, NULL, NULL, 'postback', ?, ?)`,
-        )
-        .bind(crypto.randomUUID(), friend.id, postbackData, lineAccountId ?? null, jstNow())
-        .run();
-    } catch (err) {
-      console.error('Failed to log incoming postback', err);
-    }
+    // 利用者が "コスト比較" などのアクションを起こした事実を chat 履歴で可視化する。
+    // アンケート系 postback は上の専用処理で日本語ログとして保存する。
+    await logIncomingPostback(db, friend.id, postbackData, lineAccountId, jstNow());
 
     for (const rule of autoReplies.results) {
       const isMatch = rule.match_type === 'exact'
@@ -421,7 +895,17 @@ async function handleEvent(
     const friend = await getFriendByLineUserId(db, userId);
     if (!friend) return;
 
-    const msg = event.message as { type: string; fileName?: string; title?: string };
+    const msg = event.message as {
+      type: string;
+      fileName?: string;
+      title?: string;
+      packageId?: string | number;
+      package_id?: string | number;
+      stickerId?: string | number;
+      sticker_id?: string | number;
+      stickerResourceType?: string | number;
+      sticker_resource_type?: string | number;
+    };
     const labels: Record<string, string> = {
       sticker: '[スタンプ]',
       image: '[画像]',
@@ -430,7 +914,13 @@ async function handleEvent(
       file: msg.fileName ? `[ファイル: ${msg.fileName}]` : '[ファイル]',
       location: msg.title ? `[位置情報: ${msg.title}]` : '[位置情報]',
     };
-    const content = labels[msg.type] ?? `[${msg.type}]`;
+    let content = labels[msg.type] ?? `[${msg.type}]`;
+    if (msg.type === 'sticker') {
+      const stickerContent = createStickerMessageContent(msg);
+      if (stickerContent) {
+        content = JSON.stringify(stickerContent);
+      }
+    }
 
     await db
       .prepare(

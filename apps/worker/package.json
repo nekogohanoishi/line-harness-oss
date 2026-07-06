@@ -1,15 +1,15 @@
 {
   "name": "worker",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "test": "vitest run",
-    "build": "vite build",
+    "test": "pnpm --filter @line-crm/shared build && vitest run",
+    "build": "pnpm --filter @line-crm/shared build && vite build",
     "preview": "vite preview",
-    "deploy": "vite build && wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "deploy": "pnpm --filter @line-crm/shared build && vite build && wrangler deploy",
+    "typecheck": "pnpm --filter @line-crm/shared build && tsc --noEmit"
   },
   "dependencies": {
     "@line-crm/db": "workspace:*",

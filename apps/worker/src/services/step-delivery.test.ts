@@ -9,6 +9,7 @@ import {
   formatDateTimeJa,
   findActiveBookingForFriend,
   findActiveCartStatusForFriend,
+  evaluateCondition,
 } from './step-delivery.js';
 
 const baseFriend = {
@@ -110,11 +111,29 @@ interface CartStatusRow {
   closes_at: string | null;
   purchased_at: string | null;
 }
+interface TrackedLinkRow {
+  id: string;
+  name: string;
+  original_url: string;
+}
+interface LinkClickRow {
+  tracked_link_id: string;
+  friend_id: string | null;
+}
+interface MessageLogRow {
+  friend_id: string;
+  direction: 'incoming' | 'outgoing';
+  message_type: string;
+  content: string;
+}
 
 interface State {
   bookings: BookingRow[];
   slots: SlotRow[];
   cartStatuses: CartStatusRow[];
+  trackedLinks?: TrackedLinkRow[];
+  linkClicks?: LinkClickRow[];
+  messages?: MessageLogRow[];
 }
 
 function makeDb(state: State): D1Database {
@@ -174,6 +193,36 @@ function makeDb(state: State): D1Database {
               event_id: winner.event_id,
               closes_at: winner.closes_at,
             } as T;
+          }
+          if (
+            sql.includes('FROM link_clicks lc') &&
+            sql.includes('INNER JOIN tracked_links tl')
+          ) {
+            const [friendId, idNeedle, exactUrlNeedle, urlPartNeedle, nameNeedle] =
+              bound as [string, string, string, string, string];
+            const clicked = (state.linkClicks ?? []).some((click) => {
+              if (click.friend_id !== friendId) return false;
+              const link = (state.trackedLinks ?? []).find((item) => item.id === click.tracked_link_id);
+              if (!link) return false;
+              return (
+                link.id === idNeedle ||
+                link.original_url === exactUrlNeedle ||
+                link.original_url.includes(urlPartNeedle) ||
+                link.name.includes(nameNeedle)
+              );
+            });
+            return clicked ? ({ 1: 1 } as T) : null;
+          }
+          if (sql.includes('FROM messages_log') && sql.includes("direction = 'incoming'")) {
+            const [friendId, needle] = bound as [string, string];
+            const matched = (state.messages ?? []).some(
+              (message) =>
+                message.friend_id === friendId &&
+                message.direction === 'incoming' &&
+                message.message_type === 'text' &&
+                message.content.includes(needle),
+            );
+            return matched ? ({ 1: 1 } as T) : null;
           }
           return null as T | null;
         },
@@ -282,5 +331,104 @@ describe('finder helpers', () => {
     const r = await findActiveCartStatusForFriend(db, 'f1', now);
     expect(r).not.toBeNull();
     expect(r!.booking_id).toBe('b2');
+  });
+});
+
+describe('evaluateCondition: incoming text', () => {
+  const state: State = {
+    bookings: [],
+    slots: [],
+    cartStatuses: [],
+    messages: [
+      {
+        friend_id: 'f1',
+        direction: 'incoming',
+        message_type: 'text',
+        content: '作成会希望です',
+      },
+    ],
+  };
+
+  test('incoming_text_contains matches text replies', async () => {
+    const db = makeDb(state);
+    await expect(
+      evaluateCondition(db, 'f1', {
+        condition_type: 'incoming_text_contains',
+        condition_value: '作成会希望',
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test('incoming_text_not_contains is true only before the reply appears', async () => {
+    const db = makeDb(state);
+    await expect(
+      evaluateCondition(db, 'f1', {
+        condition_type: 'incoming_text_not_contains',
+        condition_value: '作成会希望',
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      evaluateCondition(db, 'f2', {
+        condition_type: 'incoming_text_not_contains',
+        condition_value: '作成会希望',
+      }),
+    ).resolves.toBe(true);
+  });
+});
+
+describe('evaluateCondition: tracked URL clicks', () => {
+  const state: State = {
+    bookings: [],
+    slots: [],
+    cartStatuses: [],
+    trackedLinks: [
+      {
+        id: 'link-roadmap',
+        name: 'ロードマップ作成会',
+        original_url: 'https://qlaurify.jp/roadmap-session',
+      },
+    ],
+    linkClicks: [
+      {
+        tracked_link_id: 'link-roadmap',
+        friend_id: 'f1',
+      },
+    ],
+  };
+
+  test('tracked_url_clicked matches by URL fragment', async () => {
+    const db = makeDb(state);
+    await expect(
+      evaluateCondition(db, 'f1', {
+        condition_type: 'tracked_url_clicked',
+        condition_value: 'roadmap-session',
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test('tracked_url_clicked matches by link name', async () => {
+    const db = makeDb(state);
+    await expect(
+      evaluateCondition(db, 'f1', {
+        condition_type: 'tracked_url_clicked',
+        condition_value: 'ロードマップ作成会',
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test('tracked_url_not_clicked is true only for friends without the click', async () => {
+    const db = makeDb(state);
+    await expect(
+      evaluateCondition(db, 'f1', {
+        condition_type: 'tracked_url_not_clicked',
+        condition_value: 'roadmap-session',
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      evaluateCondition(db, 'f2', {
+        condition_type: 'tracked_url_not_clicked',
+        condition_value: 'roadmap-session',
+      }),
+    ).resolves.toBe(true);
   });
 });

@@ -20,6 +20,9 @@ vi.mock('@line-crm/db', () => ({
   addTagToFriend: vi.fn(),
   getEntryRouteByRefCode: vi.fn(),
   getMessageTemplateById: vi.fn(),
+  createFormSubmission: vi.fn(),
+  getFormById: vi.fn(),
+  getScenarioById: vi.fn(),
 }));
 
 vi.mock('@line-crm/line-sdk', async () => {
@@ -37,7 +40,10 @@ vi.mock('../services/event-bus.js', () => ({
 
 vi.mock('../services/step-delivery.js', () => ({
   buildMessage: vi.fn(),
+  buildWebinarTemplateContext: vi.fn(),
   expandVariables: vi.fn(),
+  messageToLogPayload: vi.fn(),
+  resolveMetadata: vi.fn(),
 }));
 
 import { verifySignature } from '@line-crm/line-sdk';

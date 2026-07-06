@@ -54,6 +54,53 @@ export type BroadcastInsight = {
   fetchedAt?: string | null
 }
 
+export type SurveyQuestion = {
+  name: string
+  label: string
+  options: string[]
+}
+
+export type RegistrationSurveyQuestion = SurveyQuestion
+
+export type SurveyForm = {
+  id: string
+  name: string
+  description: string | null
+  fields?: unknown[]
+  onSubmitTagId: string | null
+  onSubmitScenarioId: string | null
+  onSubmitMessageContent: string | null
+  isActive: boolean
+  submitCount?: number
+  createdAt?: string
+  updatedAt?: string
+}
+
+export type SurveySettings = {
+  form: SurveyForm
+  questions: SurveyQuestion[]
+}
+
+export type RegistrationSurveySettings = SurveySettings & {
+  form: {
+    id: string
+    name: string
+    description: string | null
+    onSubmitTagId: string | null
+    onSubmitScenarioId: string | null
+    onSubmitMessageContent: string | null
+    isActive: boolean
+  }
+  greetingMessageContent: string
+  friendAddScenario: {
+    id: string
+    name?: string
+    firstStepId?: string | null
+    greetingStepId?: string | null
+    surveyStepId?: string | null
+  } | null
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL
 if (!API_URL) {
   throw new Error(
@@ -63,22 +110,37 @@ if (!API_URL) {
 }
 
 /**
- * Read the API key from localStorage (set during login).
- * Never embed secrets in the client bundle via NEXT_PUBLIC_* env vars.
+ * The admin session credential lives in an HttpOnly cookie. JavaScript only
+ * stores the CSRF token returned by login/session and echoes it on mutating
+ * requests.
  */
-function getApiKey(): string {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('lh_api_key') || ''
-  }
-  return ''
+export const CSRF_STORAGE_KEY = 'lh_csrf'
+
+export function getCsrfToken(): string {
+  if (typeof window === 'undefined') return ''
+  return localStorage.getItem(CSRF_STORAGE_KEY) || ''
 }
 
+export function setCsrfToken(token: string | undefined | null): void {
+  if (typeof window === 'undefined' || !token) return
+  localStorage.setItem(CSRF_STORAGE_KEY, token)
+}
+
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
+
 export async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
+  const method = (options?.method ?? 'GET').toUpperCase()
+  const csrfHeaders: Record<string, string> = {}
+  if (MUTATING_METHODS.has(method)) {
+    const token = getCsrfToken()
+    if (token) csrfHeaders['X-CSRF-Token'] = token
+  }
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${getApiKey()}`,
+      ...csrfHeaders,
       ...options?.headers,
     },
   })
@@ -166,6 +228,56 @@ export const api = {
     delete: (id: string) =>
       fetchApi<ApiResponse<null>>(`/api/tags/${id}`, { method: 'DELETE' }),
   },
+  registrationSurvey: {
+    get: () =>
+      fetchApi<ApiResponse<RegistrationSurveySettings>>('/api/forms/registration-survey/settings'),
+    update: (data: {
+      questions: RegistrationSurveyQuestion[]
+      onSubmitTagId?: string | null
+      onSubmitScenarioId?: string | null
+      onSubmitMessageContent?: string | null
+      greetingMessageContent?: string | null
+      isActive?: boolean
+    }) =>
+      fetchApi<ApiResponse<RegistrationSurveySettings>>('/api/forms/registration-survey/settings', {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+  },
+  surveys: {
+    list: () =>
+      fetchApi<ApiResponse<SurveySettings[]>>('/api/surveys'),
+    create: (data: {
+      name: string
+      description?: string | null
+      questions: SurveyQuestion[]
+      onSubmitTagId?: string | null
+      onSubmitScenarioId?: string | null
+      onSubmitMessageContent?: string | null
+      isActive?: boolean
+    }) =>
+      fetchApi<ApiResponse<SurveySettings>>('/api/surveys', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    get: (id: string) =>
+      fetchApi<ApiResponse<SurveySettings>>(`/api/surveys/${id}/settings`),
+    update: (id: string, data: {
+      name?: string
+      description?: string | null
+      questions?: SurveyQuestion[]
+      onSubmitTagId?: string | null
+      onSubmitScenarioId?: string | null
+      onSubmitMessageContent?: string | null
+      isActive?: boolean
+    }) =>
+      fetchApi<ApiResponse<SurveySettings>>(`/api/surveys/${id}/settings`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/forms/${id}`, { method: 'DELETE' }),
+  },
   scenarios: {
     list: (params?: { accountId?: string }) => {
       const query = params?.accountId ? '?lineAccountId=' + params.accountId : ''
@@ -197,6 +309,9 @@ export const api = {
         deliveryTime?: string
         templateId?: string | null
         onReachTagId?: string | null
+        conditionType?: string | null
+        conditionValue?: string | null
+        nextStepOnFalse?: number | null
       },
     ) =>
       fetchApi<ApiResponse<ScenarioStep>>(`/api/scenarios/${id}/steps`, {
@@ -216,6 +331,9 @@ export const api = {
         deliveryTime?: string
         templateId?: string | null
         onReachTagId?: string | null
+        conditionType?: string | null
+        conditionValue?: string | null
+        nextStepOnFalse?: number | null
       },
     ) =>
       fetchApi<ApiResponse<ScenarioStep>>(`/api/scenarios/${id}/steps/${stepId}`, {
@@ -1075,13 +1193,15 @@ export const api = {
 
     // 画像 upload は Content-Type を image/* で送るので fetchApi を使わず直接 fetch。
     uploadImage: async (groupId: string, pageId: string, file: File) => {
+      const csrf = getCsrfToken()
       const res = await fetch(
         `${API_URL}/api/rich-menu-groups/${groupId}/pages/${pageId}/image`,
         {
           method: 'POST',
+          credentials: 'include',
           headers: {
             'Content-Type': file.type,
-            Authorization: `Bearer ${getApiKey()}`,
+            ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
           },
           body: file,
         },

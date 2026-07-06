@@ -136,12 +136,14 @@ scenarios.get('/api/scenarios', async (c) => {
     const lineAccountId = c.req.query('lineAccountId');
     let items: DbScenarioWithStepCount[];
     if (lineAccountId) {
+      // line_account_id NULL means a global scenario. The delivery engine runs
+      // those for every account, so account-scoped lists must show them too.
       const result = await c.env.DB
         .prepare(
           `SELECT s.*, COUNT(ss.id) as step_count
            FROM scenarios s
            LEFT JOIN scenario_steps ss ON s.id = ss.scenario_id
-           WHERE s.line_account_id = ?
+           WHERE s.line_account_id IS NULL OR s.line_account_id = ?
            GROUP BY s.id
            ORDER BY s.created_at DESC`,
         )

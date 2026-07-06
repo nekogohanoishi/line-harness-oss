@@ -18,8 +18,246 @@ import type {
   FormUsedByAccount,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
+import {
+  DEFAULT_REGISTRATION_SURVEY_GREETING_MESSAGE,
+  REGISTRATION_SURVEY_QUESTIONS,
+  buildSurveyQuestionMessageFromQuestions,
+  normalizeRegistrationSurveyGreetingMessage,
+  normalizeSurveyQuestions,
+} from '../services/intro-message.js';
+import { applySurveyAnswerTags } from '../services/survey-answer-tags.js';
 
 const forms = new Hono<Env>();
+
+const REGISTRATION_SURVEY_FORM_ID = '91fbd2c5-7e73-4b1e-9271-fea9d3a0f929';
+const REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID = 'ed0d1e57-eb1e-4297-8292-3652fe4f6326';
+
+type SurveyQuestionInput = {
+  name?: string;
+  label?: string;
+  options?: unknown[];
+};
+
+function toSurveyFields(questions: SurveyQuestionInput[]) {
+  return questions.map((question, index) => {
+    const name = question.name?.trim() || question.label?.trim() || `質問${index + 1}`;
+    const label = question.label?.trim() || name;
+    const options = (question.options ?? [])
+      .map((option) => typeof option === 'string' ? option.trim() : '')
+      .filter(Boolean);
+    return {
+      name,
+      label,
+      type: 'radio',
+      required: true,
+      options,
+    };
+  });
+}
+
+function validateSurveyFields(fields: ReturnType<typeof toSurveyFields>): string | null {
+  if (fields.length === 0) return '質問を1つ以上設定してください';
+  if (fields.length > 10) return '質問は10個以内にしてください';
+  for (const [index, field] of fields.entries()) {
+    if (!field.name || !field.label) return `${index + 1}問目の質問名と表示文を入力してください`;
+    if (field.options.length < 2) return `${index + 1}問目の選択肢は2つ以上必要です`;
+    if (field.options.length > 8) return `${index + 1}問目の選択肢は8つ以内にしてください`;
+  }
+  return null;
+}
+
+function buildSurveyStepContent(formId: string, fields: ReturnType<typeof toSurveyFields>): string | null {
+  const message = buildSurveyQuestionMessageFromQuestions(formId, 0, fields);
+  return message.type === 'flex' ? JSON.stringify(message.contents) : null;
+}
+
+async function syncSurveyScenarioSteps(
+  db: D1Database,
+  formId: string,
+  fields: ReturnType<typeof toSurveyFields>,
+): Promise<void> {
+  const content = buildSurveyStepContent(formId, fields);
+  if (!content) return;
+  const encodedFormId = encodeURIComponent(formId);
+  await db
+    .prepare(
+      `UPDATE scenario_steps
+       SET message_type = 'flex',
+           message_content = ?,
+           template_id = NULL
+       WHERE message_content LIKE ?
+          OR message_content LIKE ?`,
+    )
+    .bind(
+      content,
+      `%lh:surveyform:${encodedFormId}:%`,
+      `%lh:regsurvey:${encodedFormId}:%`,
+    )
+    .run();
+}
+
+async function getRegistrationSurveyForm(db: D1Database): Promise<DbForm | null> {
+  return (
+    await getFormById(db, REGISTRATION_SURVEY_FORM_ID) ??
+    await db
+      .prepare(`SELECT * FROM forms WHERE name = ? ORDER BY created_at DESC LIMIT 1`)
+      .bind('登録時アンケート')
+      .first<DbForm>()
+  );
+}
+
+type RegistrationSurveyFriendAddState = {
+  scenarioId: string;
+  name: string;
+  greetingStepId: string | null;
+  surveyStepId: string | null;
+  greetingMessageContent: string;
+};
+
+async function getRegistrationSurveyFriendAddState(db: D1Database): Promise<RegistrationSurveyFriendAddState | null> {
+  const scenario = await db
+    .prepare(
+      `SELECT id, name FROM scenarios
+       WHERE id = ?
+          OR (trigger_type = 'friend_add' AND name LIKE '%登録時アンケート%')
+       ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, created_at DESC
+       LIMIT 1`,
+    )
+    .bind(REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID, REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID)
+    .first<{ id: string; name: string }>();
+  if (!scenario) return null;
+
+  const steps = await db
+    .prepare(
+      `SELECT id, message_type, message_content
+       FROM scenario_steps
+       WHERE scenario_id = ?
+       ORDER BY step_order ASC
+       LIMIT 2`,
+    )
+    .bind(scenario.id)
+    .all<{ id: string; message_type: string; message_content: string }>();
+  const firstStep = steps.results?.[0] ?? null;
+  const secondStep = steps.results?.[1] ?? null;
+  const greetingMessageContent = firstStep?.message_type === 'text'
+    ? normalizeRegistrationSurveyGreetingMessage(firstStep.message_content)
+    : DEFAULT_REGISTRATION_SURVEY_GREETING_MESSAGE;
+
+  return {
+    scenarioId: scenario.id,
+    name: scenario.name,
+    greetingStepId: firstStep?.message_type === 'text' ? firstStep.id : null,
+    surveyStepId: secondStep?.id ?? (firstStep?.message_type !== 'text' ? firstStep?.id ?? null : null),
+    greetingMessageContent,
+  };
+}
+
+async function syncRegistrationSurveyFriendAddSteps(
+  db: D1Database,
+  formId: string,
+  fields: ReturnType<typeof toSurveyFields>,
+  greetingMessageContent: string,
+): Promise<RegistrationSurveyFriendAddState | null> {
+  const scenario = await db
+    .prepare(
+      `SELECT id, name FROM scenarios
+       WHERE id = ?
+          OR (trigger_type = 'friend_add' AND name LIKE '%登録時アンケート%')
+       ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, created_at DESC
+       LIMIT 1`,
+    )
+    .bind(REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID, REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID)
+    .first<{ id: string; name: string }>();
+  if (!scenario) return null;
+
+  const existingSteps = await db
+    .prepare(`SELECT id FROM scenario_steps WHERE scenario_id = ? ORDER BY step_order ASC LIMIT 2`)
+    .bind(scenario.id)
+    .all<{ id: string }>();
+  const greetingStep = existingSteps.results?.[0] ?? null;
+  const surveyStep = existingSteps.results?.[1] ?? null;
+  const surveyMessage = buildSurveyQuestionMessageFromQuestions(formId, 0, fields);
+  if (surveyMessage.type !== 'flex') return null;
+  const surveyContent = JSON.stringify(surveyMessage.contents);
+  const now = jstNow();
+  const normalizedGreeting = normalizeRegistrationSurveyGreetingMessage(greetingMessageContent);
+
+  await db
+    .prepare(`UPDATE scenarios SET description = ?, updated_at = ? WHERE id = ?`)
+    .bind('友だち追加・ブロック解除時に、挨拶のあと登録時アンケートを送る', now, scenario.id)
+    .run();
+
+  const greetingStepId = greetingStep?.id ?? crypto.randomUUID();
+  if (greetingStep) {
+    await db
+      .prepare(
+        `UPDATE scenario_steps
+         SET step_order = 0,
+             delay_minutes = 0,
+             message_type = 'text',
+             message_content = ?,
+             offset_days = NULL,
+             offset_minutes = NULL,
+             delivery_time = NULL,
+             template_id = NULL,
+             on_reach_tag_id = NULL
+         WHERE id = ?`,
+      )
+      .bind(normalizedGreeting, greetingStepId)
+      .run();
+  } else {
+    await db
+      .prepare(
+        `INSERT INTO scenario_steps
+         (id, scenario_id, step_order, delay_minutes, message_type, message_content, created_at)
+         VALUES (?, ?, 0, 0, 'text', ?, ?)`,
+      )
+      .bind(greetingStepId, scenario.id, normalizedGreeting, now)
+      .run();
+  }
+
+  const surveyStepId = surveyStep?.id ?? crypto.randomUUID();
+  if (surveyStep) {
+    await db
+      .prepare(
+        `UPDATE scenario_steps
+         SET step_order = 1,
+             delay_minutes = 0,
+             message_type = 'flex',
+             message_content = ?,
+             offset_days = NULL,
+             offset_minutes = NULL,
+             delivery_time = NULL,
+             template_id = NULL,
+             on_reach_tag_id = NULL
+         WHERE id = ?`,
+      )
+      .bind(surveyContent, surveyStepId)
+      .run();
+  } else {
+    await db
+      .prepare(
+        `INSERT INTO scenario_steps
+         (id, scenario_id, step_order, delay_minutes, message_type, message_content, created_at)
+         VALUES (?, ?, 1, 0, 'flex', ?, ?)`,
+      )
+      .bind(surveyStepId, scenario.id, surveyContent, now)
+      .run();
+  }
+
+  await db
+    .prepare(`DELETE FROM scenario_steps WHERE scenario_id = ? AND id NOT IN (?, ?)`)
+    .bind(scenario.id, greetingStepId, surveyStepId)
+    .run();
+
+  return {
+    scenarioId: scenario.id,
+    name: scenario.name,
+    greetingStepId,
+    surveyStepId,
+    greetingMessageContent: normalizedGreeting,
+  };
+}
 
 function serializeForm(
   row: DbForm,
@@ -73,6 +311,269 @@ forms.get('/api/forms', async (c) => {
     });
   } catch (err) {
     console.error('GET /api/forms error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// GET /api/surveys — list forms as reusable in-chat surveys
+forms.get('/api/surveys', async (c) => {
+  try {
+    const items = await getFormsWithStats(c.env.DB);
+    return c.json({
+      success: true,
+      data: items.map((row) => ({
+        form: serializeForm(row, {
+          lastSubmittedAt: row.last_submitted_at,
+          usedByAccounts: row.used_by_accounts,
+        }),
+        questions: normalizeSurveyQuestions(row.fields),
+      })),
+    });
+  } catch (err) {
+    console.error('GET /api/surveys error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// POST /api/surveys — create a reusable in-chat button survey
+forms.post('/api/surveys', async (c) => {
+  try {
+    const body = await c.req.json<{
+      name: string;
+      description?: string | null;
+      questions?: SurveyQuestionInput[];
+      onSubmitTagId?: string | null;
+      onSubmitScenarioId?: string | null;
+      onSubmitMessageContent?: string | null;
+      isActive?: boolean;
+    }>();
+
+    if (!body.name?.trim()) {
+      return c.json({ success: false, error: 'アンケート名を入力してください' }, 400);
+    }
+
+    const fields = toSurveyFields(body.questions ?? []);
+    const validationError = validateSurveyFields(fields);
+    if (validationError) {
+      return c.json({ success: false, error: validationError }, 400);
+    }
+
+    let form = await createForm(c.env.DB, {
+      name: body.name.trim(),
+      description: body.description ?? null,
+      fields: JSON.stringify(fields),
+      onSubmitTagId: body.onSubmitTagId ?? null,
+      onSubmitScenarioId: body.onSubmitScenarioId ?? null,
+      onSubmitMessageType: 'text',
+      onSubmitMessageContent: body.onSubmitMessageContent ?? null,
+      saveToMetadata: true,
+    });
+
+    if (body.isActive === false) {
+      const updated = await updateForm(c.env.DB, form.id, { isActive: false });
+      if (updated) form = updated;
+    }
+
+    return c.json({
+      success: true,
+      data: {
+        form: serializeForm(form),
+        questions: normalizeSurveyQuestions(form.fields),
+      },
+    }, 201);
+  } catch (err) {
+    console.error('POST /api/surveys error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// GET /api/surveys/:id/settings — get one reusable survey
+forms.get('/api/surveys/:id/settings', async (c) => {
+  try {
+    const form = await getFormById(c.env.DB, c.req.param('id'));
+    if (!form) {
+      return c.json({ success: false, error: 'アンケートが見つかりません' }, 404);
+    }
+    return c.json({
+      success: true,
+      data: {
+        form: serializeForm(form),
+        questions: normalizeSurveyQuestions(form.fields),
+      },
+    });
+  } catch (err) {
+    console.error('GET /api/surveys/:id/settings error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// PUT /api/surveys/:id/settings — update one reusable survey
+forms.put('/api/surveys/:id/settings', async (c) => {
+  try {
+    const id = c.req.param('id');
+    const current = await getFormById(c.env.DB, id);
+    if (!current) {
+      return c.json({ success: false, error: 'アンケートが見つかりません' }, 404);
+    }
+
+    const body = await c.req.json<{
+      name?: string;
+      description?: string | null;
+      questions?: SurveyQuestionInput[];
+      onSubmitTagId?: string | null;
+      onSubmitScenarioId?: string | null;
+      onSubmitMessageContent?: string | null;
+      isActive?: boolean;
+    }>();
+
+    const fields = body.questions !== undefined
+      ? toSurveyFields(body.questions)
+      : normalizeSurveyQuestions(current.fields).map((question) => ({
+          name: question.name,
+          label: question.label,
+          type: 'radio',
+          required: true,
+          options: question.options,
+        }));
+    const validationError = validateSurveyFields(fields);
+    if (validationError) {
+      return c.json({ success: false, error: validationError }, 400);
+    }
+
+    const updated = await updateForm(c.env.DB, id, {
+      name: body.name?.trim() || current.name,
+      description: body.description ?? current.description,
+      fields: JSON.stringify(fields),
+      onSubmitTagId: body.onSubmitTagId ?? current.on_submit_tag_id,
+      onSubmitScenarioId: body.onSubmitScenarioId ?? current.on_submit_scenario_id,
+      onSubmitMessageType: 'text',
+      onSubmitMessageContent: body.onSubmitMessageContent ?? current.on_submit_message_content,
+      saveToMetadata: true,
+      isActive: body.isActive ?? Boolean(current.is_active),
+    });
+    if (!updated) {
+      return c.json({ success: false, error: 'アンケートの更新に失敗しました' }, 500);
+    }
+    await syncSurveyScenarioSteps(c.env.DB, id, fields);
+
+    return c.json({
+      success: true,
+      data: {
+        form: serializeForm(updated),
+        questions: normalizeSurveyQuestions(updated.fields),
+      },
+    });
+  } catch (err) {
+    console.error('PUT /api/surveys/:id/settings error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// GET /api/forms/registration-survey/settings — settings for in-chat registration survey
+forms.get('/api/forms/registration-survey/settings', async (c) => {
+  try {
+    const form = await getRegistrationSurveyForm(c.env.DB);
+    if (!form) {
+      return c.json({ success: false, error: '登録時アンケートが見つかりません' }, 404);
+    }
+
+    const friendAddScenario = await getRegistrationSurveyFriendAddState(c.env.DB);
+
+    return c.json({
+      success: true,
+      data: {
+        form: serializeForm(form),
+        questions: normalizeSurveyQuestions(form.fields),
+        greetingMessageContent: friendAddScenario?.greetingMessageContent ?? DEFAULT_REGISTRATION_SURVEY_GREETING_MESSAGE,
+        friendAddScenario: friendAddScenario
+          ? {
+              id: friendAddScenario.scenarioId,
+              name: friendAddScenario.name,
+              greetingStepId: friendAddScenario.greetingStepId,
+              surveyStepId: friendAddScenario.surveyStepId,
+              firstStepId: friendAddScenario.greetingStepId,
+            }
+          : null,
+      },
+    });
+  } catch (err) {
+    console.error('GET /api/forms/registration-survey/settings error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// PUT /api/forms/registration-survey/settings — edit questions + completion behavior safely
+forms.put('/api/forms/registration-survey/settings', async (c) => {
+  try {
+    const form = await getRegistrationSurveyForm(c.env.DB);
+    if (!form) {
+      return c.json({ success: false, error: '登録時アンケートが見つかりません' }, 404);
+    }
+
+    const body = await c.req.json<{
+      questions?: SurveyQuestionInput[];
+      onSubmitTagId?: string | null;
+      onSubmitScenarioId?: string | null;
+      onSubmitMessageContent?: string | null;
+      greetingMessageContent?: string | null;
+      isActive?: boolean;
+    }>();
+
+    const fields = body.questions !== undefined
+      ? toSurveyFields(body.questions)
+      : normalizeSurveyQuestions(form.fields).map((question) => ({
+          name: question.name,
+          label: question.label,
+          type: 'radio',
+          required: true,
+          options: question.options,
+        }));
+    const validationError = validateSurveyFields(fields);
+    if (validationError) {
+      return c.json({ success: false, error: validationError }, 400);
+    }
+
+    const currentFriendAddScenario = await getRegistrationSurveyFriendAddState(c.env.DB);
+    const greetingMessageContent = normalizeRegistrationSurveyGreetingMessage(
+      body.greetingMessageContent ?? currentFriendAddScenario?.greetingMessageContent,
+    );
+
+    const updated = await updateForm(c.env.DB, form.id, {
+      name: '登録時アンケート',
+      fields: JSON.stringify(fields),
+      onSubmitTagId: body.onSubmitTagId ?? form.on_submit_tag_id,
+      onSubmitScenarioId: body.onSubmitScenarioId ?? form.on_submit_scenario_id,
+      onSubmitMessageType: 'text',
+      onSubmitMessageContent: body.onSubmitMessageContent ?? form.on_submit_message_content,
+      saveToMetadata: true,
+      isActive: body.isActive ?? Boolean(form.is_active),
+    });
+    if (!updated) {
+      return c.json({ success: false, error: '登録時アンケートの更新に失敗しました' }, 500);
+    }
+
+    const synced = await syncRegistrationSurveyFriendAddSteps(c.env.DB, updated.id, fields, greetingMessageContent);
+    await syncSurveyScenarioSteps(c.env.DB, updated.id, fields);
+
+    return c.json({
+      success: true,
+      data: {
+        form: serializeForm(updated),
+        questions: normalizeSurveyQuestions(updated.fields),
+        greetingMessageContent,
+        friendAddScenario: synced
+          ? {
+              id: synced.scenarioId,
+              name: synced.name,
+              greetingStepId: synced.greetingStepId,
+              surveyStepId: synced.surveyStepId,
+              firstStepId: synced.greetingStepId,
+            }
+          : null,
+      },
+    });
+  } catch (err) {
+    console.error('PUT /api/forms/registration-survey/settings error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });
@@ -270,6 +771,16 @@ forms.post('/api/forms/:id/partial', async (c) => {
       'UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?',
     ).bind(JSON.stringify(merged), jstNow(), friend.id).run();
 
+    if (body.data) {
+      const form = await getFormById(c.env.DB, formId);
+      const questions = normalizeSurveyQuestions(form?.fields ?? []);
+      try {
+        await applySurveyAnswerTags(c.env.DB, friend.id, body.data, questions);
+      } catch (err) {
+        console.error('Failed to apply partial survey answer tags:', err);
+      }
+    }
+
     return c.json({ success: true });
   } catch (err) {
     console.error('POST /api/forms/:id/partial error:', err);
@@ -436,6 +947,8 @@ forms.post('/api/forms/:id/submit', async (c) => {
       if (form.on_submit_tag_id) {
         sideEffects.push(addTagToFriend(db, friendId, form.on_submit_tag_id));
       }
+
+      sideEffects.push(applySurveyAnswerTags(db, friendId, submissionData, fields));
 
       // Enroll in scenario
       if (form.on_submit_scenario_id) {

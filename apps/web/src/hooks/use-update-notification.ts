@@ -7,6 +7,7 @@ const DISMISS_KEY = 'line-harness:update-dismissed-version'
 const CACHE_KEY = 'line-harness:update-cache'
 const CACHE_TTL_MS = 60 * 60 * 1000 // 1 時間。GitHub anonymous API rate limit (60/hour/IP)
                                      // を圧縮し、長時間タブ運用でも定期再チェックする
+const UPDATE_BANNER_ENABLED = process.env.NEXT_PUBLIC_UPDATE_BANNER_ENABLED !== 'false'
 
 export interface ReleaseInfo {
   tag: string
@@ -72,6 +73,8 @@ export function useUpdateNotification(): {
   const [release, setRelease] = useState<ReleaseInfo | null>(null)
 
   useEffect(() => {
+    if (!UPDATE_BANNER_ENABLED) return
+
     let cancelled = false
     const current = process.env.APP_VERSION ?? '0.0.0'
 

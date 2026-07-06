@@ -17,6 +17,7 @@ type AutomationEventType =
   | "webinar_started"
   | "webinar_completed"
   | "webinar_cta_clicked"
+  | "webinar_abandoned"
 
 interface AutomationAction {
   type: "add_tag" | "remove_tag" | "start_scenario" | "send_message" | "send_webhook" | "switch_rich_menu"
@@ -47,6 +48,7 @@ const eventTypeOptions: { value: AutomationEventType; label: string }[] = [
   { value: 'webinar_started', label: 'ウェビナー視聴開始(動画再生)' },
   { value: 'webinar_completed', label: 'ウェビナー完視聴' },
   { value: 'webinar_cta_clicked', label: 'ウェビナーCTAクリック' },
+  { value: 'webinar_abandoned', label: 'ウェビナー途中離脱' },
 ]
 
 const eventTypeLabelMap: Record<AutomationEventType, string> = {
@@ -60,6 +62,7 @@ const eventTypeLabelMap: Record<AutomationEventType, string> = {
   webinar_started: 'ウェビナー視聴開始(動画再生)',
   webinar_completed: 'ウェビナー完視聴',
   webinar_cta_clicked: 'ウェビナーCTAクリック',
+  webinar_abandoned: 'ウェビナー途中離脱',
 }
 
 const eventTypeBadgeColor: Record<AutomationEventType, string> = {
@@ -73,6 +76,7 @@ const eventTypeBadgeColor: Record<AutomationEventType, string> = {
   webinar_started: 'bg-teal-100 text-teal-700',
   webinar_completed: 'bg-emerald-100 text-emerald-700',
   webinar_cta_clicked: 'bg-orange-100 text-orange-700',
+  webinar_abandoned: 'bg-rose-100 text-rose-700',
 }
 
 interface CreateFormState {

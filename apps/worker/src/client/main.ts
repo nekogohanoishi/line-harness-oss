@@ -26,6 +26,7 @@ declare const liff: {
   getIDToken(): string | null;
   getDecodedIDToken(): { sub: string; name?: string; email?: string; picture?: string } | null;
   getFriendship(): Promise<{ friendFlag: boolean }>;
+  openWindow(opts: { url: string; external?: boolean }): void;
   isInClient(): boolean;
   closeWindow(): void;
 };
@@ -37,9 +38,6 @@ function detectLiffId(): string {
   return import.meta.env?.VITE_LIFF_ID || '';
 }
 const LIFF_ID = detectLiffId();
-if (!LIFF_ID) {
-  throw new Error('LIFF ID not found. Set ?liffId= in LIFF endpoint URL or VITE_LIFF_ID env.');
-}
 const UUID_STORAGE_KEY = 'lh_uuid';
 // Bot basic ID — resolved dynamically from API after liff.init()
 let BOT_BASIC_ID = '';
@@ -69,6 +67,11 @@ function getRedirectUrl(): string | null {
 function getRef(): string | null {
   const params = new URLSearchParams(window.location.search);
   return params.get('ref');
+}
+
+function getAccount(): string {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('account') || '';
 }
 
 function getSavedUuid(): string | null {
@@ -114,6 +117,15 @@ function showFriendAdd(profile: { displayName: string; pictureUrl?: string }) {
       <p class="sub-message">追加後、この画面に戻ってきてください</p>
     </div>
   `;
+  document.getElementById('addFriendBtn')?.addEventListener('click', (event) => {
+    if (!BOT_BASIC_ID) return;
+    event.preventDefault();
+    try {
+      liff.openWindow({ url: friendAddUrl, external: false });
+    } catch {
+      window.location.href = friendAddUrl;
+    }
+  });
 
   // 友だち追加後に戻ってきたら自動で再チェック
   // 一度発火したら listener を外して、ユーザーが LIFF をフォアグラウンド復帰するたびに
@@ -125,7 +137,7 @@ function showFriendAdd(profile: { displayName: string; pictureUrl?: string }) {
       const { friendFlag } = await liff.getFriendship();
       if (!friendFlag) return;
 
-      // Send form link if form param exists (was lost during friend-add flow)
+      // Send inline survey if form param exists (was lost during friend-add flow)
       const formParam = new URLSearchParams(window.location.search).get('form');
       if (formParam && !formLinkSent) {
         formLinkSent = true;
@@ -142,6 +154,7 @@ function showFriendAdd(profile: { displayName: string; pictureUrl?: string }) {
               ref: params.get('ref') || '',
               gate: params.get('gate') || '',
               xh: params.get('xh') || '',
+              account: params.get('account') || '',
               ig: params.get('ig') || '',
             }),
           });
@@ -212,17 +225,20 @@ async function linkAndAddFlow() {
       liff.getFriendship(),
     ]);
 
-    // 1. UUID linking (always, regardless of friendship)
-    const linkParams = new URLSearchParams(window.location.search);
-    const linkPromise = apiCall('/api/liff/link', {
-      method: 'POST',
-      body: JSON.stringify({
-        idToken: rawIdToken,
-        displayName: profile.displayName,
-        existingUuid: existingUuid,
-        ref: ref,
-        ig: linkParams.get('ig') || '',
-      }),
+  // 1. UUID linking (always, regardless of friendship)
+  const linkParams = new URLSearchParams(window.location.search);
+  const formParam = linkParams.get('form') || '';
+  const linkPromise = apiCall('/api/liff/link', {
+    method: 'POST',
+    body: JSON.stringify({
+      idToken: rawIdToken,
+      displayName: profile.displayName,
+      existingUuid: existingUuid,
+      ref: ref,
+      formId: formParam,
+      account: linkParams.get('account') || '',
+      ig: linkParams.get('ig') || '',
+    }),
     }).then(async (res) => {
       if (res.ok) {
         const data = await res.json() as { success: boolean; data?: { userId?: string } };
@@ -268,9 +284,8 @@ async function linkAndAddFlow() {
       showFriendAdd(profile);
     } else {
       // Already a friend — check for form param
-      const formParam = new URLSearchParams(window.location.search).get('form');
       if (formParam) {
-        // Send form link via push message, then show completion
+        // Send inline survey via push message, then show completion
         try {
           const idToken = liff.getIDToken();
           const params = new URLSearchParams(window.location.search);
@@ -283,6 +298,7 @@ async function linkAndAddFlow() {
               ref: ref || '',
               gate: params.get('gate') || '',
               xh: params.get('xh') || '',
+              account: params.get('account') || '',
               ig: params.get('ig') || '',
             }),
           });
@@ -325,6 +341,7 @@ async function initSalonBooking(): Promise<void> {
 
   const existingUuid = getSavedUuid();
   const ref = getRef();
+  const account = getAccount();
   const ig = new URLSearchParams(window.location.search).get('ig');
 
   // ② Silent UUID linking (fire-and-forget; booking API は id_token verify で
@@ -336,6 +353,7 @@ async function initSalonBooking(): Promise<void> {
       displayName: profile.displayName,
       existingUuid,
       ref: ref || undefined,
+      account: account || undefined,
       ig: ig || undefined,
     }),
   })
@@ -398,6 +416,7 @@ async function initEventBooking(initialKind: 'detail' | 'history'): Promise<void
 
   const existingUuid = getSavedUuid();
   const ref = getRef();
+  const account = getAccount();
 
   // UUID linking (best-effort)
   apiCall('/api/liff/link', {
@@ -407,6 +426,7 @@ async function initEventBooking(initialKind: 'detail' | 'history'): Promise<void
       displayName: profile.displayName,
       existingUuid,
       ref: ref || undefined,
+      account: account || undefined,
     }),
   })
     .then(async (res) => {
@@ -467,6 +487,10 @@ async function initWebinarPage(): Promise<void> {
 
 async function main() {
   try {
+    if (!LIFF_ID) {
+      throw new Error('LIFF ID がありません。LIFFページは ?liffId=... 付きのURL、管理画面は web 側のURLで開いてください。');
+    }
+
     await liff.init({ liffId: LIFF_ID });
 
     if (!liff.isLoggedIn()) {

@@ -20,6 +20,7 @@ import { runExpirer } from './services/booking-expirer.js';
 import { processDueEventReminders } from './services/event-booking-reminders.js';
 import { runEventBookingExpirer } from './services/event-booking-expirer.js';
 import { runAllRecurrenceGeneration } from './services/event-slot-generator.js';
+import { processWebinarAbandonment } from './services/webinar-abandonment.js';
 import { sendEventBookingNotification } from './services/event-booking-notifier.js';
 import { sendBookingNotification } from './services/booking-notifier.js';
 import { DEFAULT_ACCOUNT_SETTINGS } from './services/booking-types.js';
@@ -64,6 +65,8 @@ import { images } from './routes/images.js';
 import { accountSettings } from './routes/account-settings.js';
 import { setup } from './routes/setup.js';
 import { autoReplies } from './routes/auto-replies.js';
+import { adminAuth } from './routes/admin-auth.js';
+import { resolveCorsOrigin } from './middleware/admin-auth-config.js';
 import booking from './routes/booking.js';
 import events from './routes/events.js';
 import webinar from './routes/webinar.js';
@@ -88,6 +91,9 @@ export type Env = {
     LINE_LOGIN_CHANNEL_ID: string;
     LINE_LOGIN_CHANNEL_SECRET: string;
     WORKER_URL: string;
+    ADMIN_ORIGIN?: string;
+    ADMIN_COOKIE_SAMESITE?: string;
+    ADMIN_ALLOW_CROSS_SITE?: string;
     X_HARNESS_URL?: string;  // Optional: X Harness API URL for account linking
     IG_HARNESS_URL?: string;  // Optional: IG Harness API URL for cross-platform linking
     IG_HARNESS_LINK_SECRET?: string;  // Shared secret for IG Harness link-line webhook
@@ -99,8 +105,13 @@ export type Env = {
 
 const app = new Hono<Env>();
 
-// CORS — allow all origins for MVP
-app.use('*', cors({ origin: '*' }));
+app.use('*', cors({
+  origin: (origin, c) => resolveCorsOrigin(c.env, origin, c.req.url),
+  credentials: true,
+  allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
+  maxAge: 600,
+}));
 
 // Rate limiting — runs before auth to block abuse early
 app.use('*', rateLimitMiddleware);
@@ -145,6 +156,7 @@ app.route('/', capabilities);
 app.route('/', images);
 app.route('/', setup);
 app.route('/', autoReplies);
+app.route('/', adminAuth);
 app.route('/', trafficPools);
 app.route('/', booking);
 app.route('/', events);
@@ -186,6 +198,7 @@ app.get('/r/:ref', async (c) => {
   //   2. URL query ?pool=
   //   3. 'main' fallback
   let liffUrl = c.env.LIFF_URL;
+  let accountChannelId = '';
   let pool: Awaited<ReturnType<typeof getTrafficPoolBySlug>> | null = null;
 
   // 1. entry_route lookup. getTrafficPoolById (unlike getTrafficPoolBySlug)
@@ -214,10 +227,12 @@ app.get('/r/:ref', async (c) => {
     const account = await getRandomPoolAccount(c.env.DB, pool.id);
     if (account) {
       if (account.liff_id) liffUrl = `https://liff.line.me/${account.liff_id}`;
+      if (account.channel_id) accountChannelId = account.channel_id;
     } else {
       const allAccounts = await getPoolAccounts(c.env.DB, pool.id);
       if (allAccounts.length === 0) {
         if (pool.liff_id) liffUrl = `https://liff.line.me/${pool.liff_id}`;
+        if (pool.channel_id) accountChannelId = pool.channel_id;
       }
     }
   }
@@ -228,6 +243,7 @@ app.get('/r/:ref', async (c) => {
   if (liffIdMatch) liffParams.set('liffId', liffIdMatch[1]);
   if (ref) liffParams.set('ref', ref);
   if (formId) liffParams.set('form', formId);
+  if (accountChannelId) liffParams.set('account', accountChannelId);
   const gate = c.req.query('gate');
   if (gate) liffParams.set('gate', gate);
   const xh = c.req.query('xh');
@@ -235,6 +251,9 @@ app.get('/r/:ref', async (c) => {
   const ig = c.req.query('ig');
   if (ig) liffParams.set('ig', ig);
   const liffTarget = liffParams.toString() ? `${liffUrl}?${liffParams.toString()}` : liffUrl;
+  const lineAppTarget = liffIdMatch
+    ? `https://line.me/R/app/${liffIdMatch[1]}${liffParams.toString() ? '?' + liffParams.toString() : ''}`
+    : liffTarget;
 
   // Help link carries the *resolved* liff target as `t=` so the help page
   // displays the exact URL the user should paste into a real browser. Without
@@ -267,7 +286,7 @@ app.get('/r/:ref', async (c) => {
     const liffPath = liffTarget.replace(/^https:\/\//, '');
     const intentFallback = encodeURIComponent(liffTarget);
     const androidIntent = `intent://${liffPath}#Intent;scheme=https;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;package=jp.naver.line.android;S.browser_fallback_url=${intentFallback};end`;
-    const buttonHref = isAndroid ? androidIntent : liffTarget;
+    const buttonHref = isAndroid ? androidIntent : lineAppTarget;
     // iOS shows long-press hint; Android relies on intent URL alone (long-press
     // on Android opens "Open with…" which is noisier than the intent route).
     const longPressHint = isIOS
@@ -498,6 +517,11 @@ ${longPressBlock}
 // Convenience redirect for /book path
 app.get('/book', (c) => c.redirect('/?page=book'));
 
+app.onError((err, c) => {
+  console.error('[worker] unhandled error:', err);
+  return c.json({ success: false, error: 'Internal server error' }, 500);
+});
+
 // 404 fallback — API paths return JSON 404, everything else serves from static assets (LIFF/admin)
 app.notFound(async (c) => {
   const path = new URL(c.req.url).pathname;
@@ -593,6 +617,18 @@ async function scheduled(
     }
   } catch (e) {
     console.error('event-booking-reminders error:', e);
+  }
+
+  // Webinar abandonment — every 5-minute tick detects viewers whose heartbeat stopped.
+  try {
+    const result = await processWebinarAbandonment(env.DB, { now: new Date() });
+    if (result.marked + result.failed > 0) {
+      console.log(
+        `[webinar-abandonment] scanned=${result.scanned} marked=${result.marked} fired=${result.fired} failed=${result.failed}`,
+      );
+    }
+  } catch (e) {
+    console.error('webinar-abandonment error:', e);
   }
 
   // Event-booking expirer — 6h cron tick.

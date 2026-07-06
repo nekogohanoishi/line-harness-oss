@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 import Link from 'next/link'
 import type { Scenario, ScenarioStep, ScenarioTriggerType, MessageType, DeliveryMode } from '@line-crm/shared'
-import { api } from '@/lib/api'
+import { api, type SurveySettings } from '@/lib/api'
 import Header from '@/components/layout/header'
 import FlexPreviewComponent from '@/components/flex-preview'
+import MessageVariableButton from '@/components/message-variable-button'
 import ScheduleInput, {
   emptySchedule,
   buildSchedulePayload,
@@ -33,6 +34,36 @@ const modeBadgeStyle: Record<DeliveryMode, { bg: string; text: string; label: st
   relative: { bg: 'bg-gray-100', text: 'text-gray-600', label: 'Legacy' },
   elapsed: { bg: 'bg-blue-50', text: 'text-blue-700', label: '経過時間' },
   absolute_time: { bg: 'bg-amber-50', text: 'text-amber-700', label: '時刻指定' },
+}
+
+type StepConditionType =
+  | 'tracked_url_clicked'
+  | 'tracked_url_not_clicked'
+  | 'incoming_text_contains'
+  | 'incoming_text_not_contains'
+
+const conditionOptions: { value: StepConditionType; label: string }[] = [
+  { value: 'tracked_url_not_clicked', label: '指定URLをまだクリックしていない' },
+  { value: 'tracked_url_clicked', label: '指定URLをクリック済み' },
+  { value: 'incoming_text_not_contains', label: '指定文言をまだ送っていない' },
+  { value: 'incoming_text_contains', label: '指定文言を送信済み' },
+]
+
+function formatConditionLabel(conditionType?: string | null): string | null {
+  if (!conditionType) return null
+  if (conditionType === 'tracked_url_not_clicked') return 'URL未クリック'
+  if (conditionType === 'tracked_url_clicked') return 'URLクリック済み'
+  if (conditionType === 'incoming_text_not_contains') return '文言未送信'
+  if (conditionType === 'incoming_text_contains') return '文言送信済み'
+  return conditionType
+}
+
+function isTrackedUrlCondition(conditionType?: string | null): boolean {
+  return conditionType === 'tracked_url_clicked' || conditionType === 'tracked_url_not_clicked'
+}
+
+function isIncomingTextCondition(conditionType?: string | null): boolean {
+  return conditionType === 'incoming_text_contains' || conditionType === 'incoming_text_not_contains'
 }
 
 function formatDelay(minutes: number): string {
@@ -75,8 +106,11 @@ interface StepFormState {
   messageType: MessageType
   messageContent: string
   templateId: string | null
+  surveyId: string | null
   onReachTagId: string | null
-  inputMode: 'direct' | 'template'
+  conditionType: string | null
+  conditionValue: string
+  inputMode: 'direct' | 'template' | 'survey'
 }
 
 function emptyStepForm(stepOrder: number): StepFormState {
@@ -86,7 +120,10 @@ function emptyStepForm(stepOrder: number): StepFormState {
     messageType: 'text',
     messageContent: '',
     templateId: null,
+    surveyId: null,
     onReachTagId: null,
+    conditionType: null,
+    conditionValue: '',
     inputMode: 'direct',
   }
 }
@@ -114,6 +151,78 @@ interface ScenarioStats {
 
 function FlexPreview({ content }: { content: string }) {
   return <FlexPreviewComponent content={content} maxWidth={300} />
+}
+
+function buildSurveyPostbackData(formId: string, questionIndex: number, answer: string): string {
+  return [
+    'lh:surveyform',
+    encodeURIComponent(formId),
+    String(questionIndex),
+    encodeURIComponent(answer),
+  ].join(':')
+}
+
+function buildSurveyFlexContent(survey: SurveySettings): string {
+  const question = survey.questions[0]
+  if (!question) return ''
+  return JSON.stringify({
+    type: 'bubble',
+    size: 'mega',
+    body: {
+      type: 'box',
+      layout: 'vertical',
+      spacing: 'md',
+      contents: [
+        {
+          type: 'text',
+          text: `アンケート 1/${survey.questions.length}`,
+          size: 'xs',
+          color: '#06C755',
+          weight: 'bold',
+        },
+        {
+          type: 'text',
+          text: question.label,
+          size: 'lg',
+          weight: 'bold',
+          color: '#111827',
+          wrap: true,
+        },
+      ],
+    },
+    footer: {
+      type: 'box',
+      layout: 'vertical',
+      spacing: 'sm',
+      contents: question.options.map((option) => ({
+        type: 'button',
+        style: 'primary',
+        color: '#06C755',
+        height: 'sm',
+        action: {
+          type: 'postback',
+          label: option,
+          data: buildSurveyPostbackData(survey.form.id, 0, option),
+          displayText: option,
+        },
+      })),
+    },
+  })
+}
+
+function getSurveyIdFromContent(content: string): string | null {
+  const match = content.match(/lh:(?:surveyform|regsurvey):([^:"]+)/)
+  if (!match) return null
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return match[1]
+  }
+}
+
+function getSurveyFromContent(content: string, surveys: SurveySettings[]): SurveySettings | null {
+  const surveyId = getSurveyIdFromContent(content)
+  return surveyId ? surveys.find((survey) => survey.form.id === surveyId) ?? null : null
 }
 
 function ImagePreview({ content }: { content: string }) {
@@ -151,12 +260,14 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
   const [stepForm, setStepForm] = useState<StepFormState>(() => emptyStepForm(1))
   const [stepSaving, setStepSaving] = useState(false)
   const [stepError, setStepError] = useState('')
+  const stepMessageRef = useRef<HTMLTextAreaElement | null>(null)
 
   const [previewOpen, setPreviewOpen] = useState(false)
 
   const [stats, setStats] = useState<ScenarioStats | null>(null)
   const [templates, setTemplates] = useState<TemplateOpt[]>([])
   const [tags, setTags] = useState<TagOpt[]>([])
+  const [surveys, setSurveys] = useState<SurveySettings[]>([])
 
   const deliveryMode: DeliveryMode = (scenario?.deliveryMode ?? 'relative') as DeliveryMode
 
@@ -195,7 +306,8 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
       api.scenarios.stats(id).catch(() => null),
       api.templates.list().catch(() => null),
       api.tags.list().catch(() => null),
-    ]).then(([statsRes, tplRes, tagRes]) => {
+      api.surveys.list().catch(() => null),
+    ]).then(([statsRes, tplRes, tagRes, surveysRes]) => {
       if (cancelled) return
       if (statsRes && statsRes.success) setStats(statsRes.data)
       if (tplRes && tplRes.success) {
@@ -209,6 +321,9 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
       }
       if (tagRes && tagRes.success) {
         setTags(tagRes.data.map((t) => ({ id: t.id, name: t.name })))
+      }
+      if (surveysRes && surveysRes.success) {
+        setSurveys(surveysRes.data)
       }
     })
     return () => { cancelled = true }
@@ -251,6 +366,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
 
   const openEditStep = (step: ScenarioStep) => {
     const ui = uiFromOffsetMinutes(step.offsetMinutes)
+    const surveyId = getSurveyIdFromContent(step.messageContent)
     setStepForm({
       stepOrder: step.stepOrder,
       schedule: {
@@ -263,8 +379,11 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
       messageType: step.messageType,
       messageContent: step.messageContent,
       templateId: step.templateId ?? null,
+      surveyId,
       onReachTagId: step.onReachTagId ?? null,
-      inputMode: step.templateId ? 'template' : 'direct',
+      conditionType: step.conditionType ?? null,
+      conditionValue: step.conditionValue ?? '',
+      inputMode: surveyId ? 'survey' : step.templateId ? 'template' : 'direct',
     })
     setEditingStepId(step.id)
     setShowStepForm(true)
@@ -273,7 +392,17 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
 
   const handleSaveStep = async () => {
     // 直接入力モード: messageContent 必須 + Flex/画像 は JSON parse 検証
-    if (stepForm.inputMode === 'direct') {
+    if (stepForm.inputMode === 'survey') {
+      if (!stepForm.surveyId) {
+        setStepError('アンケートを選択してください')
+        return
+      }
+      const survey = surveys.find((item) => item.form.id === stepForm.surveyId)
+      if (!survey || survey.questions.length === 0) {
+        setStepError('選択したアンケートに質問がありません')
+        return
+      }
+    } else if (stepForm.inputMode === 'direct') {
       if (!stepForm.messageContent.trim()) {
         setStepError('メッセージ内容を入力してください')
         return
@@ -296,6 +425,10 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
         return
       }
     }
+    if (stepForm.conditionType && !stepForm.conditionValue.trim()) {
+      setStepError('配信条件の値を入力してください')
+      return
+    }
     setStepSaving(true)
     setStepError('')
     try {
@@ -317,6 +450,13 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
           payloadMessageContent = tpl.messageContent || ' '
         }
       }
+      if (stepForm.inputMode === 'survey' && stepForm.surveyId) {
+        const survey = surveys.find((item) => item.form.id === stepForm.surveyId)
+        if (survey) {
+          payloadMessageType = 'flex'
+          payloadMessageContent = buildSurveyFlexContent(survey) || ' '
+        }
+      }
       const payload = {
         stepOrder: stepForm.stepOrder,
         ...schedulePayload,
@@ -324,6 +464,8 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
         messageContent: payloadMessageContent,
         templateId: stepForm.inputMode === 'template' ? stepForm.templateId : null,
         onReachTagId: stepForm.onReachTagId,
+        conditionType: stepForm.conditionType,
+        conditionValue: stepForm.conditionType ? stepForm.conditionValue.trim() : null,
       }
       if (editingStepId) {
         const res = await api.scenarios.updateStep(id, editingStepId, payload)
@@ -499,7 +641,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                 className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
                 style={{ backgroundColor: '#06C755' }}
               >
-                {saving ? '保存中...' : '保存'}
+                {saving ? '保存中...' : '基本情報を保存'}
               </button>
               <button
                 onClick={() => {
@@ -536,7 +678,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                   onClick={() => setEditing(true)}
                   className="text-xs font-medium text-green-600 hover:text-green-700 px-3 py-1.5 rounded-md hover:bg-green-50 transition-colors"
                 >
-                  編集
+                  基本情報を編集
                 </button>
               </div>
             </div>
@@ -578,7 +720,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
         {showStepForm && (
           <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
             <h4 className="text-sm font-medium text-gray-700 mb-3">
-              {editingStepId ? 'ステップを編集' : '新しいステップを追加'}
+              {editingStepId ? '本文・条件を編集' : '新しいステップを追加'}
             </h4>
             <div className="space-y-3 max-w-lg">
               <div>
@@ -605,7 +747,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                     <input
                       type="radio"
                       checked={stepForm.inputMode === 'direct'}
-                      onChange={() => setStepForm({ ...stepForm, inputMode: 'direct', templateId: null })}
+                      onChange={() => setStepForm({ ...stepForm, inputMode: 'direct', templateId: null, surveyId: null })}
                     />
                     <span>直接入力</span>
                   </label>
@@ -613,9 +755,22 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                     <input
                       type="radio"
                       checked={stepForm.inputMode === 'template'}
-                      onChange={() => setStepForm({ ...stepForm, inputMode: 'template' })}
+                      onChange={() => setStepForm({ ...stepForm, inputMode: 'template', surveyId: null })}
                     />
                     <span>テンプレートを使う</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      checked={stepForm.inputMode === 'survey'}
+                      onChange={() => setStepForm({
+                        ...stepForm,
+                        inputMode: 'survey',
+                        templateId: null,
+                        surveyId: stepForm.surveyId ?? surveys[0]?.form.id ?? null,
+                      })}
+                    />
+                    <span>アンケートを使う</span>
                   </label>
                 </div>
               </div>
@@ -639,6 +794,38 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                 </div>
               )}
 
+              {stepForm.inputMode === 'survey' && (() => {
+                const selectedSurvey = surveys.find((survey) => survey.form.id === stepForm.surveyId) ?? null
+                const previewContent = selectedSurvey ? buildSurveyFlexContent(selectedSurvey) : ''
+                return (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">アンケート <span className="text-red-500">*</span></label>
+                      <select
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                        value={stepForm.surveyId ?? ''}
+                        onChange={(e) => setStepForm({ ...stepForm, surveyId: e.target.value || null })}
+                      >
+                        <option value="">-- 選択してください --</option>
+                        {surveys.map((survey) => (
+                          <option key={survey.form.id} value={survey.form.id}>{survey.form.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-white p-3">
+                      {previewContent ? (
+                        <FlexPreview content={previewContent} />
+                      ) : (
+                        <p className="text-xs text-gray-500">アンケートがありません</p>
+                      )}
+                    </div>
+                    <Link href="/surveys" className="inline-flex text-xs font-medium text-green-700 hover:underline">
+                      アンケートを編集
+                    </Link>
+                  </div>
+                )
+              })()}
+
               {stepForm.inputMode === 'direct' && (
                 <>
                   <div>
@@ -654,8 +841,18 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">メッセージ内容 <span className="text-red-500">*</span></label>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <label className="block text-xs font-medium text-gray-600">メッセージ内容 <span className="text-red-500">*</span></label>
+                      {stepForm.messageType !== 'image' && (
+                        <MessageVariableButton
+                          targetRef={stepMessageRef}
+                          value={stepForm.messageContent}
+                          onChange={(nextValue) => setStepForm({ ...stepForm, messageContent: nextValue })}
+                        />
+                      )}
+                    </div>
                     <textarea
+                      ref={stepMessageRef}
                       className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
                       rows={4}
                       placeholder="メッセージ内容を入力..."
@@ -665,6 +862,62 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                   </div>
                 </>
               )}
+
+              {/* 配信条件 */}
+              <div className="pt-3 border-t border-gray-200 space-y-2">
+                <h4 className="text-xs font-semibold text-gray-700">配信条件</h4>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">このステップを送る相手</label>
+                  <select
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                    value={stepForm.conditionType ?? ''}
+                    onChange={(e) => {
+                      const nextType = e.target.value || null
+                      setStepForm({
+                        ...stepForm,
+                        conditionType: nextType,
+                        conditionValue: nextType ? stepForm.conditionValue : '',
+                      })
+                    }}
+                  >
+                    <option value="">全員に送る</option>
+                    {conditionOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                    {stepForm.conditionType && !conditionOptions.some((opt) => opt.value === stepForm.conditionType) && (
+                      <option value={stepForm.conditionType}>既存条件: {formatConditionLabel(stepForm.conditionType)}</option>
+                    )}
+                  </select>
+                </div>
+                {stepForm.conditionType && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      {isTrackedUrlCondition(stepForm.conditionType)
+                        ? '対象URLまたはリンク名'
+                        : isIncomingTextCondition(stepForm.conditionType)
+                          ? '対象文言'
+                          : '条件値'}
+                    </label>
+                    <input
+                      type="text"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                      placeholder={isIncomingTextCondition(stepForm.conditionType) ? '例: 作成会希望' : '例: roadmap または https://...'}
+                      value={stepForm.conditionValue}
+                      onChange={(e) => setStepForm({ ...stepForm, conditionValue: e.target.value })}
+                    />
+                    {isTrackedUrlCondition(stepForm.conditionType) && (
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        作成会リンクを押した人には翌日追撃を送らない、という分岐に使います
+                      </p>
+                    )}
+                    {isIncomingTextCondition(stepForm.conditionType) && (
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        作成会希望など、指定した文言を送っていない人だけに追撃する場合に使います
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
 
               {/* 到達時のアクション */}
               <div className="pt-3 border-t border-gray-200 space-y-2">
@@ -696,7 +949,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                   className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
                   style={{ backgroundColor: '#06C755' }}
                 >
-                  {stepSaving ? '保存中...' : editingStepId ? '更新' : '追加'}
+                  {stepSaving ? '保存中...' : editingStepId ? 'ステップを更新' : 'ステップを追加'}
                 </button>
                 <button
                   onClick={() => { setShowStepForm(false); setEditingStepId(null); setStepError('') }}
@@ -738,6 +991,16 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                       }`}>
                         {messageTypeOptions.find(o => o.value === step.messageType)?.label ?? step.messageType}
                       </span>
+                      {getSurveyFromContent(step.messageContent, surveys) && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-50 text-green-700">
+                          アンケート
+                        </span>
+                      )}
+                      {step.conditionType && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-700">
+                          条件: {formatConditionLabel(step.conditionType)}
+                        </span>
+                      )}
                       {(() => {
                         const stat = stats?.steps.find((s) => s.stepOrder === step.stepOrder)
                         return stat ? (
@@ -750,9 +1013,10 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                     {(() => {
                       // テンプレ参照時は、表示も「現在のテンプレ内容」を見せる。
                       // (templates state には list で取得済みの最新内容が入っている)
+                      const survey = getSurveyFromContent(step.messageContent, surveys)
                       const tpl = step.templateId ? templates.find((t) => t.id === step.templateId) : null
-                      const displayType = tpl ? tpl.messageType : step.messageType
-                      const displayContent = tpl ? tpl.messageContent : step.messageContent
+                      const displayType = survey ? 'flex' : tpl ? tpl.messageType : step.messageType
+                      const displayContent = survey ? buildSurveyFlexContent(survey) : tpl ? tpl.messageContent : step.messageContent
                       return (
                         <div className="text-sm text-gray-700 bg-gray-50 rounded-md px-3 py-2">
                           {displayType === 'text' ? (
@@ -772,9 +1036,22 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                         📋 テンプレ: {templates.find((t) => t.id === step.templateId)?.name ?? step.templateId}
                       </p>
                     )}
+                    {(() => {
+                      const survey = getSurveyFromContent(step.messageContent, surveys)
+                      return survey ? (
+                        <p className="mt-2 text-xs text-green-700">
+                          アンケート: {survey.form.name}
+                        </p>
+                      ) : null
+                    })()}
                     {step.onReachTagId && (
                       <p className="mt-1 text-xs text-green-700">
                         🏷 到達タグ: {tags.find((t) => t.id === step.onReachTagId)?.name ?? step.onReachTagId}
+                      </p>
+                    )}
+                    {step.conditionType && step.conditionValue && (
+                      <p className="mt-1 text-xs text-amber-700">
+                        配信条件: {formatConditionLabel(step.conditionType)} / {step.conditionValue}
                       </p>
                     )}
                   </div>
@@ -801,7 +1078,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                       onClick={() => openEditStep(step)}
                       className="text-xs text-green-600 hover:text-green-700 px-2 py-1 rounded hover:bg-green-50 transition-colors"
                     >
-                      編集
+                      本文・条件を編集
                     </button>
                     <button
                       onClick={() => handleDeleteStep(step.id)}

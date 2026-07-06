@@ -1,7 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { api } from '@/lib/api'
+import MessageVariableButton from '@/components/message-variable-button'
 
 export interface AutoReplyDraft {
   id?: string
@@ -40,6 +41,7 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
   const [isActive, setIsActive] = useState(draft.isActive)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const responseContentRef = useRef<HTMLTextAreaElement | null>(null)
 
   const flexTemplates = templates.filter((t) => t.messageType === 'flex')
   const textTemplates = templates.filter((t) => t.messageType === 'text')
@@ -193,10 +195,20 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
           )}
           {(mode === 'inline-text' || mode === 'inline-flex' || mode === 'inline-image') && (
             <div>
-              <label className="block text-xs text-gray-600 mb-1">
-                {mode === 'inline-flex' ? 'Flex JSON' : mode === 'inline-image' ? 'Image JSON ({"originalContentUrl":"...","previewImageUrl":"..."})' : 'テキスト'}
-              </label>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <label className="block text-xs text-gray-600">
+                  {mode === 'inline-flex' ? 'Flex JSON' : mode === 'inline-image' ? 'Image JSON ({"originalContentUrl":"...","previewImageUrl":"..."})' : 'テキスト'}
+                </label>
+                {mode !== 'inline-image' && (
+                  <MessageVariableButton
+                    targetRef={responseContentRef}
+                    value={responseContent}
+                    onChange={setResponseContent}
+                  />
+                )}
+              </div>
               <textarea
+                ref={responseContentRef}
                 rows={mode === 'inline-flex' ? 8 : mode === 'inline-image' ? 5 : 4}
                 value={responseContent}
                 onChange={(e) => setResponseContent(e.target.value)}

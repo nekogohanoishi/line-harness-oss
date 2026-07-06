@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
 import FlexPreviewComponent from '@/components/flex-preview'
 import CcPromptButton from '@/components/cc-prompt-button'
+import MessageVariableButton from '@/components/message-variable-button'
 
 interface Template {
   id: string
@@ -92,6 +93,8 @@ export default function TemplatesPage() {
   const [editContent, setEditContent] = useState<string | null>(null)
   const [editName, setEditName] = useState<string | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
+  const createContentRef = useRef<HTMLTextAreaElement | null>(null)
+  const editContentRef = useRef<HTMLTextAreaElement | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -295,8 +298,18 @@ export default function TemplatesPage() {
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">内容 / JSON <span className="text-red-500">*</span></label>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <label className="block text-xs font-medium text-gray-600">内容 / JSON <span className="text-red-500">*</span></label>
+                {form.messageType !== 'image' && (
+                  <MessageVariableButton
+                    targetRef={createContentRef}
+                    value={form.messageContent}
+                    onChange={(nextValue) => setForm({ ...form, messageContent: nextValue })}
+                  />
+                )}
+              </div>
               <textarea
+                ref={createContentRef}
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y"
                 rows={form.messageType === 'flex' ? 10 : 4}
                 placeholder={form.messageType === 'flex' ? '{"type":"bubble","body":...}' : 'メッセージ内容'}
@@ -491,8 +504,18 @@ export default function TemplatesPage() {
 
                 {/* Edit JSON / content */}
                 <div>
-                  <h4 className="text-[11px] font-medium text-gray-500 mb-1.5 uppercase tracking-wide">内容 / JSON 編集</h4>
+                  <div className="mb-1.5 flex items-center justify-between gap-2">
+                    <h4 className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">内容 / JSON 編集</h4>
+                    {drawerData.messageType !== 'image' && (
+                      <MessageVariableButton
+                        targetRef={editContentRef}
+                        value={editContent ?? drawerData.messageContent}
+                        onChange={setEditContent}
+                      />
+                    )}
+                  </div>
                   <textarea
+                    ref={editContentRef}
                     rows={drawerData.messageType === 'flex' ? 12 : 4}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y"
                     value={editContent ?? drawerData.messageContent}

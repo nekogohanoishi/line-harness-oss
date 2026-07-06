@@ -1,7 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { ScenarioStep, MessageType } from '@line-crm/shared'
+import MessageVariableButton from '@/components/message-variable-button'
 
 interface StepEditorProps {
   step?: ScenarioStep
@@ -37,6 +38,7 @@ export default function StepEditor({ step, stepOrder, onSave, onCancel }: StepEd
   const [messageContent, setMessageContent] = useState(step?.messageContent ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const messageContentRef = useRef<HTMLTextAreaElement | null>(null)
 
   const handleSave = async () => {
     if (!messageContent.trim()) {
@@ -140,12 +142,21 @@ export default function StepEditor({ step, stepOrder, onSave, onCancel }: StepEd
 
       {/* Message content */}
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-2">
-          メッセージ内容
-          {(messageType === 'flex' || messageType === 'image') && (
-            <span className="ml-1 text-gray-400">(JSON形式)</span>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <label className="block text-xs font-medium text-gray-600">
+            メッセージ内容
+            {(messageType === 'flex' || messageType === 'image') && (
+              <span className="ml-1 text-gray-400">(JSON形式)</span>
+            )}
+          </label>
+          {messageType !== 'image' && (
+            <MessageVariableButton
+              targetRef={messageContentRef}
+              value={messageContent}
+              onChange={setMessageContent}
+            />
           )}
-        </label>
+        </div>
 
         {/* Image helper: URL inputs that auto-generate the required LINE image JSON */}
         {messageType === 'image' && (() => {
@@ -185,6 +196,7 @@ export default function StepEditor({ step, stepOrder, onSave, onCancel }: StepEd
         })()}
 
         <textarea
+          ref={messageContentRef}
           className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-y"
           rows={messageType === 'flex' ? 8 : messageType === 'image' ? 3 : 4}
           placeholder={

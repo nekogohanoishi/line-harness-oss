@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { api, fetchApi } from '@/lib/api'
 import Header from '@/components/layout/header'
 import { useAccount } from '@/contexts/account-context'
-import type { EntryRoute, TrafficPool, Scenario } from '@line-crm/shared'
+import type { EntryRoute, TrafficPool, Scenario, Tag } from '@line-crm/shared'
 import EditRouteModal from './_components/edit-route-modal'
 
 interface MessageTemplate {
@@ -47,11 +47,12 @@ interface RefDetail {
 const WORKER_BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
 
 export default function InflowLinksPage() {
-  const { selectedAccountId } = useAccount()
+  const { selectedAccountId, accounts } = useAccount()
   const [routes, setRoutes] = useState<EntryRoute[]>([])
   const [pools, setPools] = useState<TrafficPool[]>([])
   const [scenarios, setScenarios] = useState<Scenario[]>([])
   const [templates, setTemplates] = useState<MessageTemplate[]>([])
+  const [tags, setTags] = useState<Tag[]>([])
   const [summary, setSummary] = useState<RefSummaryData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -71,6 +72,7 @@ export default function InflowLinksPage() {
   const [expandedRef, setExpandedRef] = useState<string | null>(null)
   const [refDetail, setRefDetail] = useState<RefDetail | null>(null)
   const [refDetailLoading, setRefDetailLoading] = useState(false)
+  const [lastSavedRoute, setLastSavedRoute] = useState<EntryRoute | null>(null)
   // poolMembers[poolId] = lineAccountId のセット。pool_accounts を真実として
   // 「この pool が選択中アカウントに配信するか」を判定するために使う。
   // pool.activeAccountId はレガシーシングル所属。マルチアカ pool では不十分。
@@ -83,11 +85,12 @@ export default function InflowLinksPage() {
     // ref_code のみ」に絞れる。pool_id NULL のリンクが多い現状ではアカ別の
     // pool 紐付け判定よりも、こちらの実流入ベースの方が運用実態に合う。
     const summaryQuery = selectedAccountId ? `?lineAccountId=${selectedAccountId}` : ''
-    const [r, p, s, t, sum] = await Promise.all([
+    const [r, p, s, t, tagRes, sum] = await Promise.all([
       api.entryRoutes.list(),
       api.pools.list(),
       api.scenarios.list(),
       api.messageTemplates.list(),
+      api.tags.list().catch(() => ({ success: false, data: [] as Tag[] })),
       fetchApi<{ success: boolean; data: RefSummaryData }>(
         `/api/analytics/ref-summary${summaryQuery}`,
       ).catch(() => ({ success: false, data: null })),
@@ -97,6 +100,7 @@ export default function InflowLinksPage() {
     if (p.success) setPools(p.data)
     if (s.success) setScenarios(s.data)
     if (t.success) setTemplates(t.data)
+    if (tagRes.success) setTags(tagRes.data)
     if ('success' in sum && sum.success && sum.data) setSummary(sum.data)
 
     // Load pool→accounts mapping after we know the pool list. Done in a 2nd
@@ -129,8 +133,10 @@ export default function InflowLinksPage() {
     setRefDetailLoading(false)
   }, [selectedAccountId])
 
+  const routeUrl = (refCode: string) => `${WORKER_BASE}/r/${encodeURIComponent(refCode)}`
+
   const onCopy = async (refCode: string, id: string) => {
-    const url = `${WORKER_BASE}/r/${refCode}`
+    const url = routeUrl(refCode)
     try {
       await navigator.clipboard.writeText(url)
       setCopiedId(id)
@@ -189,6 +195,7 @@ export default function InflowLinksPage() {
     refCode: string
     name: string
     poolId: string | null
+    tagId: string | null
     scenarioId: string | null
     runAccountFriendAddScenarios: boolean
     stats: RefRouteStats | undefined
@@ -201,6 +208,7 @@ export default function InflowLinksPage() {
       refCode: r.refCode,
       name: r.name,
       poolId: r.poolId,
+      tagId: r.tagId,
       scenarioId: r.scenarioId,
       runAccountFriendAddScenarios: r.runAccountFriendAddScenarios,
       stats: statsByRef.get(r.refCode),
@@ -214,6 +222,7 @@ export default function InflowLinksPage() {
       refCode: s.refCode,
       name: s.name ?? '(未登録)',
       poolId: null,
+      tagId: null,
       scenarioId: null,
       runAccountFriendAddScenarios: true,
       stats: s,
@@ -236,10 +245,21 @@ export default function InflowLinksPage() {
   // マルチアカウント pool でも正しく動く。
   const allRows = Array.from(rowsByRef.values())
   const mainPool = pools.find((p) => p.slug === 'main')
+  const activeAccountCount = accounts.filter((a) => a.isActive).length
+  const defaultPoolId = selectedAccountId
+    ? (pools.find((p) => poolMembers[p.id]?.has(selectedAccountId))?.id ?? mainPool?.id ?? null)
+    : (mainPool?.id ?? null)
   const poolRoutesToAccount = (poolId: string | null, accountId: string): boolean => {
     const targetPoolId = poolId ?? mainPool?.id
-    if (!targetPoolId) return false
-    return poolMembers[targetPoolId]?.has(accountId) ?? false
+    // Legacy/single-account installs may have no traffic_pools rows at all.
+    // In that case entry_routes without pool_id are effectively global, so
+    // hiding every new link behind the account filter makes the create flow
+    // look broken even though the route was saved correctly.
+    if (!targetPoolId) return true
+    const members = poolMembers[targetPoolId]
+    if (!members) return true
+    if (members.size === 0) return activeAccountCount <= 1
+    return members.has(accountId)
   }
   const accountFilteredRows = selectedAccountId
     ? allRows.filter((r) => {
@@ -311,6 +331,41 @@ export default function InflowLinksPage() {
         </button>
       </div>
 
+      {lastSavedRoute && (
+        <div className="mb-4 rounded-lg border border-green-200 bg-green-50 p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-green-800">作成したリンク</p>
+              <p className="mt-1 truncate font-mono text-sm text-green-900">
+                {routeUrl(lastSavedRoute.refCode)}
+              </p>
+              {selectedAccountId && !accountFilteredRows.some((row) => row.refCode === lastSavedRoute.refCode) && (
+                <p className="mt-1 text-xs text-amber-700">
+                  現在のアカウント絞り込みでは一覧に出ない設定です。Pool を選択中アカウントのものに変更するか、全アカウント表示で確認してください。
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <button
+                type="button"
+                onClick={() => onCopy(lastSavedRoute.refCode, `saved-${lastSavedRoute.refCode}`)}
+                className="rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+              >
+                {copiedId === `saved-${lastSavedRoute.refCode}` ? 'コピー済' : 'コピー'}
+              </button>
+              <a
+                href={routeUrl(lastSavedRoute.refCode)}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded-md border border-green-300 bg-white px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-100"
+              >
+                開く
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="p-3 rounded bg-red-50 border border-red-200 text-red-700 text-sm mb-4">
           {error}
@@ -329,7 +384,7 @@ export default function InflowLinksPage() {
         </div>
       ) : (
         <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
-          <table className="w-full min-w-[960px]">
+          <table className="w-full min-w-[1080px]">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
@@ -343,6 +398,9 @@ export default function InflowLinksPage() {
                 </th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                   起動シナリオ
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  自動付与タグ
                 </th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                   モード
@@ -366,6 +424,7 @@ export default function InflowLinksPage() {
               {sortedRows.map((r) => {
                 const pool = pools.find((p) => p.id === r.poolId)
                 const sc = scenarios.find((s) => s.id === r.scenarioId)
+                const tag = tags.find((t) => t.id === r.tagId)
                 const editTarget = r.registered
                   ? routes.find((e) => e.id === r.entryRouteId) ?? null
                   : null
@@ -416,6 +475,21 @@ export default function InflowLinksPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-700">{sc?.name ?? '—'}</td>
+                    <td className="px-4 py-3 text-sm text-gray-700">
+                      {tag ? (
+                        <span
+                          className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
+                          style={{
+                            backgroundColor: `${tag.color}22`,
+                            color: tag.color,
+                          }}
+                        >
+                          {tag.name}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-sm text-gray-600">
                       {r.registered ? (r.runAccountFriendAddScenarios ? '並走' : '上書き') : '—'}
                     </td>
@@ -429,12 +503,17 @@ export default function InflowLinksPage() {
                       {formatDate(r.stats?.latestAt ?? null)}
                     </td>
                     <td className="px-4 py-3 text-sm" onClick={(e) => e.stopPropagation()}>
-                      <button
-                        onClick={() => onCopy(r.refCode, r.refCode)}
-                        className="text-xs text-blue-500 hover:text-blue-700"
-                      >
-                        {copiedId === r.refCode ? 'コピー済' : 'コピー'}
-                      </button>
+                      <div className="flex max-w-[280px] items-center gap-2">
+                        <code className="truncate rounded bg-gray-50 px-2 py-1 text-xs text-gray-700">
+                          {routeUrl(r.refCode)}
+                        </code>
+                        <button
+                          onClick={() => onCopy(r.refCode, r.refCode)}
+                          className="shrink-0 text-xs text-blue-500 hover:text-blue-700"
+                        >
+                          {copiedId === r.refCode ? 'コピー済' : 'コピー'}
+                        </button>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                       {editTarget ? (
@@ -477,9 +556,12 @@ export default function InflowLinksPage() {
           pools={pools}
           scenarios={scenarios}
           templates={templates}
+          tags={tags}
+          initialPoolId={defaultPoolId}
           onClose={() => setEditing(null)}
-          onSaved={() => {
+          onSaved={(savedRoute) => {
             setEditing(null)
+            setLastSavedRoute(savedRoute)
             load()
           }}
         />
@@ -517,7 +599,7 @@ function FragmentRow({
       </tr>
       {isExpanded && (
         <tr>
-          <td colSpan={10} className="px-6 py-4 bg-gray-50 border-t border-gray-100">
+          <td colSpan={11} className="px-6 py-4 bg-gray-50 border-t border-gray-100">
             {refDetailLoading ? (
               <p className="text-sm text-gray-400">読み込み中…</p>
             ) : !friends ? (

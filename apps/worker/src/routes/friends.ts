@@ -12,7 +12,7 @@ import {
 } from '@line-crm/db';
 import type { Friend as DbFriend, Tag as DbTag } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
-import { buildMessage } from '../services/step-delivery.js';
+import { buildMessage, expandVariables, resolveMetadata } from '../services/step-delivery.js';
 import type { Env } from '../index.js';
 
 const friends = new Hono<Env>();
@@ -564,12 +564,22 @@ friends.post('/api/friends/:id/messages', async (c) => {
     }
     const lineClient = new LineClient(accessToken);
     const messageType = body.messageType ?? 'text';
+    const workerUrl = c.env.WORKER_URL || new URL(c.req.url).origin;
+    const resolvedMeta = await resolveMetadata(db, {
+      user_id: (friend as unknown as Record<string, string | null>).user_id,
+      metadata: (friend as unknown as Record<string, string | null>).metadata,
+    });
+    const expandedContent = expandVariables(
+      body.content,
+      { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1],
+      workerUrl,
+    );
 
     // Auto-wrap URLs with tracking links (text with URLs → Flex with button)
     const { autoTrackContent } = await import('../services/auto-track.js');
     const tracked = await autoTrackContent(
-      db, messageType, body.content,
-      c.env.WORKER_URL || new URL(c.req.url).origin,
+      db, messageType, expandedContent,
+      workerUrl,
     );
 
     const message = buildMessage(tracked.messageType, tracked.content, body.altText);
@@ -582,7 +592,7 @@ friends.post('/api/friends/:id/messages', async (c) => {
         `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, created_at)
          VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, 'manual', ?)`,
       )
-      .bind(logId, friend.id, messageType, body.content, jstNow())
+      .bind(logId, friend.id, messageType, expandedContent, jstNow())
       .run();
 
     return c.json({ success: true, data: { messageId: logId } });

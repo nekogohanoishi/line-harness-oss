@@ -75,7 +75,7 @@ export default function FriendAddSettingsPage() {
         }
         accountScopedByAccount.set(
           account.id,
-          res.data.filter(s => s.triggerType === 'friend_add'),
+          res.data.filter(s => s.triggerType === 'friend_add' && s.lineAccountId !== null),
         )
       })
 
@@ -180,7 +180,7 @@ export default function FriendAddSettingsPage() {
     <div className="min-h-screen bg-gray-50">
       <Header
         title="友だち追加時設定"
-        description="各 LINE アカウントに友だち追加した瞬間に何が配信されるかを管理します。アクティブなシナリオが0件のアカウントは新規友だちに何も届きません。"
+        description="各 LINE アカウントに友だち追加・ブロック解除したときに起動する friend_add シナリオを管理します。アクティブなシナリオが0件のアカウントは何も届きません。"
       />
 
       <div className="max-w-5xl mx-auto px-4 py-6 space-y-4">
@@ -289,7 +289,7 @@ function AccountSection({
           </span>
         ) : (
           <span className="text-xs px-2 py-1 rounded-full bg-red-100 text-red-700 font-medium">
-            ⚠ アクティブ 0 件 — 新規友だちに何も届きません
+            未設定 — 何も届きません
           </span>
         )}
       </div>

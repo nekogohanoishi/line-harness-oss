@@ -3,6 +3,10 @@ import type { Env } from '../index.js';
 
 const accountSettings = new Hono<Env>();
 
+function jstIsoNow(): string {
+  return new Date(Date.now() + 9 * 60 * 60_000).toISOString().replace('Z', '+09:00');
+}
+
 // GET /api/account-settings/test-recipients?accountId=xxx
 accountSettings.get('/api/account-settings/test-recipients', async (c) => {
   const accountId = c.req.query('accountId');
@@ -38,7 +42,7 @@ accountSettings.put('/api/account-settings/test-recipients', async (c) => {
   if (!body.accountId) return c.json({ success: false, error: 'accountId required' }, 400);
 
   const id = crypto.randomUUID();
-  const now = new Date(Date.now() + 9 * 60 * 60_000).toISOString().replace('Z', '+09:00');
+  const now = jstIsoNow();
 
   await c.env.DB.prepare(
     `INSERT INTO account_settings (id, line_account_id, key, value, created_at, updated_at)

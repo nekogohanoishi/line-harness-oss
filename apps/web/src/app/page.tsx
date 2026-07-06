@@ -25,6 +25,8 @@ const ccPrompts = [
   },
 ]
 
+const WORKER_BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
+
 interface DashboardStats {
   friendCount: number | null
   activeScenarioCount: number | null
@@ -91,7 +93,7 @@ export default function DashboardPage() {
       try {
         const [friendCountRes, scenariosRes, broadcastsRes, templatesRes, automationsRes, scoringRes] = await Promise.allSettled([
           api.friends.count({ accountId: selectedAccountId ?? undefined }),
-          api.scenarios.list(),
+          api.scenarios.list({ accountId: selectedAccountId ?? undefined }),
           api.broadcasts.list(),
           api.templates.list(),
           api.automations.list(),
@@ -153,7 +155,7 @@ export default function DashboardPage() {
 
       {/* Demo banner */}
       <a
-        href="https://your-worker.your-subdomain.workers.dev/auth/line?ref=dashboard"
+        href={`${WORKER_BASE}/auth/line?ref=dashboard`}
         target="_blank"
         rel="noopener noreferrer"
         className="block mb-6 p-4 rounded-xl border border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-100 hover:to-emerald-100 transition-colors"

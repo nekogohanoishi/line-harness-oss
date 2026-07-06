@@ -22,6 +22,7 @@ const menuSections = [
     label: '配信',
     items: [
       { href: '/friend-add-settings', label: '友だち追加時設定', icon: 'M12 6v6m0 0v6m0-6h6m-6 0H6' },
+      { href: '/surveys', label: 'アンケート', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
       { href: '/scenarios', label: 'シナリオ配信', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01' },
       { href: '/broadcasts', label: '一斉配信', icon: 'M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z' },
       { href: '/templates', label: 'テンプレート', icon: 'M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z' },
@@ -310,8 +311,20 @@ export default function Sidebar() {
         <div className="px-6 py-4 space-y-3">
         <p className="text-xs text-gray-400">L Harness v{process.env.APP_VERSION || '0.0.0'}</p>
         <button
-          onClick={() => {
+          onClick={async () => {
+            try {
+              const apiUrl = process.env.NEXT_PUBLIC_API_URL
+              if (apiUrl) {
+                await fetch(`${apiUrl}/api/auth/logout`, {
+                  method: 'POST',
+                  credentials: 'include',
+                })
+              }
+            } catch {
+              // Local cleanup still logs the browser out if the network call fails.
+            }
             localStorage.removeItem('lh_api_key')
+            localStorage.removeItem('lh_csrf')
             localStorage.removeItem('lh_staff_name')
             localStorage.removeItem('lh_staff_role')
             window.location.href = '/login'

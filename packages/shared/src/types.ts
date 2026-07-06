@@ -165,6 +165,12 @@ export interface ScenarioStep {
   templateId?: string | null;
   /** このステップ到達時に付与するタグ ID */
   onReachTagId?: string | null;
+  /** 配信条件タイプ (null = 常に配信) */
+  conditionType?: string | null;
+  /** 配信条件の値 (タグID / メタデータ条件 / URL など) */
+  conditionValue?: string | null;
+  /** 条件不一致時にジャンプするステップ順序 */
+  nextStepOnFalse?: number | null;
   /** メッセージ種別 */
   messageType: MessageType;
   /** メッセージ内容 (テキスト or JSONシリアライズ済みFlexメッセージ等) */
@@ -807,7 +813,8 @@ export type AutomationEventType =
   | "webinar_opened"
   | "webinar_started"
   | "webinar_completed"
-  | "webinar_cta_clicked";
+  | "webinar_cta_clicked"
+  | "webinar_abandoned";
 
 export interface AutomationAction {
   type: "add_tag" | "remove_tag" | "start_scenario" | "send_message" | "send_webhook" | "switch_rich_menu";

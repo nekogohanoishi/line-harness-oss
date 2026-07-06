@@ -2,6 +2,16 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 
+type LoginResponse = {
+  success?: boolean
+  data?: {
+    name: string
+    role: string
+  }
+  csrfToken?: string
+  error?: string
+}
+
 export default function LoginPage() {
   const [apiKey, setApiKey] = useState('')
   const [error, setError] = useState('')
@@ -14,37 +24,39 @@ export default function LoginPage() {
     setError('')
 
     try {
-      // Validate by calling a simple endpoint
       const apiUrl = process.env.NEXT_PUBLIC_API_URL
       if (!apiUrl) {
         setError('NEXT_PUBLIC_API_URL is not set in build env')
         setLoading(false)
         return
       }
-      const res = await fetch(`${apiUrl}/api/friends/count`, {
-        headers: { Authorization: `Bearer ${apiKey}` },
+      const res = await fetch(`${apiUrl}/api/admin-auth/login`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { Authorization: `Bearer ${apiKey.trim()}` },
       })
 
-      if (res.ok) {
-        localStorage.setItem('lh_api_key', apiKey)
-        // Fetch staff profile for name/role display
-        try {
-          const profileRes = await fetch(`${apiUrl}/api/staff/me`, {
-            headers: { Authorization: `Bearer ${apiKey}` },
-          })
-          if (profileRes.ok) {
-            const profileData = await profileRes.json()
-            if (profileData.success && profileData.data) {
-              localStorage.setItem('lh_staff_name', profileData.data.name)
-              localStorage.setItem('lh_staff_role', profileData.data.role)
-            }
-          }
-        } catch {
-          // Profile fetch is best-effort
+      let loginData: LoginResponse | null = null
+      try {
+        loginData = await res.json()
+      } catch {
+        loginData = null
+      }
+
+      if (res.ok && loginData?.success && loginData?.data) {
+        localStorage.removeItem('lh_api_key')
+        localStorage.setItem('lh_staff_name', loginData.data.name)
+        localStorage.setItem('lh_staff_role', loginData.data.role)
+        if (loginData.csrfToken) {
+          localStorage.setItem('lh_csrf', loginData.csrfToken)
         }
         router.push('/')
-      } else {
+      } else if (res.status === 401 || loginData?.error === 'Unauthorized') {
         setError('APIキーが正しくありません')
+      } else {
+        let message = 'ログインに失敗しました'
+        if (loginData?.error) message = loginData.error
+        setError(message)
       }
     } catch {
       setError('接続に失敗しました')

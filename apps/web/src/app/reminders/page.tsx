@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
+import MessageVariableButton from '@/components/message-variable-button'
 
 interface Reminder {
   id: string
@@ -107,6 +108,7 @@ export default function RemindersPage() {
   })
   const [stepSaving, setStepSaving] = useState(false)
   const [stepFormError, setStepFormError] = useState('')
+  const stepMessageRef = useRef<HTMLTextAreaElement | null>(null)
 
   const loadReminders = useCallback(async () => {
     setLoading(true)
@@ -490,8 +492,18 @@ export default function RemindersPage() {
                                 </select>
                               </div>
                               <div>
-                                <label className="block text-xs font-medium text-gray-600 mb-1">メッセージ内容 <span className="text-red-500">*</span></label>
+                                <div className="mb-1 flex items-center justify-between gap-2">
+                                  <label className="block text-xs font-medium text-gray-600">メッセージ内容 <span className="text-red-500">*</span></label>
+                                  {stepForm.messageType !== 'image' && (
+                                    <MessageVariableButton
+                                      targetRef={stepMessageRef}
+                                      value={stepForm.messageContent}
+                                      onChange={(nextValue) => setStepForm({ ...stepForm, messageContent: nextValue })}
+                                    />
+                                  )}
+                                </div>
                                 <textarea
+                                  ref={stepMessageRef}
                                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
                                   rows={3}
                                   placeholder="メッセージ内容を入力"

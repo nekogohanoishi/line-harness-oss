@@ -435,12 +435,96 @@ async function processSingleDelivery(
   return true;
 }
 
-async function evaluateCondition(
+export const SUPPORTED_CONDITION_TYPES = [
+  'tag_exists',
+  'tag_not_exists',
+  'metadata_equals',
+  'metadata_not_equals',
+  'tracked_url_clicked',
+  'tracked_url_not_clicked',
+  'incoming_text_contains',
+  'incoming_text_not_contains',
+] as const;
+
+export type ConditionType = (typeof SUPPORTED_CONDITION_TYPES)[number];
+
+export function isSupportedConditionType(value: unknown): value is ConditionType {
+  return typeof value === 'string' && (SUPPORTED_CONDITION_TYPES as readonly string[]).includes(value);
+}
+
+async function hasFriendClickedTrackedUrl(
+  db: D1Database,
+  friendId: string,
+  conditionValue: string,
+): Promise<boolean> {
+  const needle = conditionValue.trim();
+  if (!needle) return false;
+
+  const row = await db
+    .prepare(
+      `SELECT 1
+         FROM link_clicks lc
+         INNER JOIN tracked_links tl ON tl.id = lc.tracked_link_id
+        WHERE lc.friend_id = ?
+          AND (
+            tl.id = ?
+            OR tl.original_url = ?
+            OR instr(tl.original_url, ?) > 0
+            OR instr(COALESCE(tl.name, ''), ?) > 0
+          )
+        LIMIT 1`,
+    )
+    .bind(friendId, needle, needle, needle, needle)
+    .first();
+
+  return !!row;
+}
+
+async function hasFriendSentTextContaining(
+  db: D1Database,
+  friendId: string,
+  conditionValue: string,
+): Promise<boolean> {
+  const needle = conditionValue.trim();
+  if (!needle) return false;
+
+  const row = await db
+    .prepare(
+      `SELECT 1
+         FROM messages_log
+        WHERE friend_id = ?
+          AND direction = 'incoming'
+          AND message_type = 'text'
+          AND instr(content, ?) > 0
+        LIMIT 1`,
+    )
+    .bind(friendId, needle)
+    .first();
+
+  return !!row;
+}
+
+export async function evaluateCondition(
   db: D1Database,
   friendId: string,
   step: { condition_type: string | null; condition_value: string | null },
 ): Promise<boolean> {
-  if (!step.condition_type || !step.condition_value) return true;
+  if (!step.condition_type) return true;
+
+  if (!isSupportedConditionType(step.condition_type)) {
+    console.error(
+      `[scenario] unknown condition_type "${step.condition_type}" for friend=${friendId} - skipping step. ` +
+        `Supported types: ${SUPPORTED_CONDITION_TYPES.join(', ')}`,
+    );
+    return false;
+  }
+
+  if (!step.condition_value) {
+    console.error(
+      `[scenario] condition_type=${step.condition_type} is set but condition_value is empty for friend=${friendId} - skipping step`,
+    );
+    return false;
+  }
 
   switch (step.condition_type) {
     case 'tag_exists': {
@@ -457,26 +541,59 @@ async function evaluateCondition(
         .first();
       return !tag;
     }
-    case 'metadata_equals': {
-      const { key, value } = JSON.parse(step.condition_value) as { key: string; value: unknown };
-      const friend = await db
-        .prepare('SELECT metadata FROM friends WHERE id = ?')
-        .bind(friendId)
-        .first<{ metadata: string }>();
-      const metadata = JSON.parse(friend?.metadata || '{}') as Record<string, unknown>;
-      return metadata[key] === value;
+    case 'tracked_url_clicked': {
+      return hasFriendClickedTrackedUrl(db, friendId, step.condition_value);
     }
+    case 'tracked_url_not_clicked': {
+      const clicked = await hasFriendClickedTrackedUrl(db, friendId, step.condition_value);
+      return !clicked;
+    }
+    case 'incoming_text_contains': {
+      return hasFriendSentTextContaining(db, friendId, step.condition_value);
+    }
+    case 'incoming_text_not_contains': {
+      const sent = await hasFriendSentTextContaining(db, friendId, step.condition_value);
+      return !sent;
+    }
+    case 'metadata_equals':
     case 'metadata_not_equals': {
-      const { key, value } = JSON.parse(step.condition_value) as { key: string; value: unknown };
+      let raw: unknown;
+      try {
+        raw = JSON.parse(step.condition_value);
+      } catch {
+        console.error(
+          `[scenario] malformed condition_value JSON for friend=${friendId} type=${step.condition_type} - skipping step`,
+        );
+        return false;
+      }
+      if (
+        !raw ||
+        typeof raw !== 'object' ||
+        Array.isArray(raw) ||
+        typeof (raw as { key?: unknown }).key !== 'string' ||
+        !('value' in (raw as Record<string, unknown>))
+      ) {
+        console.error(
+          `[scenario] condition_value missing key/value for friend=${friendId} type=${step.condition_type} - skipping step`,
+        );
+        return false;
+      }
+      const parsed = raw as { key: string; value: unknown };
       const friend = await db
         .prepare('SELECT metadata FROM friends WHERE id = ?')
         .bind(friendId)
         .first<{ metadata: string }>();
-      const metadata = JSON.parse(friend?.metadata || '{}') as Record<string, unknown>;
-      return metadata[key] !== value;
+      let metadata: Record<string, unknown> = {};
+      try {
+        metadata = JSON.parse(friend?.metadata || '{}') as Record<string, unknown>;
+      } catch {
+        metadata = {};
+      }
+      const actual = metadata[parsed.key];
+      return step.condition_type === 'metadata_equals'
+        ? actual === parsed.value
+        : actual !== parsed.value;
     }
-    default:
-      return true;
   }
 }
 

@@ -1,12 +1,14 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { parseStickerMessageContent, stickerFallback } from '@line-crm/shared'
 import { api, fetchApi } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 import FlexPreviewComponent from '@/components/flex-preview'
 import FriendInfoSidebar from '@/components/chats/friend-info-sidebar'
+import MessageVariableButton from '@/components/message-variable-button'
 
 interface Chat {
   id: string
@@ -56,6 +58,24 @@ const statusFilters: { key: StatusFilter; label: string }[] = [
 const SHOW_LOADING_PREF_KEY = 'lh_chat_show_loading_indicator'
 const LOADING_SECONDS_PREF_KEY = 'lh_chat_loading_seconds'
 const LOADING_REFRESH_INTERVAL_MS = 4000
+
+function StickerMessageImage({ content }: { content: string }) {
+  const [failed, setFailed] = useState(false)
+  const sticker = parseStickerMessageContent(content)
+  const fallback = stickerFallback(content)
+
+  if (!sticker || failed) return <span>{fallback}</span>
+
+  return (
+    <img
+      src={sticker.stickerUrl}
+      alt={fallback}
+      className="max-h-[140px] max-w-[140px] object-contain"
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  )
+}
 
 function formatDatetime(iso: string | null): string {
   if (!iso) return '-'
@@ -129,6 +149,7 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
   const [loadingMessages, setLoadingMessages] = useState(true)
   const isComposingRef = useRef(false)
   const sendLockRef = useRef(false)
+  const messageInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
     const loadMessages = async () => {
@@ -146,18 +167,19 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
 
   const handleSend = async () => {
     if (!message.trim() || sending || sendLockRef.current) return
+    const content = message.trim().replace(/\{\{name\}\}/g, friend?.displayName ?? '')
     sendLockRef.current = true
     setSending(true)
     try {
       await fetchApi(`/api/friends/${friendId}/messages`, {
         method: 'POST',
-        body: JSON.stringify({ content: message, messageType: 'text' }),
+        body: JSON.stringify({ content, messageType: 'text' }),
       })
       setMessages((prev) => [...prev, {
         id: crypto.randomUUID(),
         direction: 'outgoing',
         messageType: 'text',
-        content: message,
+        content,
         createdAt: new Date().toISOString(),
       }])
       setMessage('')
@@ -189,6 +211,9 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
         collectText(parsed)
         return texts.slice(0, 4).join('\n') || '[Flex Message]'
       } catch { return '[Flex Message]' }
+    }
+    if (msg.messageType === 'sticker') {
+      return <StickerMessageImage content={msg.content} />
     }
     return `[${msg.messageType}]`
   }
@@ -226,7 +251,7 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
                   ? 'bg-green-500 text-white'
                   : 'bg-gray-100 text-gray-900'
               }`}>
-                <p className="text-sm whitespace-pre-wrap break-words">{renderContent(msg)}</p>
+                <div className="text-sm whitespace-pre-wrap break-words">{renderContent(msg)}</div>
                 <p className={`text-xs mt-1 ${msg.direction === 'outgoing' ? 'text-green-200' : 'text-gray-400'}`}>
                   {new Date(msg.createdAt).toLocaleString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
                 </p>
@@ -236,8 +261,18 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
         )}
       </div>
       <div className="px-4 py-3 border-t border-gray-200">
+        <div className="mb-2 flex justify-end">
+          <MessageVariableButton
+            targetRef={messageInputRef}
+            value={message}
+            onChange={setMessage}
+            insertValue={friend?.displayName || '{{name}}'}
+            disabled={!friend?.displayName}
+          />
+        </div>
         <div className="flex gap-2">
           <input
+            ref={messageInputRef}
             type="text"
             value={message}
             onChange={(e) => setMessage(e.target.value)}
@@ -293,6 +328,7 @@ export default function ChatsPage() {
   const [isMessageInputFocused, setIsMessageInputFocused] = useState(false)
   const isComposingRef = useRef(false)
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
+  const messageContentRef = useRef<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
     try {
@@ -496,7 +532,7 @@ export default function ChatsPage() {
 
   const handleSendMessage = async () => {
     if (!selectedChatId || !messageContent.trim() || sending || sendLockRef.current) return
-    const content = messageContent.trim()
+    const content = messageContent.trim().replace(/\{\{name\}\}/g, chatDetail?.friendName ?? '')
     const sendingChatId = selectedChatId  // capture the chat id for this send
     sendLockRef.current = true
     setSending(true)
@@ -796,6 +832,8 @@ export default function ChatsPage() {
                       } catch {
                         bubbleContent = <span>🖼️ [画像]</span>
                       }
+                    } else if (msg.messageType === 'sticker') {
+                      bubbleContent = <StickerMessageImage content={msg.content} />
                     } else {
                       bubbleContent = <span>{msg.content}</span>
                     }
@@ -906,9 +944,17 @@ export default function ChatsPage() {
                     />
                     <span>Shift+Enter</span>
                   </label>
+                  <MessageVariableButton
+                    targetRef={messageContentRef}
+                    value={messageContent}
+                    onChange={setMessageContent}
+                    insertValue={chatDetail.friendName || '{{name}}'}
+                    disabled={!chatDetail.friendName}
+                  />
                 </div>
                 <div className="flex items-end gap-2">
                   <textarea
+                    ref={messageContentRef}
                     rows={2}
                     value={messageContent}
                     onChange={(e) => {

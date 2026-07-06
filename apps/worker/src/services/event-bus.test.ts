@@ -370,4 +370,45 @@ describe('fireEvent — webinar_* automations', () => {
     expect(addTagCalls.length).toBe(1);
     expect(addTagCalls[0][2]).toBe('opened-any');
   });
+
+  it('webinar_abandoned: eventId condition filters automations', async () => {
+    const db = await import('@line-crm/db');
+    (db.getActiveAutomationsByEvent as unknown as { mockResolvedValue: (v: unknown) => void }).mockResolvedValue([
+      {
+        id: 'auto-abandoned-hit',
+        line_account_id: null,
+        conditions: JSON.stringify({ eventId: 'ev1' }),
+        actions: JSON.stringify([{ type: 'add_tag', params: { tagId: 'abandoned-ev1' } }]),
+      },
+      {
+        id: 'auto-abandoned-miss',
+        line_account_id: null,
+        conditions: JSON.stringify({ eventId: 'ev2' }),
+        actions: JSON.stringify([{ type: 'add_tag', params: { tagId: 'abandoned-ev2' } }]),
+      },
+    ]);
+
+    const dbFake = fakeDb({ friend: { line_user_id: 'U' }, capturedInserts: captured });
+
+    await fireEvent(
+      dbFake,
+      'webinar_abandoned',
+      {
+        friendId: 'friend-1',
+        eventData: {
+          eventId: 'ev1',
+          bookingId: 'b1',
+          positionSeconds: 180,
+          abandonedAfterSeconds: 600,
+        },
+      },
+      'token',
+      null,
+    );
+
+    const addTagCalls = (db.addTagToFriend as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const taggedIds = addTagCalls.map((c) => c[2]);
+    expect(taggedIds).toContain('abandoned-ev1');
+    expect(taggedIds).not.toContain('abandoned-ev2');
+  });
 });

@@ -15,6 +15,7 @@ import {
   jstNow,
 } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { expandVariables, resolveMetadata } from '../services/step-delivery.js';
 
 const chats = new Hono<Env>();
 
@@ -519,11 +520,20 @@ chats.post('/api/chats/:id/send', async (c) => {
     const { LineClient } = await import('@line-crm/line-sdk');
     const lineClient = new LineClient(accessToken);
     const messageType = body.messageType ?? 'text';
+    const resolvedMeta = await resolveMetadata(c.env.DB, {
+      user_id: (friend as unknown as Record<string, string | null>).user_id,
+      metadata: (friend as unknown as Record<string, string | null>).metadata,
+    });
+    const expandedContent = expandVariables(
+      body.content,
+      { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1],
+      c.env.WORKER_URL || new URL(c.req.url).origin,
+    );
 
     if (messageType === 'text') {
-      await lineClient.pushTextMessage(friend.line_user_id, body.content);
+      await lineClient.pushTextMessage(friend.line_user_id, expandedContent);
     } else if (messageType === 'flex') {
-      const contents = JSON.parse(body.content);
+      const contents = JSON.parse(expandedContent);
       await lineClient.pushFlexMessage(friend.line_user_id, extractFlexAltText(contents), contents);
     }
 
@@ -531,7 +541,7 @@ chats.post('/api/chats/:id/send', async (c) => {
     const logId = crypto.randomUUID();
     await c.env.DB
       .prepare(`INSERT INTO messages_log (id, friend_id, direction, message_type, content, source, created_at) VALUES (?, ?, 'outgoing', ?, ?, 'manual', ?)`)
-      .bind(logId, friend.id, messageType, body.content, jstNow())
+      .bind(logId, friend.id, messageType, expandedContent, jstNow())
       .run();
 
     // チャットの最終メッセージ日時を更新（chat.id を直接使う — friend_id で呼ばれても resolveOrCreateChat 済み）

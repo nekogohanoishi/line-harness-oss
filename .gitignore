@@ -11,8 +11,13 @@ dist/
 *.toml.bak
 .env.production
 .env.staging
+.dev.vars
+apps/**/.dev.vars
 apps/web/out/
 apps/worker/dist/
 .worktrees/
 .claude/worktrees/
 .line-harness-setup.json
+.pnpm-store/
+.playwright-mcp/
+*.tsbuildinfo

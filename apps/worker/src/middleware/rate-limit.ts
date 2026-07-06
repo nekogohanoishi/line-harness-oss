@@ -82,6 +82,22 @@ function getClientIp(c: Context): string {
   );
 }
 
+function getAdminCookieToken(c: Context): string | null {
+  const cookie = c.req.header('Cookie');
+  if (!cookie) return null;
+  for (const part of cookie.split(';')) {
+    const [rawName, ...rawValue] = part.trim().split('=');
+    if (rawName !== 'lh_admin_session') continue;
+    const raw = rawValue.join('=') || '';
+    try {
+      return decodeURIComponent(raw) || null;
+    } catch {
+      return raw || null;
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Hono middleware
 // ---------------------------------------------------------------------------
@@ -91,6 +107,9 @@ const AUTHENTICATED_WINDOW = 60_000; // 1 min
 
 const UNAUTHENTICATED_MAX = 100;
 const UNAUTHENTICATED_WINDOW = 60_000; // 1 min
+
+const IP_CEILING_MAX = 3000;
+const IP_CEILING_WINDOW = 60_000; // 1 min
 
 export async function rateLimitMiddleware(c: Context<Env>, next: Next): Promise<Response | void> {
   const path = new URL(c.req.url).pathname;
@@ -112,12 +131,19 @@ export async function rateLimitMiddleware(c: Context<Env>, next: Next): Promise<
   } else {
     // Key by API key for authenticated endpoints
     const authHeader = c.req.header('Authorization');
-    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : getAdminCookieToken(c);
     if (token) {
       // Use first 16 chars of token as key to avoid storing full secrets
       key = `key:${token.slice(0, 16)}`;
       max = AUTHENTICATED_MAX;
       windowMs = AUTHENTICATED_WINDOW;
+      const ceiling = check(`ip-ceiling:${getClientIp(c)}`, IP_CEILING_MAX, IP_CEILING_WINDOW);
+      if (!ceiling.ok) {
+        return c.json(
+          { success: false, error: 'Too many requests. Please try again later.' },
+          { status: 429, headers: { 'Retry-After': String(ceiling.retryAfter) } },
+        );
+      }
     } else {
       // No auth header — key by IP with the lower limit
       key = `ip:${getClientIp(c)}`;

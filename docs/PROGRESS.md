@@ -65,6 +65,12 @@ L社/U社代替。AI（CC）ネイティブ設計。
 - [ ] 抽選/くじ機能
 - [ ] ファネルビルダー（LIFF + CF Pages）
 
+### Webinar Launch 拡張 ✅ 進行中 2026-05-20
+- [x] Phase 7a: 同時視聴者数表示
+- [x] Phase 7b: コメント風固定表示
+- [x] Phase 8: 視聴離脱検知 (`webinar_abandoned`) + IF-THEN 連携
+- [x] Phase 8b: 初回アンケートを LIFF リンク遷移ではなく LINE トーク内 yes/no 回答に変更
+
 ## テスト済み機能 (2026-03-22 周アカウントで実施)
 
 | 機能 | API | LINE送信 | 備考 |

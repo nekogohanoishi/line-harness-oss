@@ -123,11 +123,13 @@ export interface EventBookingRow {
   //   - webinar_max_position_seconds   : 視聴到達秒の最大値 (heartbeat ごとに MAX で更新)
   //   - webinar_completed_at           : 完視聴判定到達時刻 (UTC ISO8601, 一度書いたら no-op)
   //   - webinar_last_heartbeat_at      : 最新 heartbeat 到達時刻 (UTC ISO8601)
+  //   - webinar_abandoned_at           : heartbeat 途絶による離脱検知時刻 (UTC ISO8601)
   webinar_first_opened_at: string | null;
   webinar_video_started_at: string | null;
   webinar_max_position_seconds: number;
   webinar_completed_at: string | null;
   webinar_last_heartbeat_at: string | null;
+  webinar_abandoned_at: string | null;
 }
 
 export interface EventBookingReminderRow {
@@ -223,6 +225,8 @@ export const WEBINAR_CONCURRENT_POLL_INTERVAL_SECONDS = 30;
 export const WEBINAR_FAKE_COMMENT_AUTHOR_MAX = 30;
 export const WEBINAR_FAKE_COMMENT_BODY_MAX = 200;
 export const WEBINAR_FAKE_COMMENT_BULK_MAX = 200;
+// heartbeat は 30 秒間隔。10 分途絶えたら「一度離脱した」と扱う。
+export const WEBINAR_ABANDONED_AFTER_SECONDS = 10 * 60;
 
 export interface WebinarFakeCommentRow {
   id: string;
