@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { api } from '@/lib/api'
+import { api, eventsApi, type EventListItem } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
@@ -126,6 +126,13 @@ export default function AutomationsPage() {
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
 
+  // 条件欄の手書きJSONをやめて、イベント種別に応じたプルダウン/入力から自動組み立てする。
+  const [events, setEvents] = useState<EventListItem[]>([])
+  const [tags, setTags] = useState<Array<{ id: string; name: string }>>([])
+  const [conditionEventId, setConditionEventId] = useState('')
+  const [conditionCtaItemId, setConditionCtaItemId] = useState('')
+  const [conditionTagId, setConditionTagId] = useState('')
+
   const loadAutomations = useCallback(async () => {
     setLoading(true)
     setError('')
@@ -176,6 +183,31 @@ export default function AutomationsPage() {
     }
   }, [selectedAccountId, accountLoading])
 
+  // ウェビナー系イベントのプルダウン用にイベント一覧を取得 (アカウント選択時のみ)
+  useEffect(() => {
+    if (!selectedAccountId) {
+      setEvents([])
+      return
+    }
+    let cancelled = false
+    eventsApi.listEvents(selectedAccountId)
+      .then((res) => { if (!cancelled) setEvents(res.items) })
+      .catch(() => { if (!cancelled) setEvents([]) })
+    return () => { cancelled = true }
+  }, [selectedAccountId])
+
+  // tag_change のタグプルダウン用
+  useEffect(() => {
+    let cancelled = false
+    api.tags.list()
+      .then((res) => { if (!cancelled && res.success) setTags(res.data.map((t) => ({ id: t.id, name: t.name }))) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+
+  const isWebinarEventType = form.eventType.startsWith('webinar_')
+  const isTagChangeEventType = form.eventType === 'tag_change'
+
   const handleCreate = async () => {
     if (!form.name.trim()) {
       setFormError('ルール名を入力してください')
@@ -183,18 +215,32 @@ export default function AutomationsPage() {
     }
 
     let parsedActions: AutomationAction[]
-    let parsedConditions: Record<string, unknown>
     try {
       parsedActions = JSON.parse(form.actionsJson)
     } catch {
       setFormError('アクションのJSON形式が正しくありません')
       return
     }
-    try {
-      parsedConditions = JSON.parse(form.conditionsJson)
-    } catch {
-      setFormError('条件のJSON形式が正しくありません')
-      return
+
+    // 条件: webinar_* / tag_change はプルダウン/入力から組み立てる (手書きJSON廃止)。
+    // それ以外のイベント種別は従来通り JSON 手書き欄を使う。
+    let parsedConditions: Record<string, unknown>
+    if (isWebinarEventType) {
+      parsedConditions = {}
+      if (conditionEventId) parsedConditions.eventId = conditionEventId
+      if (form.eventType === 'webinar_cta_clicked' && conditionCtaItemId.trim()) {
+        parsedConditions.ctaItemId = conditionCtaItemId.trim()
+      }
+    } else if (isTagChangeEventType) {
+      parsedConditions = {}
+      if (conditionTagId) parsedConditions.tag_id = conditionTagId
+    } else {
+      try {
+        parsedConditions = JSON.parse(form.conditionsJson)
+      } catch {
+        setFormError('条件のJSON形式が正しくありません')
+        return
+      }
     }
 
     setSaving(true)
@@ -211,6 +257,9 @@ export default function AutomationsPage() {
       if (res.success) {
         setShowCreate(false)
         setForm({ ...initialForm })
+        setConditionEventId('')
+        setConditionCtaItemId('')
+        setConditionTagId('')
         loadAutomations()
       } else {
         setFormError(res.error)
@@ -293,7 +342,12 @@ export default function AutomationsPage() {
               <select
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
                 value={form.eventType}
-                onChange={(e) => setForm({ ...form, eventType: e.target.value as AutomationEventType })}
+                onChange={(e) => {
+                  setForm({ ...form, eventType: e.target.value as AutomationEventType })
+                  setConditionEventId('')
+                  setConditionCtaItemId('')
+                  setConditionTagId('')
+                }}
               >
                 {eventTypeOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -311,25 +365,52 @@ export default function AutomationsPage() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">条件 (JSON)</label>
-              <textarea
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y"
-                rows={3}
-                placeholder='{"tagId": "...", "operator": "equals"}'
-                value={form.conditionsJson}
-                onChange={(e) => setForm({ ...form, conditionsJson: e.target.value })}
-              />
-              {form.eventType.startsWith('webinar_') && (
-                <p className="mt-1 text-[11px] text-gray-500">
-                  例: <code className="font-mono">{'{"eventId": "<ウェビナーイベントID>"}'}</code>
-                  {form.eventType === 'webinar_cta_clicked' && (
-                    <>
-                      {' '}/{' '}
-                      <code className="font-mono">{'{"eventId": "...", "ctaItemId": "<CTA ID>"}'}</code>
-                    </>
+              <label className="block text-xs font-medium text-gray-600 mb-1">条件</label>
+              {isWebinarEventType ? (
+                <div className="space-y-2">
+                  <select
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                    value={conditionEventId}
+                    onChange={(e) => setConditionEventId(e.target.value)}
+                    disabled={!selectedAccountId}
+                  >
+                    <option value="">-- 全ウェビナーに発火 --</option>
+                    {events.map((ev) => (
+                      <option key={ev.id} value={ev.id}>{ev.name}</option>
+                    ))}
+                  </select>
+                  {!selectedAccountId && (
+                    <p className="text-[11px] text-amber-600">ⓘ アカウントを選択するとイベント一覧を選べます</p>
                   )}
-                  。空 {'{}'} で全ウェビナーに発火。
-                </p>
+                  {form.eventType === 'webinar_cta_clicked' && (
+                    <input
+                      type="text"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                      placeholder="CTA ID (省略可: 全CTAに発火)"
+                      value={conditionCtaItemId}
+                      onChange={(e) => setConditionCtaItemId(e.target.value)}
+                    />
+                  )}
+                </div>
+              ) : isTagChangeEventType ? (
+                <select
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                  value={conditionTagId}
+                  onChange={(e) => setConditionTagId(e.target.value)}
+                >
+                  <option value="">-- 全タグ変更に発火 --</option>
+                  {tags.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <textarea
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y"
+                  rows={3}
+                  placeholder='{"tagId": "...", "operator": "equals"}'
+                  value={form.conditionsJson}
+                  onChange={(e) => setForm({ ...form, conditionsJson: e.target.value })}
+                />
               )}
             </div>
             <div>
