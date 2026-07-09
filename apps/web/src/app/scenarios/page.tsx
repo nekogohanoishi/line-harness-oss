@@ -106,8 +106,11 @@ export default function ScenariosPage() {
     }
   }
 
-  const handleToggleActive = async (id: string, current: boolean) => {
+  const handleToggleActive = async (id: string, current: boolean, options?: { alsoDeactivateId?: string }) => {
     try {
+      if (options?.alsoDeactivateId) {
+        await api.scenarios.update(options.alsoDeactivateId, { isActive: false })
+      }
       await api.scenarios.update(id, { isActive: !current })
       loadScenarios()
     } catch {

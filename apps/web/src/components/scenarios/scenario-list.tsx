@@ -1,3 +1,6 @@
+'use client'
+
+import { useState } from 'react'
 import Link from 'next/link'
 import type { Scenario, DeliveryMode } from '@line-crm/shared'
 
@@ -26,12 +29,39 @@ function ModeBadge({ mode }: { mode?: DeliveryMode }) {
 
 interface ScenarioListProps {
   scenarios: ScenarioWithCount[]
-  onToggleActive: (id: string, current: boolean) => void
+  onToggleActive: (id: string, current: boolean, options?: { alsoDeactivateId?: string }) => void
   onDelete: (id: string) => void
   loading?: boolean
 }
 
 export default function ScenarioList({ scenarios, onToggleActive, onDelete, loading }: ScenarioListProps) {
+  // friend_add トリガーのシナリオを ON にしようとした時、既に別の friend_add シナリオが
+  // ON なら確認ダイアログを出す (新規友だちに二重で送信されてしまうのを防ぐため)。
+  const [conflict, setConflict] = useState<{ target: ScenarioWithCount; existing: ScenarioWithCount } | null>(null)
+
+  const requestToggleActive = (scenario: ScenarioWithCount) => {
+    if (
+      scenario.lineAccountId === null &&
+      !confirm(
+        `「${scenario.name}」は全アカウント共通のシナリオです。${scenario.isActive ? '無効化' : '有効化'}するとすべてのアカウントに影響します。続行しますか？`,
+      )
+    ) {
+      return
+    }
+
+    if (!scenario.isActive && scenario.triggerType === 'friend_add') {
+      const existing = scenarios.find(
+        (s) => s.id !== scenario.id && s.triggerType === 'friend_add' && s.isActive,
+      )
+      if (existing) {
+        setConflict({ target: scenario, existing })
+        return
+      }
+    }
+
+    onToggleActive(scenario.id, scenario.isActive)
+  }
+
   if (scenarios.length === 0) {
     return (
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
@@ -41,6 +71,7 @@ export default function ScenarioList({ scenarios, onToggleActive, onDelete, load
   }
 
   return (
+    <>
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
       {scenarios.map((scenario) => (
         <div key={scenario.id} className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 flex flex-col gap-3 hover:shadow-md transition-shadow">
@@ -106,17 +137,7 @@ export default function ScenarioList({ scenarios, onToggleActive, onDelete, load
               詳細・編集
             </Link>
             <button
-              onClick={() => {
-                if (
-                  scenario.lineAccountId === null &&
-                  !confirm(
-                    `「${scenario.name}」は全アカウント共通のシナリオです。${scenario.isActive ? '無効化' : '有効化'}するとすべてのアカウントに影響します。続行しますか？`,
-                  )
-                ) {
-                  return
-                }
-                onToggleActive(scenario.id, scenario.isActive)
-              }}
+              onClick={() => requestToggleActive(scenario)}
               disabled={loading}
               className="flex-1 text-xs font-medium text-gray-600 hover:text-gray-900 py-1 min-h-[44px] flex items-center justify-center rounded-md hover:bg-gray-100 transition-colors disabled:opacity-40"
             >
@@ -140,5 +161,45 @@ export default function ScenarioList({ scenarios, onToggleActive, onDelete, load
         </div>
       ))}
     </div>
+
+    {/* friend_add シナリオの二重ON警告 */}
+    {conflict && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-5 space-y-4">
+          <h3 className="text-sm font-semibold text-gray-800">友だち追加時シナリオが重複します</h3>
+          <p className="text-sm text-gray-600">
+            「{conflict.existing.name}」も友だち追加時に発火します。両方ONだと新規友だちに両方送信されます。
+          </p>
+          <div className="flex flex-col gap-2">
+            <button
+              onClick={() => {
+                onToggleActive(conflict.target.id, conflict.target.isActive, { alsoDeactivateId: conflict.existing.id })
+                setConflict(null)
+              }}
+              className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
+              style={{ backgroundColor: '#06C755' }}
+            >
+              「{conflict.existing.name}」をOFFにして切り替える
+            </button>
+            <button
+              onClick={() => {
+                onToggleActive(conflict.target.id, conflict.target.isActive)
+                setConflict(null)
+              }}
+              className="px-4 py-2 min-h-[44px] text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+            >
+              両方ONにする
+            </button>
+            <button
+              onClick={() => setConflict(null)}
+              className="px-4 py-2 min-h-[44px] text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors"
+            >
+              キャンセル
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   )
 }
