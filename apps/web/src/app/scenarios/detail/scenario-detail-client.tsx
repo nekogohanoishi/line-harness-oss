@@ -9,6 +9,7 @@ import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import FlexPreviewComponent from '@/components/flex-preview'
 import MessageVariableButton from '@/components/message-variable-button'
+import FlexBuilder from '@/components/flex-builder/flex-builder'
 import ScheduleInput, {
   emptySchedule,
   buildSchedulePayload,
@@ -972,7 +973,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
             <h4 className="text-sm font-medium text-gray-700 mb-3">
               {editingStepId ? '本文・条件を編集' : '新しいステップを追加'}
             </h4>
-            <div className="space-y-3 max-w-lg">
+            <div className={`space-y-3 ${stepForm.inputMode === 'direct' && stepForm.messageType === 'flex' ? 'max-w-3xl' : 'max-w-lg'}`}>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">ステップ順序</label>
                 <input
@@ -1090,26 +1091,39 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                       ))}
                     </select>
                   </div>
-                  <div>
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <label className="block text-xs font-medium text-gray-600">メッセージ内容 <span className="text-red-500">*</span></label>
-                      {stepForm.messageType !== 'image' && (
-                        <MessageVariableButton
-                          targetRef={stepMessageRef}
-                          value={stepForm.messageContent}
-                          onChange={(nextValue) => setStepForm({ ...stepForm, messageContent: nextValue })}
-                        />
-                      )}
+                  {stepForm.messageType === 'flex' ? (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                        メッセージ内容 <span className="text-red-500">*</span>
+                      </label>
+                      <FlexBuilder
+                        key={editingStepId ?? 'new'}
+                        value={stepForm.messageContent}
+                        onChange={(nextValue) => setStepForm({ ...stepForm, messageContent: nextValue })}
+                      />
                     </div>
-                    <textarea
-                      ref={stepMessageRef}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
-                      rows={4}
-                      placeholder="メッセージ内容を入力..."
-                      value={stepForm.messageContent}
-                      onChange={(e) => setStepForm({ ...stepForm, messageContent: e.target.value })}
-                    />
-                  </div>
+                  ) : (
+                    <div>
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <label className="block text-xs font-medium text-gray-600">メッセージ内容 <span className="text-red-500">*</span></label>
+                        {stepForm.messageType !== 'image' && (
+                          <MessageVariableButton
+                            targetRef={stepMessageRef}
+                            value={stepForm.messageContent}
+                            onChange={(nextValue) => setStepForm({ ...stepForm, messageContent: nextValue })}
+                          />
+                        )}
+                      </div>
+                      <textarea
+                        ref={stepMessageRef}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
+                        rows={4}
+                        placeholder="メッセージ内容を入力..."
+                        value={stepForm.messageContent}
+                        onChange={(e) => setStepForm({ ...stepForm, messageContent: e.target.value })}
+                      />
+                    </div>
+                  )}
                 </>
               )}
 
