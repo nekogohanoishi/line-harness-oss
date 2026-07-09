@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import type { Scenario, ScenarioStep, ScenarioTriggerType, MessageType, DeliveryMode } from '@line-crm/shared'
 import { api, type SurveySettings } from '@/lib/api'
+import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import FlexPreviewComponent from '@/components/flex-preview'
 import MessageVariableButton from '@/components/message-variable-button'
@@ -37,25 +38,44 @@ const modeBadgeStyle: Record<DeliveryMode, { bg: string; text: string; label: st
 }
 
 type StepConditionType =
+  | 'tag_exists'
+  | 'tag_not_exists'
   | 'tracked_url_clicked'
   | 'tracked_url_not_clicked'
   | 'incoming_text_contains'
   | 'incoming_text_not_contains'
+  | 'metadata_equals'
+  | 'metadata_not_equals'
 
 const conditionOptions: { value: StepConditionType; label: string }[] = [
-  { value: 'tracked_url_not_clicked', label: '指定URLをまだクリックしていない' },
-  { value: 'tracked_url_clicked', label: '指定URLをクリック済み' },
-  { value: 'incoming_text_not_contains', label: '指定文言をまだ送っていない' },
-  { value: 'incoming_text_contains', label: '指定文言を送信済み' },
+  { value: 'tag_exists', label: 'タグがある' },
+  { value: 'tag_not_exists', label: 'タグがない' },
+  { value: 'tracked_url_clicked', label: 'URLクリック済み' },
+  { value: 'tracked_url_not_clicked', label: 'URL未クリック' },
+  { value: 'incoming_text_contains', label: '文言送信済み' },
+  { value: 'incoming_text_not_contains', label: '文言未送信' },
+  { value: 'metadata_equals', label: 'メタデータ一致' },
+  { value: 'metadata_not_equals', label: 'メタデータ不一致' },
 ]
+
+const conditionLabelMap: Record<StepConditionType, string> = {
+  tag_exists: 'タグがある',
+  tag_not_exists: 'タグがない',
+  tracked_url_clicked: 'URLクリック済み',
+  tracked_url_not_clicked: 'URL未クリック',
+  incoming_text_contains: '文言送信済み',
+  incoming_text_not_contains: '文言未送信',
+  metadata_equals: 'メタデータ一致',
+  metadata_not_equals: 'メタデータ不一致',
+}
 
 function formatConditionLabel(conditionType?: string | null): string | null {
   if (!conditionType) return null
-  if (conditionType === 'tracked_url_not_clicked') return 'URL未クリック'
-  if (conditionType === 'tracked_url_clicked') return 'URLクリック済み'
-  if (conditionType === 'incoming_text_not_contains') return '文言未送信'
-  if (conditionType === 'incoming_text_contains') return '文言送信済み'
-  return conditionType
+  return conditionLabelMap[conditionType as StepConditionType] ?? conditionType
+}
+
+function isTagCondition(conditionType?: string | null): boolean {
+  return conditionType === 'tag_exists' || conditionType === 'tag_not_exists'
 }
 
 function isTrackedUrlCondition(conditionType?: string | null): boolean {
@@ -64,6 +84,36 @@ function isTrackedUrlCondition(conditionType?: string | null): boolean {
 
 function isIncomingTextCondition(conditionType?: string | null): boolean {
   return conditionType === 'incoming_text_contains' || conditionType === 'incoming_text_not_contains'
+}
+
+function isMetadataCondition(conditionType?: string | null): boolean {
+  return conditionType === 'metadata_equals' || conditionType === 'metadata_not_equals'
+}
+
+/** 保存された conditionValue (タグID / トラッキングリンクID / メタデータJSON等) を人間可読な表示に逆引きする */
+function formatConditionValue(
+  conditionType: string | null | undefined,
+  conditionValue: string | null | undefined,
+  tags: TagOpt[],
+  trackedLinks: TrackedLinkOpt[],
+): string {
+  if (!conditionValue) return ''
+  if (isTagCondition(conditionType)) {
+    return tags.find((t) => t.id === conditionValue)?.name ?? conditionValue
+  }
+  if (isTrackedUrlCondition(conditionType)) {
+    const link = trackedLinks.find((l) => l.id === conditionValue)
+    return link ? (link.name ?? link.originalUrl) : conditionValue
+  }
+  if (isMetadataCondition(conditionType)) {
+    try {
+      const parsed = JSON.parse(conditionValue) as { key?: string; value?: unknown }
+      return `${parsed.key ?? ''} = ${parsed.value ?? ''}`
+    } catch {
+      return conditionValue
+    }
+  }
+  return conditionValue
 }
 
 function formatDelay(minutes: number): string {
@@ -110,6 +160,8 @@ interface StepFormState {
   onReachTagId: string | null
   conditionType: string | null
   conditionValue: string
+  metadataKey: string
+  metadataValueInput: string
   inputMode: 'direct' | 'template' | 'survey'
 }
 
@@ -124,6 +176,8 @@ function emptyStepForm(stepOrder: number): StepFormState {
     onReachTagId: null,
     conditionType: null,
     conditionValue: '',
+    metadataKey: '',
+    metadataValueInput: '',
     inputMode: 'direct',
   }
 }
@@ -139,6 +193,12 @@ interface TemplateOpt {
 interface TagOpt {
   id: string
   name: string
+}
+
+interface TrackedLinkOpt {
+  id: string
+  name: string | null
+  originalUrl: string
 }
 
 interface ScenarioStats {
@@ -246,6 +306,7 @@ function ImagePreview({ content }: { content: string }) {
 
 export default function ScenarioDetailClient({ scenarioId }: { scenarioId: string }) {
   const id = scenarioId
+  const { selectedAccountId } = useAccount()
 
   const [scenario, setScenario] = useState<ScenarioWithSteps | null>(null)
   const [loading, setLoading] = useState(true)
@@ -268,6 +329,21 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
   const [templates, setTemplates] = useState<TemplateOpt[]>([])
   const [tags, setTags] = useState<TagOpt[]>([])
   const [surveys, setSurveys] = useState<SurveySettings[]>([])
+  const [trackedLinks, setTrackedLinks] = useState<TrackedLinkOpt[]>([])
+
+  // テスト送信: ステップごとの送信中フラグ / 結果メッセージ
+  const [testSendingStepId, setTestSendingStepId] = useState<string | null>(null)
+  const [testSendMessages, setTestSendMessages] = useState<Record<string, string>>({})
+
+  // テスト受信者未設定時の簡易登録モーダル
+  const [recipientModalOpen, setRecipientModalOpen] = useState(false)
+  const [recipientQuery, setRecipientQuery] = useState('')
+  const [recipientResults, setRecipientResults] = useState<Array<{ id: string; displayName: string | null }>>([])
+  const [recipientSearching, setRecipientSearching] = useState(false)
+  const [recipientSelected, setRecipientSelected] = useState<Set<string>>(new Set())
+  const [recipientSaving, setRecipientSaving] = useState(false)
+  const [recipientError, setRecipientError] = useState('')
+  const pendingTestStepIdRef = useRef<string | null>(null)
 
   const deliveryMode: DeliveryMode = (scenario?.deliveryMode ?? 'relative') as DeliveryMode
 
@@ -298,7 +374,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
     loadScenario()
   }, [loadScenario])
 
-  // 並列で stats / templates / tags を取得（リグレッションを起こさないよう失敗は無視）
+  // 並列で stats / templates / tags / トラッキングリンクを取得（リグレッションを起こさないよう失敗は無視）
   useEffect(() => {
     if (!id) return
     let cancelled = false
@@ -307,7 +383,8 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
       api.templates.list().catch(() => null),
       api.tags.list().catch(() => null),
       api.surveys.list().catch(() => null),
-    ]).then(([statsRes, tplRes, tagRes, surveysRes]) => {
+      api.trackedLinks.list().catch(() => null),
+    ]).then(([statsRes, tplRes, tagRes, surveysRes, linkRes]) => {
       if (cancelled) return
       if (statsRes && statsRes.success) setStats(statsRes.data)
       if (tplRes && tplRes.success) {
@@ -324,6 +401,9 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
       }
       if (surveysRes && surveysRes.success) {
         setSurveys(surveysRes.data)
+      }
+      if (linkRes && linkRes.success) {
+        setTrackedLinks(linkRes.data.map((l) => ({ id: l.id, name: l.name, originalUrl: l.originalUrl })))
       }
     })
     return () => { cancelled = true }
@@ -367,6 +447,17 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
   const openEditStep = (step: ScenarioStep) => {
     const ui = uiFromOffsetMinutes(step.offsetMinutes)
     const surveyId = getSurveyIdFromContent(step.messageContent)
+    let metadataKey = ''
+    let metadataValueInput = ''
+    if (isMetadataCondition(step.conditionType) && step.conditionValue) {
+      try {
+        const parsed = JSON.parse(step.conditionValue) as { key?: string; value?: unknown }
+        metadataKey = parsed.key ?? ''
+        metadataValueInput = parsed.value !== undefined ? String(parsed.value) : ''
+      } catch {
+        // 手書き時代の壊れた JSON 等。キー/値は空のまま、生値は他 UI で確認できる。
+      }
+    }
     setStepForm({
       stepOrder: step.stepOrder,
       schedule: {
@@ -383,6 +474,8 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
       onReachTagId: step.onReachTagId ?? null,
       conditionType: step.conditionType ?? null,
       conditionValue: step.conditionValue ?? '',
+      metadataKey,
+      metadataValueInput,
       inputMode: surveyId ? 'survey' : step.templateId ? 'template' : 'direct',
     })
     setEditingStepId(step.id)
@@ -425,7 +518,12 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
         return
       }
     }
-    if (stepForm.conditionType && !stepForm.conditionValue.trim()) {
+    if (isMetadataCondition(stepForm.conditionType)) {
+      if (!stepForm.metadataKey.trim()) {
+        setStepError('メタデータのキーを入力してください')
+        return
+      }
+    } else if (stepForm.conditionType && !stepForm.conditionValue.trim()) {
       setStepError('配信条件の値を入力してください')
       return
     }
@@ -457,6 +555,13 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
           payloadMessageContent = buildSurveyFlexContent(survey) || ' '
         }
       }
+      // メタデータ条件は「キー」「値」の2入力から JSON を組み立てる (手書きJSON廃止)。
+      // それ以外の条件は conditionValue (テキスト入力 or プルダウン選択値) をそのまま使う。
+      const conditionValueToSave = !stepForm.conditionType
+        ? null
+        : isMetadataCondition(stepForm.conditionType)
+          ? JSON.stringify({ key: stepForm.metadataKey.trim(), value: stepForm.metadataValueInput })
+          : stepForm.conditionValue.trim()
       const payload = {
         stepOrder: stepForm.stepOrder,
         ...schedulePayload,
@@ -465,7 +570,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
         templateId: stepForm.inputMode === 'template' ? stepForm.templateId : null,
         onReachTagId: stepForm.onReachTagId,
         conditionType: stepForm.conditionType,
-        conditionValue: stepForm.conditionType ? stepForm.conditionValue.trim() : null,
+        conditionValue: conditionValueToSave,
       }
       if (editingStepId) {
         const res = await api.scenarios.updateStep(id, editingStepId, payload)
@@ -521,6 +626,151 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
       setError('並び替えに失敗しました')
     }
   }
+
+  /** mode に応じて既存ステップの schedule フィールドを addStep 用ペイロードに変換する */
+  function scheduleFromStep(mode: DeliveryMode, step: ScenarioStep) {
+    if (mode === 'relative') return { delayMinutes: step.delayMinutes }
+    if (mode === 'elapsed') return { offsetDays: step.offsetDays ?? 0, offsetMinutes: step.offsetMinutes ?? 0 }
+    return { offsetDays: step.offsetDays ?? 0, deliveryTime: step.deliveryTime ?? '09:00' }
+  }
+
+  const handleDuplicateStep = async (step: ScenarioStep) => {
+    if (!scenario) return
+    const sorted = [...scenario.steps].sort((a, b) => a.stepOrder - b.stepOrder)
+    // 複製先 (step.stepOrder + 1) を空けるため、それ以降のステップを +1 ずらす
+    const toShift = sorted.filter((s) => s.stepOrder > step.stepOrder)
+    try {
+      if (toShift.length > 0) {
+        await api.scenarios.reorderSteps(id, toShift.map((s) => ({ stepId: s.id, stepOrder: s.stepOrder + 1 })))
+      }
+      const res = await api.scenarios.addStep(id, {
+        stepOrder: step.stepOrder + 1,
+        ...scheduleFromStep(deliveryMode, step),
+        messageType: step.messageType,
+        messageContent: step.messageContent,
+        templateId: step.templateId,
+        onReachTagId: step.onReachTagId,
+        conditionType: step.conditionType,
+        conditionValue: step.conditionValue,
+      })
+      if (!res.success) {
+        setError('ステップの複製に失敗しました')
+        return
+      }
+      loadScenario()
+      reloadStats()
+    } catch {
+      setError('ステップの複製に失敗しました')
+    }
+  }
+
+  const handleTestSend = async (stepId: string) => {
+    setTestSendingStepId(stepId)
+    setTestSendMessages((prev) => ({ ...prev, [stepId]: '' }))
+    try {
+      const accountId = scenario?.lineAccountId ?? selectedAccountId ?? undefined
+      const res = await api.scenarios.testSendStep(id, stepId, accountId)
+      if (res.success) {
+        setTestSendMessages((prev) => ({ ...prev, [stepId]: `${res.sent ?? 0}人に送信しました` }))
+      } else if (res.error === 'no_test_recipients') {
+        setTestSendMessages((prev) => ({
+          ...prev,
+          [stepId]: 'テスト受信者が未設定です。設定画面から登録してください',
+        }))
+        openRecipientModal(stepId, accountId)
+      } else {
+        setTestSendMessages((prev) => ({ ...prev, [stepId]: res.error || '送信に失敗しました' }))
+      }
+    } catch {
+      setTestSendMessages((prev) => ({ ...prev, [stepId]: '送信に失敗しました' }))
+    } finally {
+      setTestSendingStepId(null)
+    }
+  }
+
+  // ── テスト受信者 未設定時の簡易登録モーダル ──────────────────────────────
+  const recipientAccountIdRef = useRef<string | undefined>(undefined)
+
+  const searchFriendsForRecipientModal = useCallback(async (query: string) => {
+    setRecipientSearching(true)
+    try {
+      const res = await api.friends.list({ search: query || undefined, limit: 20, includeTags: false })
+      if (res.success) {
+        setRecipientResults(res.data.items.map((f) => ({ id: f.id, displayName: f.displayName })))
+      }
+    } catch {
+      // 検索失敗は無視 (一覧が更新されないだけ)
+    } finally {
+      setRecipientSearching(false)
+    }
+  }, [])
+
+  function openRecipientModal(stepId: string, accountId?: string) {
+    if (!accountId) {
+      // グローバルシナリオでアカウント未選択の場合、どのアカウントの
+      // test_recipients を編集すべきか判断できないためモーダルは出さない。
+      return
+    }
+    pendingTestStepIdRef.current = stepId
+    recipientAccountIdRef.current = accountId
+    setRecipientError('')
+    setRecipientQuery('')
+    setRecipientSelected(new Set())
+    setRecipientModalOpen(true)
+    api.accountSettings.getTestRecipients(accountId).then((res) => {
+      if (res.success) {
+        setRecipientSelected(new Set(res.data.map((f) => f.id)))
+      }
+    }).catch(() => {})
+    searchFriendsForRecipientModal('')
+  }
+
+  function closeRecipientModal() {
+    setRecipientModalOpen(false)
+    pendingTestStepIdRef.current = null
+  }
+
+  function toggleRecipientSelected(friendId: string) {
+    setRecipientSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(friendId)) next.delete(friendId)
+      else next.add(friendId)
+      return next
+    })
+  }
+
+  const handleSaveRecipients = async () => {
+    const accountId = recipientAccountIdRef.current
+    if (!accountId) return
+    setRecipientSaving(true)
+    setRecipientError('')
+    try {
+      const res = await api.accountSettings.updateTestRecipients(accountId, Array.from(recipientSelected))
+      if (!res.success) {
+        setRecipientError('保存に失敗しました')
+        return
+      }
+      const stepId = pendingTestStepIdRef.current
+      closeRecipientModal()
+      // 登録直後に、元々テスト送信しようとしていたステップへ自動で再送する
+      if (stepId) {
+        handleTestSend(stepId)
+      }
+    } catch {
+      setRecipientError('保存に失敗しました')
+    } finally {
+      setRecipientSaving(false)
+    }
+  }
+
+  // 検索欄の入力をデバウンスして再検索 (モーダルが開いている間のみ)
+  useEffect(() => {
+    if (!recipientModalOpen) return
+    const timer = setTimeout(() => {
+      searchFriendsForRecipientModal(recipientQuery)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [recipientQuery, recipientModalOpen, searchFriendsForRecipientModal])
 
   if (loading) {
     return (
@@ -889,32 +1139,76 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                     )}
                   </select>
                 </div>
-                {stepForm.conditionType && (
+                {stepForm.conditionType && isTagCondition(stepForm.conditionType) && (
                   <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">
-                      {isTrackedUrlCondition(stepForm.conditionType)
-                        ? '対象URLまたはリンク名'
-                        : isIncomingTextCondition(stepForm.conditionType)
-                          ? '対象文言'
-                          : '条件値'}
-                    </label>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">対象タグ</label>
+                    <select
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                      value={stepForm.conditionValue}
+                      onChange={(e) => setStepForm({ ...stepForm, conditionValue: e.target.value })}
+                    >
+                      <option value="">-- 選択してください --</option>
+                      {tags.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {stepForm.conditionType && isTrackedUrlCondition(stepForm.conditionType) && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">対象トラッキングリンク</label>
+                    <select
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                      value={stepForm.conditionValue}
+                      onChange={(e) => setStepForm({ ...stepForm, conditionValue: e.target.value })}
+                    >
+                      <option value="">-- 選択してください --</option>
+                      {trackedLinks.map((l) => (
+                        <option key={l.id} value={l.id}>{l.name ?? l.originalUrl}</option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      作成会リンクを押した人には翌日追撃を送らない、という分岐に使います
+                    </p>
+                  </div>
+                )}
+                {stepForm.conditionType && isIncomingTextCondition(stepForm.conditionType) && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">対象文言</label>
                     <input
                       type="text"
                       className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                      placeholder={isIncomingTextCondition(stepForm.conditionType) ? '例: 作成会希望' : '例: roadmap または https://...'}
+                      placeholder="例: 作成会希望"
                       value={stepForm.conditionValue}
                       onChange={(e) => setStepForm({ ...stepForm, conditionValue: e.target.value })}
                     />
-                    {isTrackedUrlCondition(stepForm.conditionType) && (
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        作成会リンクを押した人には翌日追撃を送らない、という分岐に使います
-                      </p>
-                    )}
-                    {isIncomingTextCondition(stepForm.conditionType) && (
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        作成会希望など、指定した文言を送っていない人だけに追撃する場合に使います
-                      </p>
-                    )}
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      作成会希望など、指定した文言を送っていない人だけに追撃する場合に使います
+                    </p>
+                  </div>
+                )}
+                {stepForm.conditionType && isMetadataCondition(stepForm.conditionType) && (
+                  <div className="space-y-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">メタデータのキー</label>
+                      <input
+                        type="text"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                        placeholder="例: industry"
+                        value={stepForm.metadataKey}
+                        onChange={(e) => setStepForm({ ...stepForm, metadataKey: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">値</label>
+                      <input
+                        type="text"
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                        placeholder="例: 弁護士"
+                        value={stepForm.metadataValueInput}
+                        onChange={(e) => setStepForm({ ...stepForm, metadataValueInput: e.target.value })}
+                      />
+                    </div>
                   </div>
                 )}
               </div>
@@ -1051,8 +1345,11 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                     )}
                     {step.conditionType && step.conditionValue && (
                       <p className="mt-1 text-xs text-amber-700">
-                        配信条件: {formatConditionLabel(step.conditionType)} / {step.conditionValue}
+                        配信条件: {formatConditionLabel(step.conditionType)} / {formatConditionValue(step.conditionType, step.conditionValue, tags, trackedLinks)}
                       </p>
+                    )}
+                    {testSendMessages[step.id] && (
+                      <p className="mt-1 text-xs text-blue-700">{testSendMessages[step.id]}</p>
                     )}
                   </div>
                   <div className="flex flex-col items-stretch gap-1 shrink-0">
@@ -1074,6 +1371,19 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                         ↓
                       </button>
                     </div>
+                    <button
+                      onClick={() => handleTestSend(step.id)}
+                      disabled={testSendingStepId === step.id}
+                      className="text-xs text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50 transition-colors disabled:opacity-50"
+                    >
+                      {testSendingStepId === step.id ? '送信中...' : 'テスト送信'}
+                    </button>
+                    <button
+                      onClick={() => handleDuplicateStep(step)}
+                      className="text-xs text-gray-600 hover:text-gray-800 px-2 py-1 rounded hover:bg-gray-100 transition-colors"
+                    >
+                      複製
+                    </button>
                     <button
                       onClick={() => openEditStep(step)}
                       className="text-xs text-green-600 hover:text-green-700 px-2 py-1 rounded hover:bg-green-50 transition-colors"
@@ -1099,6 +1409,63 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
         scenarioId={id}
         onClose={() => setPreviewOpen(false)}
       />
+
+      {/* テスト受信者 未設定時の簡易登録モーダル */}
+      {recipientModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-5 space-y-3">
+            <h3 className="text-sm font-semibold text-gray-800">テスト受信者を選択</h3>
+            <p className="text-xs text-gray-500">
+              検索して友だちを選び、保存すると自動でテスト送信を再実行します。
+            </p>
+            <input
+              type="text"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+              placeholder="名前で検索..."
+              value={recipientQuery}
+              onChange={(e) => setRecipientQuery(e.target.value)}
+            />
+            <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+              {recipientSearching ? (
+                <p className="p-3 text-xs text-gray-400">検索中...</p>
+              ) : recipientResults.length === 0 ? (
+                <p className="p-3 text-xs text-gray-400">該当する友だちがいません</p>
+              ) : (
+                recipientResults.map((f) => (
+                  <label key={f.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">
+                    <input
+                      type="checkbox"
+                      checked={recipientSelected.has(f.id)}
+                      onChange={() => toggleRecipientSelected(f.id)}
+                      className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                    />
+                    <span>{f.displayName || '(名前未設定)'}</span>
+                  </label>
+                ))
+              )}
+            </div>
+            <p className="text-xs text-gray-500">選択中: {recipientSelected.size}人</p>
+            {recipientError && <p className="text-xs text-red-600">{recipientError}</p>}
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={handleSaveRecipients}
+                disabled={recipientSaving || recipientSelected.size === 0}
+                className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
+                style={{ backgroundColor: '#06C755' }}
+              >
+                {recipientSaving ? '保存中...' : '保存してテスト送信'}
+              </button>
+              <button
+                onClick={closeRecipientModal}
+                disabled={recipientSaving}
+                className="px-4 py-2 min-h-[44px] text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                キャンセル
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

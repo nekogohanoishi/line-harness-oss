@@ -228,6 +228,19 @@ export const api = {
     delete: (id: string) =>
       fetchApi<ApiResponse<null>>(`/api/tags/${id}`, { method: 'DELETE' }),
   },
+  trackedLinks: {
+    list: () =>
+      fetchApi<ApiResponse<Array<{
+        id: string
+        name: string | null
+        originalUrl: string
+        trackingUrl: string
+        tagId: string | null
+        scenarioId: string | null
+        isActive: boolean
+        clickCount: number
+      }>>>('/api/tracked-links'),
+  },
   registrationSurvey: {
     get: () =>
       fetchApi<ApiResponse<RegistrationSurveySettings>>('/api/forms/registration-survey/settings'),
