@@ -10,10 +10,21 @@ import {
   deleteScenarioStep,
   enrollFriendInScenario,
   getFriendById,
+  getLineAccountById,
+  getLineAccounts,
   computeNextDeliveryAt,
+  jstNow,
 } from '@line-crm/db';
 import { computeScenarioStats } from '../services/scenario-stats.js';
 import { resolveStepContent } from '@line-crm/db';
+import { LineClient } from '@line-crm/line-sdk';
+import {
+  expandVariables,
+  buildMessage,
+  resolveMetadata,
+  buildWebinarTemplateContext,
+  messageToLogPayload,
+} from '../services/step-delivery.js';
 import type {
   Scenario as DbScenario,
   ScenarioWithStepCount as DbScenarioWithStepCount,
@@ -516,6 +527,112 @@ scenarios.delete('/api/scenarios/:id/steps/:stepId', async (c) => {
     return c.json({ success: true, data: null });
   } catch (err) {
     console.error('DELETE /api/scenarios/:id/steps/:stepId error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// POST /api/scenarios/:id/steps/:stepId/test-send - push this step's content to the
+// account's configured test recipients (account_settings key='test_recipients').
+//
+// アカウント解決: 「どの account_settings の test_recipients を見るか」は、
+// body.accountId (UI が現在選択中のアカウント) → scenario.line_account_id (専用シナリオ)
+// の優先順で決める。どちらも無ければ (全アカ共通シナリオを未選択状態で開いた場合) 400。
+// 実際の push に使う channel_access_token は friend.line_account_id を優先し、
+// 無ければ (fallback) is_active な line_account のうち display_order が最小のものを使う。
+scenarios.post('/api/scenarios/:id/steps/:stepId/test-send', async (c) => {
+  try {
+    const scenarioId = c.req.param('id');
+    const stepId = c.req.param('stepId');
+    const body = await c.req.json<{ accountId?: string }>().catch(() => ({}) as { accountId?: string });
+
+    const scenarioRow = await c.env.DB
+      .prepare(`SELECT id, line_account_id FROM scenarios WHERE id = ?`)
+      .bind(scenarioId)
+      .first<{ id: string; line_account_id: string | null }>();
+    if (!scenarioRow) {
+      return c.json({ success: false, error: 'Scenario not found' }, 404);
+    }
+
+    const stepRow = await c.env.DB
+      .prepare(`SELECT * FROM scenario_steps WHERE id = ? AND scenario_id = ?`)
+      .bind(stepId, scenarioId)
+      .first<DbScenarioStep>();
+    if (!stepRow) {
+      return c.json({ success: false, error: 'Step not found' }, 404);
+    }
+
+    const targetAccountId = body.accountId ?? scenarioRow.line_account_id ?? null;
+    if (!targetAccountId) {
+      return c.json(
+        { success: false, error: 'accountId is required to resolve test recipients for a global scenario' },
+        400,
+      );
+    }
+
+    const settingRow = await c.env.DB
+      .prepare(`SELECT value FROM account_settings WHERE line_account_id = ? AND key = 'test_recipients'`)
+      .bind(targetAccountId)
+      .first<{ value: string }>();
+    const friendIds: string[] = settingRow ? (JSON.parse(settingRow.value) as string[]) : [];
+    if (friendIds.length === 0) {
+      return c.json({ success: false, error: 'no_test_recipients' }, 400);
+    }
+
+    // friend.line_account_id が無い友だち用のフォールバック account (最初の active account)
+    const allAccounts = await getLineAccounts(c.env.DB);
+    const fallbackAccount = allAccounts.find((a) => a.is_active) ?? null;
+
+    const resolved = await resolveStepContent(c.env.DB, stepRow);
+    const workerUrl = c.env.WORKER_URL;
+    const now = jstNow();
+
+    let sent = 0;
+    for (const friendId of friendIds) {
+      const friend = await getFriendById(c.env.DB, friendId);
+      if (!friend || !friend.line_user_id) continue;
+
+      const account = friend.line_account_id
+        ? await getLineAccountById(c.env.DB, friend.line_account_id)
+        : fallbackAccount;
+      if (!account) continue;
+
+      try {
+        const resolvedMeta = await resolveMetadata(c.env.DB, {
+          user_id: friend.user_id,
+          metadata: friend.metadata,
+        });
+        const friendWithMeta = { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1];
+        const webinarCtx = await buildWebinarTemplateContext(c.env.DB, friend.id, workerUrl);
+        const expandedContent = expandVariables(resolved.messageContent, friendWithMeta, workerUrl, webinarCtx);
+
+        // 本文冒頭に【テスト送信】を付ける (text のみ; flex はそのまま送る)
+        const contentToSend =
+          resolved.messageType === 'text' ? `【テスト送信】\n${expandedContent}` : expandedContent;
+
+        const message = buildMessage(resolved.messageType, contentToSend);
+        const lineClient = new LineClient(account.channel_access_token);
+        await lineClient.pushMessage(friend.line_user_id, [message]);
+        sent++;
+
+        const logPayload = messageToLogPayload(message);
+        await c.env.DB
+          .prepare(
+            `INSERT INTO messages_log
+               (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id,
+                delivery_type, source, line_account_id, created_at)
+             VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, 'test', 'scenario', ?, ?)`,
+          )
+          .bind(crypto.randomUUID(), friend.id, logPayload.messageType, logPayload.content, account.id, now)
+          .run();
+      } catch (err) {
+        // push 失敗は sent にカウントしない。他の受信者への送信は続ける。
+        console.error(`test-send push failed for friend=${friendId} step=${stepId}:`, err);
+      }
+    }
+
+    return c.json({ success: true, sent });
+  } catch (err) {
+    console.error('POST /api/scenarios/:id/steps/:stepId/test-send error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });

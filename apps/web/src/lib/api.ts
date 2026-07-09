@@ -370,6 +370,14 @@ export const api = {
         paused: number
         steps: Array<{ stepOrder: number; reachedCount: number; reachRate: number }>
       }>>(`/api/scenarios/${id}/stats`),
+    testSendStep: (id: string, stepId: string, accountId?: string | null) =>
+      fetchApi<{ success: boolean; sent?: number; error?: string }>(
+        `/api/scenarios/${id}/steps/${stepId}/test-send`,
+        {
+          method: 'POST',
+          body: JSON.stringify(accountId ? { accountId } : {}),
+        },
+      ),
   },
   broadcasts: {
     list: (params?: { accountId?: string }) => {
