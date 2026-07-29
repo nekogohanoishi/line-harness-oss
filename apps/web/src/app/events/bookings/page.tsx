@@ -6,6 +6,7 @@ import Link from 'next/link'
 import Header from '@/components/layout/header'
 import { useAccount } from '@/contexts/account-context'
 import { eventsApi, type EventBookingItem, type EventDetail } from '@/lib/api'
+import { formatJstDateTime } from '@line-crm/shared'
 
 // 「全件」を先頭 & 初期表示にする。承認不要イベント (requires_approval=0)
 // の予約は最初から confirmed で入るため、「承認待ち」を初期タブにすると
@@ -29,16 +30,6 @@ const statusBadge: Record<string, string> = {
   expired: 'bg-gray-100 text-gray-500',
   attended: 'bg-blue-100 text-blue-800',
   no_show: 'bg-red-100 text-red-800',
-}
-
-function formatJp(iso: string): string {
-  return new Date(iso).toLocaleString('ja-JP', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 function BookingsInner() {
@@ -181,9 +172,9 @@ function BookingsInner() {
                   <tr>
                     <th className="text-left px-4 py-2 font-medium">友だち</th>
                     <th className="text-left px-4 py-2 font-medium">経由アカ</th>
-                    <th className="text-left px-4 py-2 font-medium">予約枠</th>
+                    <th className="text-left px-4 py-2 font-medium">予約枠（JST）</th>
                     <th className="text-left px-4 py-2 font-medium">状態</th>
-                    <th className="text-left px-4 py-2 font-medium">受付日時</th>
+                    <th className="text-left px-4 py-2 font-medium">受付日時（JST）</th>
                     <th className="text-right px-4 py-2 font-medium">操作</th>
                   </tr>
                 </thead>
@@ -199,13 +190,13 @@ function BookingsInner() {
                         {b.friend_display_name ?? b.friend_id.slice(0, 8)}
                       </td>
                       <td className="px-4 py-3 text-gray-700 text-xs">{accountLabel}</td>
-                      <td className="px-4 py-3 text-gray-700">{formatJp(b.slot_starts_at)}</td>
+                      <td className="px-4 py-3 text-gray-700">{formatJstDateTime(b.slot_starts_at, { withYear: true })}</td>
                       <td className="px-4 py-3">
                         <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadge[b.status] ?? 'bg-gray-100'}`}>
                           {STATUS_TABS.find((t) => t.key === b.status)?.label ?? b.status}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-gray-500 text-xs">{formatJp(b.requested_at)}</td>
+                      <td className="px-4 py-3 text-gray-500 text-xs">{formatJstDateTime(b.requested_at, { withYear: true })}</td>
                       <td className="px-4 py-3 text-right">
                         {b.status === 'requested' && (
                           <div className="inline-flex gap-1.5">

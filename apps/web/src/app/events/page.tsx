@@ -5,12 +5,11 @@ import Link from 'next/link'
 import Header from '@/components/layout/header'
 import { eventsApi, type EventListItem } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
+import { formatJstDateTime } from '@line-crm/shared'
 
-function formatJpDate(iso: string | null): string {
+function formatNextSlot(iso: string | null): string {
   if (!iso) return '日時未設定'
-  return new Date(iso).toLocaleString('ja-JP', {
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  })
+  return `${formatJstDateTime(iso, { withYear: true })} (JST)`
 }
 
 export default function EventsListPage() {
@@ -124,7 +123,7 @@ export default function EventsListPage() {
                     </div>
                   </div>
                   <div className="text-xs text-gray-500 mb-3">
-                    {formatJpDate(e.next_slot_starts_at)}
+                    {formatNextSlot(e.next_slot_starts_at)}
                   </div>
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-gray-700">

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { eventsApi, type EventDetail, type EventSlot } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
+import { formatJstDateTime, formatJstTime } from '@line-crm/shared'
 import { generateBulkSlots, type BulkSlotInput } from './bulk-slot-generator'
 import WebinarSettingsTab from '@/components/webinar/webinar-settings-tab'
 
@@ -58,13 +59,6 @@ export interface EventFormProps {
 
 function jstNow(): Date {
   return new Date(Date.now())
-}
-
-function formatJpDateTime(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleString('ja-JP', {
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  })
 }
 
 export default function EventForm({ accountId, eventId }: EventFormProps) {
@@ -856,7 +850,7 @@ function SlotsTab({
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-600">
               <tr>
-                <th className="text-left px-3 py-2 font-medium">日時</th>
+                <th className="text-left px-3 py-2 font-medium">日時（JST）</th>
                 <th className="text-left px-3 py-2 font-medium">定員</th>
                 <th className="text-left px-3 py-2 font-medium">予約数</th>
                 <th className="text-left px-3 py-2 font-medium">状態</th>
@@ -867,7 +861,7 @@ function SlotsTab({
               {slots.map((s) => (
                 <tr key={s.id} className="border-t border-gray-200">
                   <td className="px-3 py-2 text-gray-800">
-                    {formatJpDateTime(s.starts_at)} 〜 {formatJpDateTime(s.ends_at).slice(-5)}
+                    {formatJstDateTime(s.starts_at, { withYear: true })} 〜 {formatJstTime(s.ends_at)}
                   </td>
                   <td className="px-3 py-2 text-gray-700">{s.capacity ?? '無制限'}</td>
                   <td className="px-3 py-2 text-gray-700">{s.active_count ?? 0}</td>
