@@ -7,7 +7,11 @@ import Header from '@/components/layout/header'
 import { useAccount } from '@/contexts/account-context'
 import { eventsApi, type EventBookingItem, type EventDetail } from '@/lib/api'
 
+// 「全件」を先頭 & 初期表示にする。承認不要イベント (requires_approval=0)
+// の予約は最初から confirmed で入るため、「承認待ち」を初期タブにすると
+// 新着予約が 1 件も表示されず「予約が入ったのに見えない」事故になる。
 const STATUS_TABS: Array<{ key: string; label: string }> = [
+  { key: 'all', label: '全件' },
   { key: 'requested', label: '承認待ち' },
   { key: 'confirmed', label: '確定' },
   { key: 'rejected', label: '拒否' },
@@ -15,7 +19,6 @@ const STATUS_TABS: Array<{ key: string; label: string }> = [
   { key: 'expired', label: '期限切れ' },
   { key: 'attended', label: '参加済' },
   { key: 'no_show', label: '無断' },
-  { key: 'all', label: '全件' },
 ]
 
 const statusBadge: Record<string, string> = {
@@ -44,7 +47,7 @@ function BookingsInner() {
   const { selectedAccountId, accounts } = useAccount()
   const [event, setEvent] = useState<EventDetail | null>(null)
   const [items, setItems] = useState<EventBookingItem[]>([])
-  const [tab, setTab] = useState<string>('requested')
+  const [tab, setTab] = useState<string>('all')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
