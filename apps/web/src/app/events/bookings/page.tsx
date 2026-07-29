@@ -49,8 +49,12 @@ function BookingsInner() {
     setError(null)
     try {
       const filters = tab === 'all' ? {} : { status: tab }
+      // event を state キャッシュから再利用しない。Next.js の app router は
+      // 同一ルート内のクエリ変更 (?id=A → ?id=B) でコンポーネントを
+      // remount しないため、キャッシュすると別イベントの予約一覧に
+      // 前のイベント名ヘッダが表示され続ける。
       const [evRes, listRes] = await Promise.all([
-        event == null ? eventsApi.getEvent(selectedAccountId, eventId) : Promise.resolve(event),
+        eventsApi.getEvent(selectedAccountId, eventId),
         eventsApi.listBookings(selectedAccountId, eventId, filters),
       ])
       setEvent(evRes)
@@ -60,12 +64,17 @@ function BookingsInner() {
     } finally {
       setLoading(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAccountId, eventId, tab])
 
   useEffect(() => {
     void refresh()
   }, [refresh])
+
+  // イベント切替時に前イベントの表示 (ヘッダ名・一覧) を即座に消す
+  useEffect(() => {
+    setEvent(null)
+    setItems([])
+  }, [eventId])
 
   if (!eventId) {
     return <div className="p-4 text-red-700">id クエリが必要です</div>
