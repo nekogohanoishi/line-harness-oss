@@ -7,9 +7,12 @@ import { eventsApi, type EventListItem } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import { formatJstDateTime } from '@line-crm/shared'
 
+// next_slot_starts_at は「現在時刻以降の有効な枠の最小 starts_at」。
+// null は「枠が未作成」だけでなく「全枠が開催済み」でも返るため、
+// 「日時未設定」と表示するとイベント設定漏れと誤認させる。
 function formatNextSlot(iso: string | null): string {
-  if (!iso) return '日時未設定'
-  return `${formatJstDateTime(iso, { withYear: true })} (JST)`
+  if (!iso) return '今後の開催枠なし'
+  return `次回 ${formatJstDateTime(iso, { withYear: true })} (JST)`
 }
 
 export default function EventsListPage() {
