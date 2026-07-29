@@ -1,7 +1,10 @@
-/* event-booking 専用 CSS。salon-booking と同じパターン。
+/* event-booking 専用 CSS。
  * Tailwind v4: theme + utilities を取り込み、preflight (base reset) は除外。
  * preflight を含めると既存 form.ts / Calendar booking 用 inline CSS と衝突する
  * ため、event-booking namespace (body.eb-active 配下) にだけ手動 reset を当てる。
+ *
+ * デザイン: 司法試験受験生向けの落ち着いた信頼感。カードの積み重ねではなく
+ * 余白・タイポグラフィ・罫線で整える。LINE緑はアクション/選択にだけ使う。
  */
 @import "tailwindcss/theme.css";
 @import "tailwindcss/utilities.css";
@@ -93,12 +96,587 @@ body.eb-active #app {
   color: inherit;
   text-decoration: inherit;
 }
+:where(body.eb-active) summary {
+  cursor: pointer;
+}
 
-/* LINE 緑テーマ (salon-booking と統一) */
-.eb-line-green { background-color: #06C755; }
-.eb-line-green-text { color: #06C755; }
+/* ─── デザイントークン ───────────────────────────────────── */
+body.eb-active {
+  --eb-green: #06C755;        /* LINE ブランド: アクション/選択のみ */
+  --eb-green-press: #05a94a;
+  --eb-green-deep: #0e6b3d;   /* 本文中のリンク・強調用の深緑 */
+  --eb-green-wash: #ecf7f0;
+  --eb-ink: #171f1a;          /* 見出し */
+  --eb-text: #3b433e;         /* 本文 */
+  --eb-muted: #78827b;        /* 補足 */
+  --eb-paper: #f6f7f6;        /* 地色 (わずかに緑がかったニュートラル) */
+  --eb-surface: #ffffff;
+  --eb-hairline: #e2e6e3;
+  --eb-danger: #c4382e;
+  --eb-danger-bg: #fbeeec;
+  --eb-amber-text: #8a5c00;
+  --eb-amber-bg: #f9f0da;
+  --eb-blue-text: #3d5a75;
+  --eb-blue-bg: #eaf0f5;
 
-/* fade-in / slide-up アニメーション */
+  background: var(--eb-paper);
+  color: var(--eb-text);
+  font-family: 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.eb-page {
+  min-height: 100vh;
+  background: var(--eb-paper);
+}
+
+/* フォーカスリング (キーボード操作) */
+body.eb-active :focus-visible {
+  outline: 2px solid var(--eb-green);
+  outline-offset: 2px;
+}
+
+/* ─── ヘッダー ───────────────────────────────────────────── */
+.eb-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--eb-hairline);
+}
+.eb-header-inner {
+  max-width: 28rem;
+  margin: 0 auto;
+  height: 48px;
+  padding: 0 16px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+.eb-header-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--eb-ink);
+  letter-spacing: 0.04em;
+}
+.eb-header-side { display: flex; }
+.eb-header-side-right { justify-content: flex-end; }
+.eb-header-mark {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--eb-green);
+}
+.eb-header-link {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--eb-green-deep);
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 4px;
+}
+
+/* ─── 見出し・本文 ───────────────────────────────────────── */
+.eb-title {
+  font-size: 21px;
+  line-height: 1.45;
+  font-weight: 700;
+  color: var(--eb-ink);
+  letter-spacing: 0.01em;
+}
+.eb-meta {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--eb-muted);
+  letter-spacing: 0.02em;
+}
+.eb-desc {
+  font-size: 14px;
+  line-height: 1.9;
+  color: var(--eb-text);
+  white-space: pre-wrap;
+}
+.eb-text-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--eb-green-deep);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.eb-section-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--eb-green-deep);
+  letter-spacing: 0.14em;
+  margin-bottom: 12px;
+}
+.eb-load-error {
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--eb-text);
+}
+.eb-empty-inline {
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--eb-muted);
+}
+
+/* 参加条件などの折りたたみ */
+.eb-fold {
+  margin-top: 14px;
+  border-top: 1px solid var(--eb-hairline);
+  padding-top: 12px;
+}
+.eb-fold summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--eb-ink);
+}
+.eb-fold summary::-webkit-details-marker { display: none; }
+.eb-fold summary::after {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid var(--eb-muted);
+  border-bottom: 1.5px solid var(--eb-muted);
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+  margin-right: 4px;
+}
+.eb-fold[open] summary::after { transform: rotate(-135deg); }
+
+/* ─── 予約済み/上限の案内 ────────────────────────────────── */
+.eb-notice {
+  background: var(--eb-green-wash);
+  border-left: 3px solid var(--eb-green);
+  border-radius: 6px;
+  padding: 14px 16px;
+}
+.eb-notice-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--eb-green-deep);
+}
+.eb-notice-strong {
+  margin-top: 6px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--eb-ink);
+  font-variant-numeric: tabular-nums;
+}
+.eb-notice-body {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--eb-text);
+}
+.eb-notice-btn {
+  margin-top: 8px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--eb-green-deep);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ─── 日付グループ (このページの主役) ─────────────────────
+ * 左に日付レール (日の数字を大きく)、右に時間帯ボタンの列。
+ * 手帳の見開きのように「日 → その日の枠」で視線が流れる。
+ */
+.eb-daygroup {
+  display: grid;
+  grid-template-columns: 3.25rem 1fr;
+  column-gap: 14px;
+  margin-top: 18px;
+}
+.eb-daygroup:first-of-type { margin-top: 0; }
+.eb-date-rail {
+  text-align: center;
+  padding-top: 2px;
+}
+.eb-date-day {
+  display: block;
+  font-size: 26px;
+  line-height: 1;
+  font-weight: 800;
+  color: var(--eb-ink);
+  font-variant-numeric: tabular-nums;
+}
+.eb-date-sub {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--eb-muted);
+}
+.eb-daygroup-slots {
+  border-left: 2px solid var(--eb-hairline);
+  padding-left: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 時間帯ボタン */
+.eb-slot-btn {
+  min-height: 48px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 14px;
+  background: var(--eb-surface);
+  border: 1px solid var(--eb-hairline);
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--eb-ink);
+  font-variant-numeric: tabular-nums;
+  transition: transform 0.12s ease, background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.eb-slot-btn:active:not(:disabled) { transform: scale(0.985); }
+.eb-slot-btn.is-selected {
+  background: var(--eb-green);
+  border-color: var(--eb-green);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(6, 199, 85, 0.28);
+}
+.eb-slot-btn.is-selected:active:not(:disabled) { background: var(--eb-green-press); }
+/* 送信中は選択済みの枠 (.is-selected) の見た目を保ったまま無効化する */
+.eb-slot-btn:disabled:not(.is-selected) {
+  background: transparent;
+  border-style: dashed;
+  color: var(--eb-muted);
+  box-shadow: none;
+}
+.eb-slot-tilde { margin: 0 2px; font-weight: 400; }
+.eb-slot-remaining {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.eb-slot-remaining.is-few { color: var(--eb-danger); }
+.eb-slot-remaining.is-full { color: var(--eb-muted); }
+.eb-slot-btn.is-selected .eb-slot-remaining { color: rgba(255, 255, 255, 0.9); }
+
+/* ─── 相談内容 ───────────────────────────────────────────── */
+.eb-textarea {
+  width: 100%;
+  background: var(--eb-surface);
+  border: 1px solid var(--eb-hairline);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 16px; /* 16px 未満だと iOS がフォーカス時にズームする */
+  line-height: 1.7;
+  color: var(--eb-ink);
+}
+.eb-textarea::placeholder { color: #a6aea8; }
+.eb-textarea:focus {
+  outline: none;
+  border-color: var(--eb-green);
+  box-shadow: 0 0 0 3px rgba(6, 199, 85, 0.14);
+}
+.eb-note-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--eb-muted);
+}
+
+/* ─── 画面下部固定 CTA ───────────────────────────────────── */
+.eb-cta-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-top: 1px solid var(--eb-hairline);
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+}
+.eb-cta-inner {
+  max-width: 28rem;
+  margin: 0 auto;
+}
+.eb-cta-note {
+  font-size: 11px;
+  color: var(--eb-muted);
+  text-align: center;
+  margin-bottom: 8px;
+}
+.eb-cta-error {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--eb-danger);
+  background: var(--eb-danger-bg);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.eb-primary-btn {
+  width: 100%;
+  min-height: 50px;
+  padding: 0 16px;
+  border-radius: 12px;
+  background: var(--eb-green);
+  color: #fff;
+  font-weight: 700;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 2px 6px rgba(6, 199, 85, 0.22);
+  transition: transform 0.12s ease, background-color 0.15s ease;
+}
+.eb-primary-btn:active:not(:disabled) {
+  transform: scale(0.985);
+  background: var(--eb-green-press);
+}
+.eb-primary-btn:disabled {
+  background: #c2ccc5;
+  box-shadow: none;
+}
+.eb-secondary-btn {
+  min-height: 48px;
+  padding: 0 24px;
+  border-radius: 12px;
+  background: var(--eb-surface);
+  border: 1px solid var(--eb-hairline);
+  color: var(--eb-ink);
+  font-weight: 600;
+  font-size: 14px;
+}
+.eb-secondary-btn:active { background: var(--eb-paper); }
+
+.eb-btn-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 9999px;
+  animation: eb-spin 0.8s linear infinite;
+}
+
+/* ─── 完了画面 ───────────────────────────────────────────── */
+.eb-check {
+  width: 56px;
+  height: 56px;
+  margin: 16px auto 0;
+  fill: none;
+  stroke: var(--eb-green);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.eb-check-circle {
+  stroke-dasharray: 158;
+  stroke-dashoffset: 158;
+  animation: eb-draw 0.5s ease forwards;
+}
+.eb-check-mark {
+  stroke-dasharray: 34;
+  stroke-dashoffset: 34;
+  animation: eb-draw 0.3s ease 0.4s forwards;
+}
+@keyframes eb-draw { to { stroke-dashoffset: 0; } }
+
+.eb-done-title {
+  margin-top: 20px;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--eb-ink);
+}
+.eb-done-when {
+  margin-top: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--eb-green-deep);
+  font-variant-numeric: tabular-nums;
+}
+.eb-done-lead {
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--eb-muted);
+}
+
+/* 承認までの流れ (縦のステップ) */
+.eb-steps {
+  margin: 28px auto 0;
+  max-width: 260px;
+  text-align: left;
+}
+.eb-steps li {
+  position: relative;
+  padding: 0 0 20px 30px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--eb-text);
+}
+.eb-steps li:last-child { padding-bottom: 0; }
+.eb-steps li::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  border: 2px solid var(--eb-hairline);
+  background: var(--eb-paper);
+}
+.eb-steps li.is-done::before {
+  border-color: var(--eb-green);
+  background: var(--eb-green);
+}
+.eb-steps li:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 19px;
+  bottom: 2px;
+  width: 2px;
+  background: var(--eb-hairline);
+}
+
+/* ─── 予約履歴 ───────────────────────────────────────────── */
+.eb-tabs {
+  position: sticky;
+  top: 48px;
+  z-index: 10;
+  display: flex;
+  background: var(--eb-paper);
+  border-bottom: 1px solid var(--eb-hairline);
+}
+.eb-tab {
+  flex: 1;
+  min-height: 46px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--eb-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.eb-tab.is-active {
+  color: var(--eb-ink);
+  border-bottom-color: var(--eb-green);
+}
+
+.eb-book-row {
+  display: grid;
+  grid-template-columns: 3.25rem 1fr;
+  column-gap: 14px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--eb-hairline);
+}
+.eb-book-name {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.5;
+  color: var(--eb-ink);
+}
+.eb-book-time {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--eb-text);
+  font-variant-numeric: tabular-nums;
+}
+.eb-book-venue {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--eb-muted);
+}
+.eb-cancel-btn {
+  margin-top: 6px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--eb-danger);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.eb-cancel-btn:disabled {
+  color: var(--eb-muted);
+  text-decoration: none;
+}
+.eb-cancel-reason {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--eb-muted);
+}
+
+/* ステータスラベル */
+.eb-status {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.eb-status-pending { background: var(--eb-amber-bg); color: var(--eb-amber-text); }
+.eb-status-confirmed { background: var(--eb-green-wash); color: var(--eb-green-deep); }
+.eb-status-neutral { background: #eef0ee; color: var(--eb-muted); }
+.eb-status-done { background: var(--eb-blue-bg); color: var(--eb-blue-text); }
+
+/* 空状態 */
+.eb-empty {
+  padding: 72px 24px;
+  text-align: center;
+}
+.eb-empty::before {
+  content: '';
+  display: block;
+  width: 28px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--eb-green);
+  margin: 0 auto 20px;
+}
+.eb-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--eb-ink);
+}
+.eb-empty-sub {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--eb-muted);
+}
+
+/* ─── スケルトン ─────────────────────────────────────────── */
+.eb-skel {
+  border-radius: 8px;
+  background: linear-gradient(90deg, #eceeec 25%, #f4f6f4 50%, #eceeec 75%);
+  background-size: 200% 100%;
+  animation: eb-shimmer 1.4s ease infinite;
+}
+@keyframes eb-shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+/* ─── アニメーション ─────────────────────────────────────── */
 @keyframes eb-fade-in {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -111,106 +689,18 @@ body.eb-active #app {
 }
 .eb-slide-up { animation: eb-slide-up 0.3s ease both; }
 
-/* spinner */
 @keyframes eb-spin { to { transform: rotate(360deg); } }
-.eb-spinner {
-  width: 32px; height: 32px;
-  border: 3px solid #e5e7eb;
-  border-top-color: #06C755;
-  border-radius: 9999px;
-  animation: eb-spin 0.8s linear infinite;
-}
 
-/* セクションカード */
-.eb-card {
-  background: #fff;
-  border-radius: 14px;
-  padding: 18px 16px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 1px 3px rgba(0,0,0,0.06);
+@media (prefers-reduced-motion: reduce) {
+  .eb-fade-in,
+  .eb-slide-up,
+  .eb-skel,
+  .eb-check-circle,
+  .eb-check-mark {
+    animation: none;
+  }
+  .eb-check-circle,
+  .eb-check-mark {
+    stroke-dashoffset: 0;
+  }
 }
-
-/* ステータスバッジ */
-.eb-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 9999px;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-/* 戻るボタン (汎用) */
-.eb-back-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 14px 8px 10px;
-  font-size: 13px;
-  color: #4b5563;
-  background: #fff;
-  border-radius: 9999px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
-  transition: background-color 0.15s;
-}
-.eb-back-btn:hover { background: #f9fafb; }
-.eb-back-btn:active { background: #f3f4f6; }
-
-/* スロットボタン (LINE 緑のアウトライン) */
-.eb-slot-btn {
-  width: 100%;
-  padding: 14px 16px;
-  border-radius: 12px;
-  font-weight: 600;
-  font-size: 14px;
-  background: #ecfdf5;
-  color: #06C755;
-  border: 1.5px solid #06C755;
-  cursor: pointer;
-  transition: transform 0.15s, background-color 0.15s, color 0.15s;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.eb-slot-btn:active {
-  transform: scale(0.98);
-  background-color: #06C755;
-  color: #fff;
-}
-.eb-slot-btn:disabled {
-  background: #f3f4f6;
-  color: #9ca3af;
-  border-color: #e5e7eb;
-  cursor: not-allowed;
-}
-
-/* primary action (LINE 緑塗り) */
-.eb-primary-btn {
-  width: 100%;
-  padding: 14px 16px;
-  border-radius: 12px;
-  background: #06C755;
-  color: #fff;
-  font-weight: 700;
-  font-size: 15px;
-  box-shadow: 0 2px 4px rgba(6,199,85,0.18);
-  transition: transform 0.15s, opacity 0.15s;
-}
-.eb-primary-btn:active { transform: scale(0.98); }
-.eb-primary-btn:disabled { opacity: 0.5; }
-
-/* 予約済 ステート (緑系の薄いカード) */
-.eb-card.eb-card-success {
-  background: #f0fdf4;
-  border: 1px solid #86efac;
-}
-
-/* secondary action (薄いグレー塗り) */
-.eb-secondary-btn {
-  width: 100%;
-  padding: 12px 16px;
-  border-radius: 12px;
-  background: #f3f4f6;
-  color: #374151;
-  font-weight: 600;
-  font-size: 14px;
-}
-.eb-secondary-btn:active { background: #e5e7eb; }

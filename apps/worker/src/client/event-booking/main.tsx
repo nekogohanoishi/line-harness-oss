@@ -1,10 +1,21 @@
 // main.tsx — Event booking LIFF entry. Loaded via dynamic import from
 // apps/worker/src/client/main.ts (?page=event&id=<eventId> or ?page=event-me).
-// Mirrors salon-booking design language (LINE 緑 + sb-card + fade animations).
+// 友だち(受験生)が LINE 内で開くモバイル前提の予約ページ。
+// 日時は datetime.ts の純関数で JST 固定表示、API エラーはすべて日本語文言に変換する。
 
-import { StrictMode, useEffect, useState } from 'react';
+import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import './styles.css';
+import {
+  durationMinutes,
+  formatJstDateTime,
+  formatJstLongDateTime,
+  formatJstTime,
+  groupByJstDate,
+  remainingLabel,
+  toJstParts,
+  type JstParts,
+} from './datetime';
 
 let _root: Root | null = null;
 
@@ -60,25 +71,33 @@ interface MyBooking {
   slot_ends_at: string;
 }
 
+// ─── API helpers ─────────────────────────────────────────
+
+interface ApiErrorShape extends Error {
+  status: number;
+  body: unknown;
+}
+
 function buildAuthHeaders(ctx: EventBookingContext, extra: Record<string, string> = {}): Record<string, string> {
   return { Authorization: `Bearer ${ctx.idToken}`, ...extra };
 }
 
-function apiGet<T>(path: string, ctx: EventBookingContext): Promise<T> {
+async function throwApiError(r: Response): Promise<never> {
+  const text = await r.text();
+  let parsed: unknown = null;
+  try { parsed = JSON.parse(text); } catch { /* ignore */ }
+  const err = new Error(`API ${r.status}`) as ApiErrorShape;
+  err.status = r.status;
+  err.body = parsed ?? text;
+  throw err;
+}
+
+async function apiGet<T>(path: string, ctx: EventBookingContext): Promise<T> {
   const url = new URL(path, window.location.origin);
   url.searchParams.set('liffId', ctx.liffId);
-  return fetch(url.toString(), { headers: buildAuthHeaders(ctx) }).then(async (r) => {
-    if (!r.ok) {
-      const text = await r.text();
-      let parsed: unknown = null;
-      try { parsed = JSON.parse(text); } catch { /* ignore */ }
-      const err = new Error(`API ${r.status}`) as Error & { status: number; body: unknown };
-      err.status = r.status;
-      err.body = parsed ?? text;
-      throw err;
-    }
-    return r.json() as Promise<T>;
-  });
+  const r = await fetch(url.toString(), { headers: buildAuthHeaders(ctx) });
+  if (!r.ok) await throwApiError(r);
+  return r.json() as Promise<T>;
 }
 
 async function apiPost<T>(
@@ -94,67 +113,218 @@ async function apiPost<T>(
     headers: buildAuthHeaders(ctx, { 'Content-Type': 'application/json', ...extraHeaders }),
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const text = await res.text();
-    let parsed: unknown = null;
-    try { parsed = JSON.parse(text); } catch { /* ignore */ }
-    const err = new Error(`API ${res.status}`) as Error & { status: number; body: unknown };
-    err.status = res.status;
-    err.body = parsed ?? text;
-    throw err;
-  }
+  if (!res.ok) await throwApiError(res);
   return res.json();
-}
-
-function formatJp(iso: string): string {
-  return new Date(iso).toLocaleString('ja-JP', {
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', weekday: 'short',
-  });
-}
-
-function formatJpDateOnly(iso: string): string {
-  return new Date(iso).toLocaleString('ja-JP', {
-    year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short',
-  });
-}
-
-function formatJpTimeOnly(iso: string): string {
-  return new Date(iso).toLocaleString('ja-JP', { hour: '2-digit', minute: '2-digit' });
 }
 
 function uid(): string {
   return crypto.randomUUID();
 }
 
-// ─── Loading ──────────────────────────────────────────────
+// ─── エラー文言 (生の API ステータスは表示しない) ──────────
 
-function Spinner() {
+const AUTH_ERROR_TEXT =
+  'LINEの認証情報を確認できませんでした。トーク画面に戻り、友だち追加ができているかご確認のうえ、もう一度開いてください。';
+const NETWORK_ERROR_TEXT = '通信に失敗しました。電波のよい場所で、もう一度お試しください。';
+const GENERIC_SUBMIT_ERROR_TEXT = '予約を受け付けられませんでした。時間をおいて、もう一度お試しください。';
+
+function errorCode(err: unknown): string | null {
+  const body = (err as { body?: unknown }).body;
+  if (body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string') {
+    return (body as { error: string }).error;
+  }
+  return null;
+}
+
+function isNetworkError(err: unknown): boolean {
+  return err instanceof TypeError;
+}
+
+/** 詳細/一覧の読み込み失敗用。 */
+function loadErrorMessage(err: unknown): string {
+  if (isNetworkError(err)) return NETWORK_ERROR_TEXT;
+  const code = errorCode(err);
+  const status = (err as { status?: number }).status;
+  if (code === 'not_found' || status === 404) {
+    return 'このイベントは現在受付を停止しています。または、ご利用中のLINEアカウントでは予約できません。';
+  }
+  if (code === 'unauthorized' || code === 'friend_not_found' || status === 401) {
+    return AUTH_ERROR_TEXT;
+  }
+  return '読み込みに失敗しました。時間をおいて、もう一度開き直してください。';
+}
+
+const BOOKING_ERROR_TEXT: Record<string, string> = {
+  slot_full: 'この枠は満席になりました。恐れ入りますが、ほかの枠をお選びください。',
+  over_friend_limit: 'このイベントでご予約いただける回数の上限に達しています。',
+  slot_started: 'この枠は開始時刻を過ぎたため、受付を終了しました。',
+  slot_inactive: 'この枠は受付を締め切りました。ほかの枠をお選びください。',
+  event_unpublished: 'このイベントは現在、予約の受付を停止しています。',
+  invalid_slot_id: '選択した枠の情報が古くなっています。ページを開き直して、もう一度お選びください。',
+  invalid_customer_note: 'ご記入いただいた内容が長すぎます。5000字以内におまとめください。',
+  idempotent_in_progress: 'さきほどの送信をまだ処理しています。少し待ってから、予約履歴をご確認ください。',
+  idempotency_key_required: GENERIC_SUBMIT_ERROR_TEXT,
+  liff_account_resolution_failed: GENERIC_SUBMIT_ERROR_TEXT,
+  internal_error: GENERIC_SUBMIT_ERROR_TEXT,
+  unauthorized: AUTH_ERROR_TEXT,
+  friend_not_found: AUTH_ERROR_TEXT,
+};
+
+/** 予約送信失敗用。 */
+function bookingErrorMessage(err: unknown): string {
+  if (isNetworkError(err)) return NETWORK_ERROR_TEXT;
+  const code = errorCode(err);
+  if (code === 'duplicate_friend_booking') {
+    const existing = ((err as { body?: { existing?: { slot_starts_at?: string } } }).body)?.existing;
+    const when = existing?.slot_starts_at ? formatJstLongDateTime(existing.slot_starts_at) : '';
+    return `このイベントはすでにご予約があります${when ? `（${when}）` : ''}。変更する場合は、予約履歴からキャンセルのうえ、あらためてお申し込みください。`;
+  }
+  if (code && BOOKING_ERROR_TEXT[code]) return BOOKING_ERROR_TEXT[code];
+  return GENERIC_SUBMIT_ERROR_TEXT;
+}
+
+const CANCEL_ERROR_TEXT: Record<string, string> = {
+  cancel_deadline_passed: 'キャンセル期限を過ぎているため、この画面からはキャンセルできません。',
+  cancel_not_allowed: 'この予約はこの画面からキャンセルできません。お手数ですが、LINEのトークでご連絡ください。',
+  invalid_state: 'この予約はすでにキャンセル済みか、変更できない状態です。最新の状況を表示しました。',
+  not_found: '対象の予約が見つかりませんでした。画面を開き直してご確認ください。',
+  unauthorized: AUTH_ERROR_TEXT,
+  friend_not_found: AUTH_ERROR_TEXT,
+};
+
+function cancelErrorMessage(err: unknown): string {
+  if (isNetworkError(err)) return NETWORK_ERROR_TEXT;
+  const code = errorCode(err);
+  if (code && CANCEL_ERROR_TEXT[code]) return CANCEL_ERROR_TEXT[code];
+  return 'キャンセルできませんでした。時間をおいて、もう一度お試しください。';
+}
+
+// ─── 説明文の分割 (参加条件などを折りたたみへ) ─────────────
+
+const FOLD_HEADING_RE = /^【?(参加条件|対象者?|注意事項|ご注意|キャンセルポリシー)(】|[：:]|$)/;
+
+function splitDescription(desc: string): { main: string; foldTitle: string | null; folded: string | null } {
+  const lines = desc.split('\n');
+  const idx = lines.findIndex((l) => FOLD_HEADING_RE.test(l.trim()));
+  if (idx === -1) return { main: desc, foldTitle: null, folded: null };
+  const heading = lines[idx].trim();
+  let title = heading;
+  let restOfLine = '';
+  const bracket = heading.match(/^【([^】]+)】(.*)$/);
+  if (bracket) {
+    title = bracket[1];
+    restOfLine = bracket[2].trim();
+  } else {
+    const sep = heading.search(/[：:]/);
+    if (sep >= 0) {
+      title = heading.slice(0, sep).trim();
+      restOfLine = heading.slice(sep + 1).trim();
+    }
+  }
+  const body = lines.slice(idx + 1).join('\n');
+  const folded = `${restOfLine ? `${restOfLine}\n` : ''}${body}`.trim();
+  return {
+    main: lines.slice(0, idx).join('\n').trim(),
+    foldTitle: title,
+    folded: folded || null,
+  };
+}
+
+// ─── 小物コンポーネント ──────────────────────────────────
+
+function DateRail({ parts }: { parts: JstParts }) {
   return (
-    <div className="flex items-center justify-center py-16">
-      <div className="eb-spinner" />
+    <div className="eb-date-rail" aria-hidden>
+      <span className="eb-date-day">{parts.day}</span>
+      <span className="eb-date-sub">{parts.month}月({parts.weekday})</span>
     </div>
   );
 }
 
-// ─── Screens ──────────────────────────────────────────────
+function SkeletonDetail() {
+  return (
+    <div className="px-5 pt-6" aria-hidden>
+      <div className="eb-skel h-6 w-3/4" />
+      <div className="eb-skel h-4 w-1/2 mt-3" />
+      <div className="eb-skel h-4 w-full mt-8" />
+      <div className="eb-skel h-4 w-5/6 mt-2" />
+      <div className="eb-skel h-4 w-2/3 mt-2" />
+      <div className="eb-skel h-3 w-24 mt-10" />
+      <div className="flex gap-4 mt-4">
+        <div className="eb-skel h-12 w-12" />
+        <div className="flex-1 space-y-2">
+          <div className="eb-skel h-12 w-full" />
+          <div className="eb-skel h-12 w-full" />
+        </div>
+      </div>
+    </div>
+  );
+}
 
-function EventDetailScreen({
+function SkeletonHistory() {
+  return (
+    <div className="px-5 pt-6 space-y-6" aria-hidden>
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="flex gap-4">
+          <div className="eb-skel h-12 w-12" />
+          <div className="flex-1 space-y-2">
+            <div className="eb-skel h-5 w-3/4" />
+            <div className="eb-skel h-4 w-1/2" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const STATUS_LABEL: Record<string, { text: string; cls: string }> = {
+  requested: { text: '承認待ち', cls: 'eb-status-pending' },
+  confirmed: { text: '確定', cls: 'eb-status-confirmed' },
+  rejected: { text: '見送り', cls: 'eb-status-neutral' },
+  cancelled: { text: 'キャンセル済み', cls: 'eb-status-neutral' },
+  expired: { text: '期限切れ', cls: 'eb-status-neutral' },
+  attended: { text: '参加済み', cls: 'eb-status-done' },
+  no_show: { text: '不参加', cls: 'eb-status-neutral' },
+};
+
+function statusLabel(b: MyBooking): { text: string; cls: string } {
+  // 確定のまま開催が終わったものは「終了」として表示する
+  if (b.status === 'confirmed' && new Date(b.slot_ends_at).getTime() < Date.now()) {
+    return { text: '終了', cls: 'eb-status-done' };
+  }
+  return STATUS_LABEL[b.status] ?? { text: b.status, cls: 'eb-status-neutral' };
+}
+
+// ─── 予約画面 (詳細 + 日時選択 + 送信) ───────────────────
+
+function EventBookingScreen({
   ctx,
   eventId,
-  onPickSlot,
+  onDone,
   onGoHistory,
 }: {
   ctx: EventBookingContext;
   eventId: string;
-  onPickSlot: (slot: EventSlot, event: EventDetail) => void;
+  onDone: (done: { status: string; slotIso: string }) => void;
   onGoHistory: () => void;
 }) {
   const [event, setEvent] = useState<EventDetail | null>(null);
   const [slots, setSlots] = useState<EventSlot[]>([]);
   const [myActive, setMyActive] = useState<MyBooking[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // 送信の「意図」(枠・記入内容) が変わったら Idempotency-Key を作り直す。
+  // 同一キーの再送はサーバ側でキャッシュ応答が返るため、失敗後の再試行時も作り直す。
+  const idemKeyRef = useRef<string>(uid());
+  useEffect(() => {
+    idemKeyRef.current = uid();
+  }, [selectedSlotId, note]);
 
   useEffect(() => {
     let cancelled = false;
@@ -181,7 +351,7 @@ function EventDetailScreen({
           /* best-effort */
         }
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setLoadError(loadErrorMessage(err));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -190,421 +360,443 @@ function EventDetailScreen({
     return () => { cancelled = true; };
   }, [ctx, eventId]);
 
-  if (loading) return <Spinner />;
-  if (error || !event) {
-    // 404 / not_found / アカウント対象外を friendly に表示
-    const isNotFound = error?.includes('404') || error?.includes('not_found');
-    const friendly = isNotFound
-      ? 'このイベントは現在受付を停止しています、または、ご利用中の LINE アカウントでは予約できません。'
-      : (error ?? 'イベントが見つかりません');
-    return (
-      <div className="px-4 py-6 eb-fade-in">
-        <div className="eb-card text-center">
-          <p className="text-sm text-gray-700">{friendly}</p>
-        </div>
-      </div>
-    );
+  const groups = useMemo(() => groupByJstDate(slots), [slots]);
+  const selectedSlot = selectedSlotId ? slots.find((s) => s.id === selectedSlotId) ?? null : null;
+
+  async function refreshSlots(): Promise<void> {
+    try {
+      const s = await apiGet<{ items: EventSlot[] }>(`/api/liff/events/${eventId}/slots`, ctx);
+      setSlots(s.items);
+      // 選択中の枠が消えた / 満席になったら選択を解除する
+      if (selectedSlotId) {
+        const still = s.items.find((x) => x.id === selectedSlotId);
+        if (!still || (still.remaining != null && still.remaining <= 0)) {
+          setSelectedSlotId(null);
+        }
+      }
+    } catch {
+      /* best-effort */
+    }
   }
-
-  // 既予約検出: Worker GET レスポンスの my_existing_booking で事前に分かる。
-  // 別アカ経由でも identity_key で同一人物として検知される。
-  // max=1 のときだけ「予約済み画面」で早期 return。max>1 や 制限なし では
-  // 既予約を示しつつ slot 選択も継続できる必要がある。
-  const max = event.max_bookings_per_friend;
-  const existingBooking = event.my_existing_booking;
-  if (existingBooking && max === 1) {
-    return (
-      <div className="pb-24 eb-fade-in">
-        {event.image_url ? (
-          <img src={event.image_url} alt="" className="w-full h-52 object-cover bg-gray-100" />
-        ) : (
-          <div className="w-full h-52 bg-gradient-to-br from-green-100 to-green-200" />
-        )}
-        <div className="px-4 -mt-6">
-          <div className="eb-card eb-card-success">
-            <div className="text-2xl mb-2">✅</div>
-            <div className="text-base font-bold text-gray-900 mb-1">予約済みです</div>
-            <div className="text-sm text-gray-700">{formatJp(existingBooking.slot_starts_at)}</div>
-            <button onClick={onGoHistory} className="eb-primary-btn mt-4">
-              予約履歴を見る
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const overLimit = max != null && myActive.length >= max;
-
-  return (
-    <div className="pb-24 eb-fade-in">
-      {event.image_url ? (
-        <img src={event.image_url} alt="" className="w-full h-52 object-cover bg-gray-100" />
-      ) : (
-        <div className="w-full h-52 bg-gradient-to-br from-green-100 to-green-200" />
-      )}
-
-      <div className="px-4 -mt-6">
-        <div className="eb-card">
-          <h1 className="text-lg font-bold text-gray-900 leading-snug">{event.name}</h1>
-          {event.venue_name && (
-            <div className="mt-2 text-sm text-gray-700 flex items-start gap-1.5">
-              <span>📍</span><span>{event.venue_name}</span>
-            </div>
-          )}
-          {event.venue_url && (
-            <a
-              href={event.venue_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-1 inline-block text-xs eb-line-green-text underline break-all"
-            >
-              {event.venue_url}
-            </a>
-          )}
-          {max != null && (
-            <div className="mt-3 inline-flex items-center gap-1 eb-badge bg-gray-100 text-gray-700">
-              あなたの予約 {myActive.length} / {max}
-            </div>
-          )}
-          {existingBooking && (
-            <div className="mt-3 text-xs eb-line-green-text">
-              ✓ {formatJp(existingBooking.slot_starts_at)} の予約済みです
-            </div>
-          )}
-        </div>
-
-        {event.description && (
-          <div className="eb-card mt-3">
-            <div className={`text-sm whitespace-pre-wrap leading-relaxed text-gray-800 ${event.description_centered === 1 ? 'text-center' : ''}`}>
-              {event.description}
-            </div>
-          </div>
-        )}
-
-        <div className="mt-5">
-          <h2 className="text-sm font-bold text-gray-900 mb-2 px-1">日時を選択</h2>
-          {slots.length === 0 ? (
-            <div className="eb-card text-center text-sm text-gray-500">
-              現在予約可能な枠はありません。
-            </div>
-          ) : (
-            <ul className="space-y-2">
-              {slots.map((s) => {
-                const full = s.remaining != null && s.remaining <= 0;
-                const disabled = full || overLimit;
-                return (
-                  <li key={s.id}>
-                    <button
-                      disabled={disabled}
-                      onClick={() => onPickSlot(s, event)}
-                      className="eb-slot-btn"
-                    >
-                      <span className="flex flex-col items-start">
-                        <span className="text-xs opacity-70">{formatJpDateOnly(s.starts_at)}</span>
-                        <span className="text-base">{formatJpTimeOnly(s.starts_at)} 〜 {formatJpTimeOnly(s.ends_at)}</span>
-                      </span>
-                      <span className="text-xs font-medium">
-                        {full ? '満員' : s.capacity == null ? '定員なし' : `残 ${s.remaining}`}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          {overLimit && (
-            <p className="mt-3 text-xs text-red-600 px-1">
-              このイベントへの予約上限（{max}）に達しています。
-            </p>
-          )}
-        </div>
-
-        <div className="mt-6 text-center">
-          <button onClick={onGoHistory} className="text-sm eb-line-green-text underline">
-            予約履歴を見る
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ConfirmScreen({
-  ctx,
-  event,
-  slot,
-  onBack,
-  onDone,
-}: {
-  ctx: EventBookingContext;
-  event: EventDetail;
-  slot: EventSlot;
-  onBack: () => void;
-  onDone: (status: string) => void;
-}) {
-  const [note, setNote] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [idemKey] = useState(uid);
 
   async function submit() {
+    if (!selectedSlot || submitting) return;
     if (note.length > 5000) {
-      setError('備考は 5000 字以内で入力してください');
+      setSubmitError('ご記入いただいた内容が長すぎます。5000字以内におまとめください。');
       return;
     }
     setSubmitting(true);
-    setError(null);
+    setSubmitError(null);
     try {
       const res = await apiPost<{ id: string; status: string }>(
-        `/api/liff/events/${event.id}/bookings`,
-        { slot_id: slot.id, customer_note: note || null },
+        `/api/liff/events/${eventId}/bookings`,
+        { slot_id: selectedSlot.id, customer_note: note || null },
         ctx,
-        { 'Idempotency-Key': idemKey },
+        { 'Idempotency-Key': idemKeyRef.current },
       );
-      onDone(res.status);
+      onDone({ status: res.status, slotIso: selectedSlot.starts_at });
     } catch (err) {
-      const e = err as { status?: number; body?: { error?: string } };
-      const code = e.body?.error;
-      const msg = (() => {
-        switch (code) {
-          case 'slot_full': return 'すでに満員になりました。別の日時をお選びください。';
-          case 'over_friend_limit': return 'このイベントへの予約上限に達しています。';
-          case 'slot_started': return 'この枠は既に開始されています。';
-          case 'slot_inactive': return 'この枠は受付を締め切りました。';
-          case 'event_unpublished': return 'このイベントは現在受付を停止しています。';
-          case 'unauthorized':
-          case 'friend_not_found':
-            return 'LINE 認証に失敗しました。一度トークルームに戻り、友だち追加が完了していることを確認してください。';
-          case 'idempotent_in_progress': return '前回のリクエストを処理中です。少しお待ちください。';
-          case 'duplicate_friend_booking': {
-            const existing = (e.body as { existing?: { slot_starts_at?: string } } | undefined)?.existing;
-            const when = existing?.slot_starts_at ? formatJp(existing.slot_starts_at) : '';
-            return `このイベントは既に予約済みです${when ? `（${when}）` : ''}。予約履歴から確認できます。`;
-          }
-          default: return err instanceof Error ? err.message : String(err);
-        }
-      })();
-      setError(msg);
+      idemKeyRef.current = uid();
+      setSubmitError(bookingErrorMessage(err));
+      void refreshSlots();
     } finally {
       setSubmitting(false);
     }
   }
 
+  if (loading) return <SkeletonDetail />;
+  if (loadError || !event) {
+    return (
+      <div className="px-5 py-12 text-center eb-fade-in">
+        <p className="eb-load-error">{loadError ?? 'イベントが見つかりません。'}</p>
+      </div>
+    );
+  }
+
+  const max = event.max_bookings_per_friend;
+  const existing = event.my_existing_booking;
+  const bookedOut = Boolean(existing && max === 1);
+  const overLimit = !bookedOut && max != null && myActive.length >= max;
+  const blocked = bookedOut || overLimit;
+
+  const firstSlot = slots[0];
+  const duration = firstSlot ? durationMinutes(firstSlot.starts_at, firstSlot.ends_at) : null;
+  const metaParts = [
+    event.venue_name,
+    duration != null && duration > 0 ? `所要${duration}分` : null,
+    '参加無料',
+    event.requires_approval === 1 ? '承認制' : null,
+  ].filter((p): p is string => Boolean(p));
+
+  const desc = event.description ? splitDescription(event.description) : null;
+  const canSubmit = !blocked && slots.length > 0;
+
   return (
-    <div className="px-4 py-4 pb-24 space-y-4 eb-slide-up">
-      <button onClick={onBack} className="eb-back-btn">
-        <span aria-hidden>←</span>
-        戻る
-      </button>
+    <div className={`eb-fade-in ${canSubmit ? 'pb-44' : 'pb-16'}`}>
+      {event.image_url && (
+        <img src={event.image_url} alt="" className="w-full max-h-56 object-cover" />
+      )}
 
-      <div>
-        <h1 className="text-base font-bold text-gray-900">予約内容のご確認</h1>
-        <p className="text-xs text-gray-500 mt-1">最後にご確認ください</p>
-      </div>
-
-      <div className="eb-card">
-        <dl className="space-y-3 text-sm">
-          <Row label="イベント" value={event.name} />
-          <Row label="日時" value={formatJp(slot.starts_at)} />
-          {event.venue_name && <Row label="会場" value={event.venue_name} />}
-        </dl>
-      </div>
-
-      {event.requires_approval === 1 && (
-        <div className="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-xl p-3">
-          このイベントは承認制です。受付後、運営が承認するまでお待ちください。
+      {/* 予約済み / 上限到達の案内 */}
+      {bookedOut && existing && (
+        <div className="px-5 pt-5">
+          <div className="eb-notice" role="status">
+            <p className="eb-notice-title">ご予約済みです</p>
+            <p className="eb-notice-strong">
+              {formatJstLongDateTime(existing.slot_starts_at)}
+              <span className={`eb-status ${(STATUS_LABEL[existing.status] ?? STATUS_LABEL.requested).cls} ml-2`}>
+                {(STATUS_LABEL[existing.status] ?? { text: existing.status }).text}
+              </span>
+            </p>
+            <p className="eb-notice-body">
+              日時を変更する場合は、予約履歴で現在のご予約をキャンセルしてから、あらためてお申し込みください。
+            </p>
+            <button type="button" onClick={onGoHistory} className="eb-notice-btn">
+              予約履歴を開く
+            </button>
+          </div>
+        </div>
+      )}
+      {overLimit && (
+        <div className="px-5 pt-5">
+          <div className="eb-notice" role="status">
+            <p className="eb-notice-title">ご予約回数が上限に達しています</p>
+            <p className="eb-notice-body">
+              このイベントでご予約いただけるのは {max} 回までです。内容の変更は、予約履歴からキャンセルのうえ再度お申し込みください。
+            </p>
+            <button type="button" onClick={onGoHistory} className="eb-notice-btn">
+              予約履歴を開く
+            </button>
+          </div>
         </div>
       )}
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-1.5">
-          備考（任意）
-        </label>
-        <textarea
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          rows={4}
-          maxLength={5000}
-          placeholder="質問や伝えたいことがあれば..."
-          className="w-full border border-gray-300 rounded-xl p-3 text-sm bg-white"
-        />
-        <div className="text-xs text-gray-500 text-right mt-1">{note.length} / 5000</div>
+      {/* イベント名 + メタ情報 */}
+      <div className="px-5 pt-6">
+        <h1 className="eb-title">{event.name}</h1>
+        {metaParts.length > 0 && <p className="eb-meta">{metaParts.join('・')}</p>}
+        {event.venue_url && (
+          <a href={event.venue_url} target="_blank" rel="noopener noreferrer" className="eb-text-link">
+            会場・参加方法の詳細を見る
+          </a>
+        )}
       </div>
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl text-sm">
-          {error}
+      {/* 説明文 */}
+      {desc && (desc.main || desc.folded) && (
+        <div className="px-5 mt-5">
+          {desc.main && (
+            <p className={`eb-desc ${event.description_centered === 1 ? 'text-center' : ''}`}>{desc.main}</p>
+          )}
+          {desc.folded && (
+            <details className="eb-fold">
+              <summary>{desc.foldTitle ?? '参加条件'}</summary>
+              <p className="eb-desc mt-2">{desc.folded}</p>
+            </details>
+          )}
         </div>
       )}
 
-      <button onClick={submit} disabled={submitting} className="eb-primary-btn">
-        {submitting ? '送信中...' : '予約をリクエスト'}
-      </button>
-      <button onClick={onBack} disabled={submitting} className="eb-secondary-btn">
-        戻る
-      </button>
-    </div>
-  );
-}
+      {/* 日時選択 */}
+      <div className="px-5 mt-9">
+        <h2 className="eb-section-label" id="eb-slot-label">日時を選ぶ</h2>
+        {slots.length === 0 ? (
+          <p className="eb-empty-inline">現在、予約できる枠はありません。時間をおいてご確認ください。</p>
+        ) : (
+          <div role="group" aria-labelledby="eb-slot-label">
+            {groups.map((g) => (
+              <div key={g.key} className="eb-daygroup">
+                <DateRail parts={g.parts} />
+                <div className="eb-daygroup-slots">
+                  {g.items.map((s) => {
+                    const full = s.remaining != null && s.remaining <= 0;
+                    const rem = remainingLabel(s.capacity, s.remaining);
+                    const selected = s.id === selectedSlotId;
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        disabled={full || blocked || submitting}
+                        aria-pressed={selected}
+                        onClick={() => setSelectedSlotId(selected ? null : s.id)}
+                        className={`eb-slot-btn ${selected ? 'is-selected' : ''}`}
+                      >
+                        <span className="eb-slot-time">
+                          {formatJstTime(s.starts_at)}
+                          <span className="eb-slot-tilde">〜</span>
+                          {formatJstTime(s.ends_at)}
+                        </span>
+                        {rem && <span className={`eb-slot-remaining is-${rem.tone}`}>{rem.text}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
-function Row({ label, value, valueClassName }: { label: string; value: string; valueClassName?: string }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3">
-      <dt className="text-xs text-gray-500 shrink-0">{label}</dt>
-      <dd className={`text-right ${valueClassName ?? 'text-gray-900'}`}>{value}</dd>
-    </div>
-  );
-}
+      {/* 相談内容 (任意) */}
+      {canSubmit && (
+        <div className="px-5 mt-9">
+          <label htmlFor="eb-note" className="eb-section-label">当日相談したいこと（任意）</label>
+          <textarea
+            id="eb-note"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            rows={4}
+            maxLength={5000}
+            placeholder="例）短答の過去問が終わらない、論文の書き方に自信がない　など"
+            className="eb-textarea"
+            disabled={submitting}
+          />
+          <p className="eb-note-hint">ご記入いただいた内容をもとに、当日のお話を準備します。</p>
+        </div>
+      )}
 
-function DoneScreen({ status, onGoHistory }: { status: string; onGoHistory: () => void }) {
-  const isPending = status === 'requested';
-  return (
-    <div className="px-4 py-10 text-center eb-slide-up">
-      <div className="eb-card">
-        <div className="text-5xl mb-3">{isPending ? '⏳' : '✅'}</div>
-        <h1 className="text-lg font-bold mb-2 text-gray-900">
-          {isPending ? '受付しました' : '予約が確定しました'}
-        </h1>
-        <p className="text-sm text-gray-600 mb-6 leading-relaxed">
-          {isPending
-            ? '運営の承認をお待ちください。承認されると LINE でお知らせします。'
-            : '予約が確定しました。LINE で詳細をお送りしました。'}
-        </p>
-        <button onClick={onGoHistory} className="eb-primary-btn">
+      <div className="px-5 mt-10 text-center">
+        <button type="button" onClick={onGoHistory} className="eb-text-link">
           予約履歴を見る
         </button>
       </div>
+
+      {/* 画面下部固定の予約ボタン */}
+      {canSubmit && (
+        <div className="eb-cta-bar">
+          <div className="eb-cta-inner">
+            {submitError ? (
+              <p role="alert" className="eb-cta-error">{submitError}</p>
+            ) : event.requires_approval === 1 ? (
+              <p className="eb-cta-note">承認制のため、お申し込み後に運営が内容を確認します</p>
+            ) : null}
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!selectedSlot || submitting}
+              aria-busy={submitting}
+              className="eb-primary-btn"
+            >
+              {submitting ? (
+                <span className="inline-flex items-center justify-center gap-2">
+                  <span className="eb-btn-spinner" aria-hidden />
+                  送信しています…
+                </span>
+              ) : selectedSlot ? (
+                `${formatJstDateTime(selectedSlot.starts_at)} で予約する`
+              ) : (
+                '日時を選択してください'
+              )}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-const STATUS_LABEL: Record<string, { text: string; cls: string }> = {
-  requested: { text: '承認待ち', cls: 'bg-amber-100 text-amber-800' },
-  confirmed: { text: '確定', cls: 'bg-green-100 text-green-800' },
-  rejected: { text: '見送り', cls: 'bg-gray-200 text-gray-700' },
-  cancelled: { text: 'キャンセル', cls: 'bg-gray-100 text-gray-600' },
-  expired: { text: '期限切れ', cls: 'bg-gray-100 text-gray-500' },
-  attended: { text: '参加済', cls: 'bg-blue-100 text-blue-800' },
-  no_show: { text: '不参加', cls: 'bg-red-100 text-red-700' },
-};
+// ─── 完了画面 ────────────────────────────────────────────
 
-function canCancel(b: MyBooking): boolean {
-  if (b.status !== 'requested' && b.status !== 'confirmed') return false;
-  if (b.cancel_deadline_hours_before == null) return false;
-  const deadlineMs = new Date(b.slot_starts_at).getTime() - b.cancel_deadline_hours_before * 3600_000;
-  return deadlineMs > Date.now();
+function DoneScreen({
+  status,
+  slotIso,
+  onGoHistory,
+}: {
+  status: string;
+  slotIso: string;
+  onGoHistory: () => void;
+}) {
+  const pending = status === 'requested';
+  const steps: { text: string; done: boolean }[] = pending
+    ? [
+        { text: 'お申し込みを受け付けました', done: true },
+        { text: '運営が内容を確認します', done: false },
+        { text: '結果をLINEのトークでお知らせします', done: false },
+      ]
+    : [
+        { text: 'ご予約が確定しました', done: true },
+        { text: '当日のご案内をLINEのトークでお送りします', done: false },
+      ];
+  return (
+    <div className="px-5 py-12 text-center eb-slide-up">
+      <svg className="eb-check" viewBox="0 0 56 56" aria-hidden>
+        <circle className="eb-check-circle" cx="28" cy="28" r="25" />
+        <path className="eb-check-mark" d="M17 29l8 8 15-16" />
+      </svg>
+      <h1 className="eb-done-title">
+        {pending ? 'お申し込みを受け付けました' : 'ご予約が確定しました'}
+      </h1>
+      <p className="eb-done-when">{formatJstLongDateTime(slotIso)}</p>
+      {pending && (
+        <p className="eb-done-lead">承認までいましばらくお待ちください。</p>
+      )}
+      <ol className="eb-steps">
+        {steps.map((s, i) => (
+          <li key={i} className={s.done ? 'is-done' : ''}>{s.text}</li>
+        ))}
+      </ol>
+      <button type="button" onClick={onGoHistory} className="eb-primary-btn mt-10">
+        予約履歴を見る
+      </button>
+    </div>
+  );
 }
 
-function HistoryScreen({ ctx }: { ctx: EventBookingContext }) {
+// ─── 予約履歴 ────────────────────────────────────────────
+
+type CancelState =
+  | { kind: 'allowed' }
+  | { kind: 'deadline_passed'; hours: number }
+  | { kind: 'not_allowed' }
+  | { kind: 'none' };
+
+function cancelState(b: MyBooking): CancelState {
+  if (b.status !== 'requested' && b.status !== 'confirmed') return { kind: 'none' };
+  if (new Date(b.slot_starts_at).getTime() <= Date.now()) return { kind: 'none' };
+  if (b.cancel_deadline_hours_before == null) return { kind: 'not_allowed' };
+  const deadlineMs = new Date(b.slot_starts_at).getTime() - b.cancel_deadline_hours_before * 3600_000;
+  return deadlineMs > Date.now()
+    ? { kind: 'allowed' }
+    : { kind: 'deadline_passed', hours: b.cancel_deadline_hours_before };
+}
+
+function HistoryScreen({
+  ctx,
+  onGoDetail,
+}: {
+  ctx: EventBookingContext;
+  onGoDetail: (() => void) | null;
+}) {
   const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming');
   const [items, setItems] = useState<MyBooking[]>([]);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function refresh() {
+  async function refresh(current: 'upcoming' | 'past') {
     setLoading(true);
     setError(null);
     try {
-      const res = await apiGet<{ items: MyBooking[] }>(`/api/liff/events/me?tab=${tab}`, ctx);
+      const res = await apiGet<{ items: MyBooking[] }>(`/api/liff/events/me?tab=${current}`, ctx);
       setItems(res.items);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(loadErrorMessage(e));
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    void refresh();
+    void refresh(tab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
   async function cancel(b: MyBooking) {
-    if (!confirm(`「${b.event_name}」の予約をキャンセルしますか？`)) return;
-    setBusy(true);
+    if (busyId) return;
+    const ok = confirm(
+      `「${b.event_name}」\n${formatJstLongDateTime(b.slot_starts_at)}\nこの予約をキャンセルしますか？`,
+    );
+    if (!ok) return;
+    setBusyId(b.id);
     setError(null);
     try {
       await apiPost(`/api/liff/events/me/${b.id}/cancel`, {}, ctx);
-      await refresh();
+      await refresh(tab);
     } catch (err) {
-      const e = err as { body?: { error?: string } };
-      const msg = (() => {
-        switch (e.body?.error) {
-          case 'cancel_deadline_passed': return 'キャンセル期限を過ぎています。';
-          case 'cancel_not_allowed': return 'このイベントは LIFF からのキャンセル不可です。LINE で運営にご連絡ください。';
-          case 'invalid_state': return 'この予約はキャンセルできない状態です。';
-          default: return err instanceof Error ? err.message : String(err);
-        }
-      })();
-      setError(msg);
+      setError(cancelErrorMessage(err));
+      if (errorCode(err) === 'invalid_state') await refresh(tab);
     } finally {
-      setBusy(false);
+      setBusyId(null);
     }
   }
 
   return (
-    <div className="pb-20 eb-fade-in">
-      <div className="sticky top-12 z-10 bg-white border-b border-gray-200">
-        <div className="flex">
-          {(['upcoming', 'past'] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`flex-1 py-3 text-sm font-medium border-b-2 ${
-                tab === t ? 'border-[#06C755] eb-line-green-text' : 'border-transparent text-gray-500'
-              }`}
-            >
-              {t === 'upcoming' ? 'これから' : '過去'}
-            </button>
-          ))}
+    <div className="pb-16 eb-fade-in">
+      <div className="eb-tabs">
+        {(['upcoming', 'past'] as const).map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setTab(t)}
+            aria-selected={tab === t}
+            className={`eb-tab ${tab === t ? 'is-active' : ''}`}
+          >
+            {t === 'upcoming' ? 'これから' : '過去'}
+          </button>
+        ))}
+      </div>
+
+      {error && (
+        <div className="px-5 pt-4">
+          <p role="alert" className="eb-cta-error">{error}</p>
         </div>
-      </div>
-      <div className="px-4 py-4 space-y-3">
-        {error && <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl text-sm">{error}</div>}
-        {loading ? (
-          <Spinner />
-        ) : items.length === 0 ? (
-          <div className="eb-card text-center text-sm text-gray-500 py-8">
-            {tab === 'upcoming' ? 'これからの予約はありません' : '過去の予約はありません'}
-          </div>
-        ) : (
-          items.map((b) => {
-            const s = STATUS_LABEL[b.status] ?? { text: b.status, cls: 'bg-gray-100' };
+      )}
+
+      {loading ? (
+        <SkeletonHistory />
+      ) : items.length === 0 ? (
+        <div className="eb-empty">
+          <p className="eb-empty-title">
+            {tab === 'upcoming' ? '予約はまだありません' : '過去の予約はありません'}
+          </p>
+          {tab === 'upcoming' && (
+            onGoDetail ? (
+              <button type="button" onClick={onGoDetail} className="eb-secondary-btn mt-6">
+                予約ページへ戻る
+              </button>
+            ) : (
+              <p className="eb-empty-sub">イベント案内のリンクからご予約いただけます。</p>
+            )
+          )}
+        </div>
+      ) : (
+        <ul className="px-5">
+          {items.map((b) => {
+            const s = statusLabel(b);
+            const c = cancelState(b);
             return (
-              <div key={b.id} className="eb-card !p-0 overflow-hidden">
-                <div className="flex">
-                  {b.event_image_url ? (
-                    <img src={b.event_image_url} alt="" className="w-24 h-24 object-cover bg-gray-100 shrink-0" />
-                  ) : (
-                    <div className="w-24 h-24 bg-gradient-to-br from-green-100 to-green-200 shrink-0" />
-                  )}
-                  <div className="flex-1 p-3 min-w-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="font-semibold text-sm line-clamp-2 text-gray-900">{b.event_name}</div>
-                      <span className={`eb-badge ${s.cls} shrink-0`}>{s.text}</span>
-                    </div>
-                    <div className="text-xs text-gray-600 mt-1">{formatJp(b.slot_starts_at)}</div>
-                    {b.venue_name && <div className="text-xs text-gray-500 truncate">📍 {b.venue_name}</div>}
+              <li key={b.id} className="eb-book-row">
+                <DateRail parts={toJstParts(b.slot_starts_at)} />
+                <div className="min-w-0">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="eb-book-name">{b.event_name}</p>
+                    <span className={`eb-status ${s.cls} shrink-0`}>{s.text}</span>
                   </div>
-                </div>
-                {canCancel(b) && (
-                  <div className="border-t border-gray-100 px-3 py-2 text-right">
+                  <p className="eb-book-time">
+                    {formatJstTime(b.slot_starts_at)}〜{formatJstTime(b.slot_ends_at)}
+                  </p>
+                  {b.venue_name && <p className="eb-book-venue">{b.venue_name}</p>}
+                  {c.kind === 'allowed' && (
                     <button
+                      type="button"
                       onClick={() => cancel(b)}
-                      disabled={busy}
-                      className="text-sm text-red-600 disabled:opacity-50"
+                      disabled={busyId != null}
+                      className="eb-cancel-btn"
                     >
-                      キャンセルする
+                      {busyId === b.id ? 'キャンセルしています…' : '予約をキャンセル'}
                     </button>
-                  </div>
-                )}
-              </div>
+                  )}
+                  {c.kind === 'deadline_passed' && (
+                    <div>
+                      <button type="button" disabled className="eb-cancel-btn">
+                        予約をキャンセル
+                      </button>
+                      <p className="eb-cancel-reason">
+                        開催{c.hours}時間前を過ぎたため、この画面からはキャンセルできません。
+                      </p>
+                    </div>
+                  )}
+                  {c.kind === 'not_allowed' && (
+                    <p className="eb-cancel-reason">
+                      キャンセルをご希望の場合は、LINEのトークでご連絡ください。
+                    </p>
+                  )}
+                </div>
+              </li>
             );
-          })
-        )}
-      </div>
+          })}
+        </ul>
+      )}
     </div>
   );
 }
@@ -613,9 +805,8 @@ function HistoryScreen({ ctx }: { ctx: EventBookingContext }) {
 
 type Screen =
   | { kind: 'detail'; eventId: string }
-  | { kind: 'confirm'; event: EventDetail; slot: EventSlot }
-  | { kind: 'done'; status: string }
-  | { kind: 'history' };
+  | { kind: 'done'; status: string; slotIso: string; eventId: string }
+  | { kind: 'history'; eventId?: string };
 
 function App({ ctx, initial }: { ctx: EventBookingContext; initial: Screen }) {
   const [screen, setScreen] = useState<Screen>(initial);
@@ -623,48 +814,80 @@ function App({ ctx, initial }: { ctx: EventBookingContext; initial: Screen }) {
   const headerLabel = (() => {
     switch (screen.kind) {
       case 'detail': return 'イベント予約';
-      case 'confirm': return 'ご予約内容の確認';
-      case 'done': return '完了';
+      case 'done': return '受付完了';
       case 'history': return '予約履歴';
     }
   })();
 
+  // 履歴から予約画面へ戻れるのは、遷移元のイベントが分かっている場合のみ
+  const backEventId = screen.kind === 'history' ? screen.eventId ?? null
+    : screen.kind === 'done' ? screen.eventId
+    : null;
+
   return (
-    <div className="min-h-screen" style={{ background: '#f5f5f5' }}>
-      <header
-        className="px-4 py-3 text-white text-center font-bold sticky top-0 z-20"
-        style={{ background: '#06C755', fontSize: '15px' }}
-      >
-        {headerLabel}
+    <div className="eb-page">
+      <header className="eb-header">
+        <div className="eb-header-inner">
+          <div className="eb-header-side">
+            {screen.kind === 'history' && backEventId ? (
+              <button
+                type="button"
+                className="eb-header-link"
+                onClick={() => setScreen({ kind: 'detail', eventId: backEventId })}
+              >
+                ← イベント
+              </button>
+            ) : (
+              <span className="eb-header-mark" aria-hidden />
+            )}
+          </div>
+          <span className="eb-header-title">{headerLabel}</span>
+          <div className="eb-header-side eb-header-side-right">
+            {screen.kind === 'detail' && (
+              <button
+                type="button"
+                className="eb-header-link"
+                onClick={() => setScreen({ kind: 'history', eventId: screen.eventId })}
+              >
+                予約履歴
+              </button>
+            )}
+          </div>
+        </div>
       </header>
       <main className="max-w-md mx-auto">
         {screen.kind === 'detail' && (
-          <EventDetailScreen
+          <EventBookingScreen
             ctx={ctx}
             eventId={screen.eventId}
-            onPickSlot={(slot, event) => setScreen({ kind: 'confirm', event, slot })}
-            onGoHistory={() => setScreen({ kind: 'history' })}
-          />
-        )}
-        {screen.kind === 'confirm' && (
-          <ConfirmScreen
-            ctx={ctx}
-            event={screen.event}
-            slot={screen.slot}
-            onBack={() => setScreen({ kind: 'detail', eventId: screen.event.id })}
-            onDone={(status) => setScreen({ kind: 'done', status })}
+            onDone={({ status, slotIso }) =>
+              setScreen({ kind: 'done', status, slotIso, eventId: screen.eventId })}
+            onGoHistory={() => setScreen({ kind: 'history', eventId: screen.eventId })}
           />
         )}
         {screen.kind === 'done' && (
-          <DoneScreen status={screen.status} onGoHistory={() => setScreen({ kind: 'history' })} />
+          <DoneScreen
+            status={screen.status}
+            slotIso={screen.slotIso}
+            onGoHistory={() => setScreen({ kind: 'history', eventId: screen.eventId })}
+          />
         )}
-        {screen.kind === 'history' && <HistoryScreen ctx={ctx} />}
+        {screen.kind === 'history' && (
+          <HistoryScreen
+            ctx={ctx}
+            onGoDetail={backEventId ? () => setScreen({ kind: 'detail', eventId: backEventId }) : null}
+          />
+        )}
       </main>
     </div>
   );
 }
 
-export function mountEventBooking(container: HTMLElement, ctx: EventBookingContext, initial: Screen): void {
+export function mountEventBooking(
+  container: HTMLElement,
+  ctx: EventBookingContext,
+  initial: { kind: 'detail'; eventId: string } | { kind: 'history' },
+): void {
   document.body.classList.add('eb-active');
   if (!_root) _root = createRoot(container);
   _root.render(
