@@ -51,7 +51,8 @@ CLI が以下を全部やる:
 - LIFF アプリの自動作成
 - 管理画面初回ログイン用 Owner ユーザー作成
 
-所要時間: 約 5 分。完了すれば管理画面 (`https://<your-name>-admin.pages.dev`) で即運用開始。
+所要時間: 約 5 分。完了すれば管理画面 (`https://<your-worker>.workers.dev/admin`) で即運用開始。
+管理画面は Worker と同一オリジンで配信されるので、iOS Safari 等でもログインが維持されます。
 
 ### 必要なもの
 
@@ -115,13 +116,15 @@ CLI が以下を全部やる:
 ```
 [ LINE Platform ] ⇄ [ Cloudflare Worker (Hono) ] ⇄ [ D1 SQLite ]
                               ⇅
-                    [ Cloudflare Pages (Next.js 15) ]
+              ├─ /            LIFF ページ
+              ├─ /api/*       API
+              └─ /admin/*     管理画面 (Next.js 15 static export)
                               ⇅
                     [ MCP Server / SDK / Claude Code ]
 ```
 
 - **Worker** (`apps/worker`): API + LIFF + Webhook 受信、cron で配信処理
-- **Web** (`apps/web`): Next.js 15 ダッシュボード（19 セクション）
+- **Web** (`apps/web`): Next.js 15 ダッシュボード（19 セクション）。静的エクスポートを Worker の `/admin` 配下から同一オリジン配信
 - **Packages**:
   - `@line-harness/sdk` — TypeScript SDK
   - `@line-harness/mcp-server` — Claude Code 用 MCP server

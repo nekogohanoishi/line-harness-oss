@@ -163,11 +163,15 @@ npx wrangler secret put LINE_LOGIN_CHANNEL_SECRET
 | `LINE_LOGIN_CHANNEL_ID` | **必須** | LINE Login チャネルID（UUID自動取得・`/auth/line` に必須） |
 | `LINE_LOGIN_CHANNEL_SECRET` | **必須** | LINE Login チャネルシークレット（OAuth コード交換に必須） |
 
-### 管理画面の環境変数（Vercel / CF Pages）
+### 管理画面の環境変数
+
+管理画面は Worker と同一オリジン（`https://<worker>/admin`）から配信されるため、
+既定では環境変数は不要です。API は相対パスで叩きます。
 
 | 変数名 | 説明 |
 |--------|------|
-| `NEXT_PUBLIC_API_URL` | Workers API の URL（例: `https://your-worker.your-subdomain.workers.dev`） |
+| `NEXT_PUBLIC_API_URL` | 任意。管理画面を別オリジンに置く場合だけ Workers API の絶対 URL を設定（例: `https://your-worker.your-subdomain.workers.dev`）。その場合は Worker 側で `ADMIN_ORIGIN` の許可と `ADMIN_ALLOW_CROSS_SITE=true` が必要です |
+| `NEXT_PUBLIC_BASE_PATH` | 任意。管理画面の base path。既定 `/admin` |
 
 > **セキュリティ注意**: `NEXT_PUBLIC_*` にAPIキーを設定しないでください。管理画面のログインページでAPIキーを入力する方式に変更されました（v0.5.1+）。
 
@@ -205,26 +209,34 @@ pnpm dev:web
 
 ## 7. 管理画面デプロイ
 
-### Cloudflare Pages（推奨）
+管理画面は Worker と同一オリジンの `/admin` 配下から配信します。
+別サービス（Pages / Vercel）へのデプロイは不要です。
+
+同一オリジンにする理由は、Worker と管理画面のドメインが違うとセッション
+Cookie がサードパーティ Cookie 扱いになり、iOS Safari 等の既定設定で
+ログインが維持できないためです。
 
 ```bash
-cd apps/web
-npx wrangler pages deploy .next --project-name=your-admin-name
+# 管理画面 → Worker の順にビルドし、Worker にまとめてデプロイする
+pnpm deploy:worker
 ```
 
-### Vercel
+`pnpm deploy:worker` は次を順に実行します。
 
-```bash
-cd apps/web
-vercel deploy
+1. `apps/web` を `next build`（`output: 'export'` → `apps/web/out`）
+2. `apps/worker` を `vite build`（`dist/client` を再生成）
+3. `apps/worker/scripts/sync-admin-assets.mjs` が `apps/web/out` を
+   `apps/worker/dist/client/admin` へコピー
+4. `wrangler deploy`
+
+順序が重要です。`vite build` は `dist/client` を作り直すため、管理画面の
+同期はその後でなければ消えます。
+
+アクセス URL:
+
 ```
-
-Vercel ダッシュボードからの場合:
-1. リポジトリを接続
-2. Root Directory: `apps/web`
-3. Framework Preset: Next.js
-4. 環境変数を設定（`NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_API_KEY`）
-5. デプロイ
+https://your-worker-name.your-subdomain.workers.dev/admin
+```
 
 ## 8. 動作確認
 

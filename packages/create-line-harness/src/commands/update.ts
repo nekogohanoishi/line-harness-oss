@@ -9,6 +9,7 @@ import { execa } from "execa";
 interface SetupState {
   projectName?: string;
   workerName?: string;
+  workerUrl?: string;
   adminUrl?: string;
   accountId?: string;
   d1DatabaseId?: string;
@@ -167,6 +168,24 @@ export async function runUpdate(repoDir: string): Promise<void> {
       s.stop("マイグレーション完了（変更なし）");
     }
 
+    // 管理画面を先にビルドする。
+    //
+    // 管理画面は Worker と同一オリジン (<worker>/admin) から配信するので、
+    // Worker の静的アセット (dist/client/admin) として同梱する必要がある。
+    // Worker ビルド (vite build) が dist/client を作り直すため、
+    //   1. 管理画面ビルド (apps/web/out を更新)
+    //   2. Worker ビルド (vite build → sync-admin-assets.mjs)
+    //   3. wrangler deploy
+    // の順を崩さないこと。順序を逆にすると古い管理画面が配信される。
+    //
+    // 別オリジン (Cloudflare Pages) へのデプロイは廃止した。Worker とドメインが
+    // 違うとセッション Cookie がサードパーティ Cookie 扱いになり、iOS Safari 等の
+    // 既定設定でログインが維持できなかったのが理由。
+    const webDir = join(repoDir, "apps/web");
+    s.start("管理画面 再ビルド中...");
+    await execa("pnpm", ["run", "build"], { cwd: webDir });
+    s.stop("管理画面 再ビルド完了");
+
     // Redeploy Worker.
     //
     // `wrangler deploy` reads `dist/line_harness/wrangler.json` (vite build
@@ -178,7 +197,7 @@ export async function runUpdate(repoDir: string): Promise<void> {
     const workerDir = join(repoDir, "apps/worker");
     if (savedState) ensureWorkerEnv(repoDir, savedState);
 
-    s.start("Worker 再ビルド中...");
+    s.start("Worker 再ビルド中（管理画面を同梱）...");
     await execa("pnpm", ["run", "build"], { cwd: workerDir });
     s.stop("Worker 再ビルド完了");
 
@@ -186,35 +205,10 @@ export async function runUpdate(repoDir: string): Promise<void> {
     await wrangler(["deploy", "--name", projectName], { cwd: workerDir });
     s.stop("Worker 再デプロイ完了");
 
-    // Rebuild and redeploy Admin UI
-    const adminProjectName = savedState?.adminUrl
-      ? new URL(savedState.adminUrl as string).hostname.replace(".pages.dev", "")
-      : `${projectName}-admin`;
-    s.start("Admin UI 再デプロイ中...");
-    const webDir = join(repoDir, "apps/web");
-    await execa("pnpm", ["run", "build"], { cwd: webDir });
-    // Notes on these flags:
-    // - `--commit-dirty=true`: wrangler.toml が一時 patch されている間に
-    //   pages deploy が動くため、dirty 警告で先に進めなくなるのを回避
-    //   (setup.ts の deploy-admin.ts でも同様のフラグを使っている)。
-    // - `--commit-message`: 直近の git commit メッセージに日本語が含まれていると
-    //   Cloudflare Pages API が「Invalid commit message, it must be a valid
-    //   UTF-8 string」を返すケースがあったため、ASCII固定文言で上書きする。
-    // - `--branch=main`: Pages の production deploy として記録するため。
-    await wrangler(
-      [
-        "pages",
-        "deploy",
-        "out",
-        "--project-name",
-        adminProjectName,
-        "--commit-dirty=true",
-        "--commit-message=LINE Harness update via deploy:update",
-        "--branch=main",
-      ],
-      { cwd: webDir },
-    );
-    s.stop("Admin UI 再デプロイ完了");
+    const adminUrl = savedState?.workerUrl
+      ? `${String(savedState.workerUrl).replace(/\/+$/, "")}/admin`
+      : "https://<worker>/admin";
+    p.log.success(`管理画面: ${adminUrl}`);
 
     p.outro(pc.green("アップデート完了！"));
   } finally {

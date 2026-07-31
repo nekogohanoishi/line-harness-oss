@@ -40,10 +40,23 @@ compatibility_date = "2024-12-01"
 workers_dev = true
 account_id = "${options.accountId}"
 
-# Static assets (LIFF pages) served by Workers Assets
-# SPA fallback ensures all non-API paths serve index.html
+# Static assets served by Workers Assets:
+#   dist/client/*        LIFF ページ (vite build の成果物)
+#   dist/client/admin/*  管理画面 (Next.js static export を sync-admin-assets.mjs が配置)
+#
+# 管理画面を Worker と同一オリジンから配信するのは、別オリジン (Cloudflare Pages)
+# だとセッション Cookie がサードパーティ Cookie 扱いになり、iOS Safari 等の
+# 既定設定でログインが維持できなかったため。
+#
+# html_handling = "auto-trailing-slash" で /admin/events/bookings が
+# admin/events/bookings.html に解決され、SPA のディープリンクが 200 で返る。
+# not_found_handling = "none" はアセットに無いパスを Worker へ渡す既定動作
+# (API / webhook / tracked link が Worker に届くために必須)。
 [assets]
-not_found_handling = "single-page-application"
+directory = "dist/client"
+binding = "ASSETS"
+html_handling = "auto-trailing-slash"
+not_found_handling = "none"
 
 [[d1_databases]]
 binding = "DB"
@@ -70,6 +83,10 @@ crons = ["*/5 * * * *"]
     // Build workspace dependencies that the worker needs
     await execa("npx", ["pnpm", "-r", "--filter", "./packages/shared", "--filter", "./packages/line-sdk", "--filter", "./packages/db", "build"], { cwd: options.repoDir });
     await execa("npx", ["vite", "build"], { cwd: workerDir });
+    // 管理画面 (apps/web/out) を dist/client/admin へ配置。vite build が
+    // dist/client を作り直すので必ずこの順で実行する。apps/web/out が無ければ
+    // スクリプト側が警告のみ出してスキップする。
+    await execa("node", ["scripts/sync-admin-assets.mjs"], { cwd: workerDir });
     buildSpinner.stop("Worker ビルド完了");
 
     // Pipe-first: capture deploy output so we can parse the real URL

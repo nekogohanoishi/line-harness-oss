@@ -9,7 +9,7 @@ import { ensureAuth, getAccountId } from "../steps/auth.js";
 import { promptLineCredentials } from "../steps/prompt.js";
 import { createDatabase } from "../steps/database.js";
 import { deployWorker } from "../steps/deploy-worker.js";
-import { deployAdmin } from "../steps/deploy-admin.js";
+import { buildAdmin, adminUrlFor } from "../steps/deploy-admin.js";
 import { setSecrets } from "../steps/secrets.js";
 import { generateMcpConfig } from "../steps/mcp-config.js";
 import { generateApiKey } from "../lib/crypto.js";
@@ -539,8 +539,20 @@ async function runSetupInner(
     }
   }
 
-  // Step 10: Deploy Worker (includes LIFF build via @cloudflare/vite-plugin)
+  // Step 10: 管理画面ビルド → Worker デプロイ
+  //
+  // 管理画面は Worker と同一オリジン (<worker>/admin) から配信するので、
+  // Worker デプロイの前にビルドしておき、静的アセットとして同梱する。
+  // 管理画面は API を相対パスで叩くため、この時点で Worker URL は不要。
   state.workerName = state.projectName!;
+  if (!isDone(state, "admin")) {
+    await buildAdmin({ repoDir });
+    markDone(state, "admin");
+    saveState(repoDir, state);
+  } else {
+    p.log.success("管理画面: ビルド済み");
+  }
+
   if (!isDone(state, "worker")) {
     const { workerUrl } = await deployWorker({
       repoDir,
@@ -553,10 +565,12 @@ async function runSetupInner(
       botBasicId: state.botBasicId || "",
     });
     state.workerUrl = workerUrl;
+    state.adminUrl = adminUrlFor(workerUrl);
     markDone(state, "worker");
     saveState(repoDir, state);
   } else {
     p.log.success(`Worker: デプロイ済み（${state.workerUrl}）`);
+    state.adminUrl = adminUrlFor(state.workerUrl!);
   }
 
   // Step 11: Set secrets
@@ -672,23 +686,8 @@ ON CONFLICT(channel_id) DO UPDATE SET
     p.log.success("LINE アカウント: 登録済み");
   }
 
-  // Step 13: Deploy Admin UI
-  // Use unique project names to avoid subdomain collision
-  const suffix = state.apiKey!.slice(0, 8);
-  const adminProjectName = `${state.projectName}-admin-${suffix}`;
-  if (!isDone(state, "admin")) {
-    const { adminUrl } = await deployAdmin({
-      repoDir,
-      workerUrl: state.workerUrl!,
-      apiKey: state.apiKey!,
-      projectName: adminProjectName,
-    });
-    state.adminUrl = adminUrl;
-    markDone(state, "admin");
-    saveState(repoDir, state);
-  } else {
-    p.log.success(`Admin UI: デプロイ済み（${state.adminUrl}）`);
-  }
+  // 管理画面は Step 10 で Worker に同梱済み（別オリジンへのデプロイは不要）。
+  p.log.success(`管理画面: ${state.adminUrl}`);
 
   // Step 14: Generate MCP config
   const addMcp = await p.confirm({

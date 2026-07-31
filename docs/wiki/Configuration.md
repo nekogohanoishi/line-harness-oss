@@ -85,7 +85,9 @@ export type Env = {
 
 ### 管理画面の環境変数
 
-Next.js 管理画面で必要な環境変数。Vercel / CF Pages のダッシュボードで設定:
+管理画面は Worker と同一オリジン（`https://<worker>/admin`）から配信されるため、
+既定では環境変数は不要です（API は相対パスで叩きます）。
+別オリジンへ置く場合だけ以下を設定します:
 
 | 変数名 | 説明 | 例 |
 |--------|------|-----|
@@ -190,7 +192,7 @@ app.use('*', cors({ origin: '*' }));
 
 ```typescript
 app.use('*', cors({
-  origin: ['https://your-admin.pages.dev', 'https://your-domain.com'],
+  origin: ['https://your-worker.workers.dev', 'https://your-domain.com'],
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Authorization', 'Content-Type'],
 }));
@@ -289,9 +291,15 @@ pnpm dev:worker
 
 ```bash
 pnpm dev:web
-# → http://localhost:3001
-# NEXT_PUBLIC_API_URL=http://localhost:8787 に設定
+# → http://localhost:3001/admin （basePath が /admin のため）
+# 別プロセスの Worker を叩くので apps/web/.env.local に
+# NEXT_PUBLIC_API_URL=http://localhost:8787 を設定する
 ```
+
+Worker にビルド済みの管理画面を同梱した状態で確認したい場合は、
+`pnpm --filter worker build` の後に `wrangler dev` を起動し、
+`http://localhost:8787/admin` を開きます（この場合は
+`NEXT_PUBLIC_API_URL` 不要）。
 
 ### ローカル Webhook テスト
 
@@ -310,7 +318,7 @@ pnpm dev:worker          # Workers ローカル起動
 pnpm dev:web             # 管理画面ローカル起動
 pnpm build               # 全パッケージビルド
 pnpm deploy:worker       # Workers デプロイ
-pnpm deploy:web          # 管理画面ビルド
+pnpm deploy:web          # 管理画面ビルドのみ（配信は deploy:worker が同梱）
 pnpm db:migrate          # 本番D1にスキーマ適用
 pnpm db:migrate:local    # ローカルD1にスキーマ適用
 ```
