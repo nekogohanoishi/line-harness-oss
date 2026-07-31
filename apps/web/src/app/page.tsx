@@ -2,10 +2,11 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { api } from '@/lib/api'
+import { api, bookingApi, eventsApi } from '@/lib/api'
 import { useWorkerOrigin } from '@/lib/use-worker-origin'
 import CcPromptButton from '@/components/cc-prompt-button'
 import { useAccount } from '@/contexts/account-context'
+import { PageHeader } from '@/components/ui'
 
 const ccPrompts = [
   {
@@ -42,32 +43,104 @@ interface StatCardProps {
   icon: React.ReactNode
   href: string
   accentColor?: string
+  /** 補助指標向け。スマホでは 2 列に並べるためアイコンを省く。 */
+  compact?: boolean
 }
 
-function StatCard({ title, value, loading, icon, href, accentColor = '#06C755' }: StatCardProps) {
+function StatCard({ title, value, loading, icon, href, accentColor = '#06C755', compact = false }: StatCardProps) {
   return (
-    <Link href={href} className="block bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow group">
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-sm font-medium text-gray-500 mb-2">{title}</p>
+    <Link
+      href={href}
+      className="block bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6 hover:shadow-md transition-shadow group"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className={`text-[13px] sm:text-sm font-medium text-gray-500 mb-1 sm:mb-2 ${compact ? 'leading-snug' : 'truncate'}`}>
+            {title}
+          </p>
           {loading ? (
             <div className="h-8 w-20 bg-gray-100 rounded animate-pulse" />
           ) : (
-            <p className="text-3xl font-bold text-gray-900">
+            <p className="text-2xl sm:text-3xl font-bold text-gray-900 tabular-nums">
               {value !== null ? value.toLocaleString('ja-JP') : '-'}
             </p>
           )}
         </div>
         <div
-          className="w-10 h-10 rounded-lg flex items-center justify-center text-white shrink-0"
+          className={`w-10 h-10 rounded-lg items-center justify-center text-white shrink-0 ${compact ? 'hidden sm:flex' : 'flex'}`}
           style={{ backgroundColor: accentColor }}
         >
           {icon}
         </div>
       </div>
-      <p className="text-xs text-gray-400 mt-3 group-hover:text-green-600 transition-colors">
+      <p className="hidden sm:block text-xs text-gray-400 mt-3 group-hover:text-green-600 transition-colors">
         詳細を見る →
       </p>
+    </Link>
+  )
+}
+
+/**
+ * 承認待ち予約。スマホ運用では「予約の確認・承認」が最優先の作業なので、
+ * 折り返し (fold) より上、他の指標より前に置く。0 件のときは
+ * 「対応不要」であることが一目で分かる控えめな表示に落とす。
+ */
+function PendingBookingsCard({
+  eventPending,
+  slotPending,
+  loading,
+}: {
+  eventPending: number | null
+  slotPending: number | null
+  loading: boolean
+}) {
+  const total = (eventPending ?? 0) + (slotPending ?? 0)
+  const hasPending = total > 0
+
+  if (loading) {
+    return <div className="mb-4 h-[88px] rounded-xl border border-gray-200 bg-white animate-pulse" />
+  }
+
+  if (!hasPending) {
+    return (
+      <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-gray-200 bg-white px-4 py-3">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 text-green-600">
+          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+        </span>
+        <p className="text-sm text-gray-600">承認待ちの予約はありません</p>
+      </div>
+    )
+  }
+
+  return (
+    <Link
+      href={eventPending && eventPending > 0 ? '/events/bookings' : '/booking/bookings'}
+      className="mb-4 flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3.5 min-h-[68px] hover:bg-amber-100 active:bg-amber-100 transition-colors"
+    >
+      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-amber-400 text-white">
+        <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+            d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-base font-bold text-amber-900">
+          承認待ちの予約 {total.toLocaleString('ja-JP')} 件
+        </p>
+        <p className="text-xs text-amber-800/80 mt-0.5">
+          {[
+            eventPending ? `イベント ${eventPending} 件` : null,
+            slotPending ? `個別予約 ${slotPending} 件` : null,
+          ].filter(Boolean).join(' ・ ')}
+        </p>
+      </div>
+      <span className="shrink-0 text-amber-700" aria-hidden="true">
+        <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        </svg>
+      </span>
     </Link>
   )
 }
@@ -85,6 +158,29 @@ export default function DashboardPage() {
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [eventPending, setEventPending] = useState<number | null>(null)
+  const [slotPending, setSlotPending] = useState<number | null>(null)
+
+  // 承認待ち件数は他の指標と独立して取る。件数取得に失敗しても
+  // ダッシュボード全体をエラーにしない (通知バッジ相当の情報のため)。
+  useEffect(() => {
+    if (!selectedAccountId) {
+      setEventPending(null)
+      setSlotPending(null)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      const [ev, slot] = await Promise.allSettled([
+        eventsApi.pendingCount(selectedAccountId),
+        bookingApi.pendingCount(selectedAccountId),
+      ])
+      if (cancelled) return
+      setEventPending(ev.status === 'fulfilled' ? ev.value.count : null)
+      setSlotPending(slot.status === 'fulfilled' ? slot.value.count : null)
+    })()
+    return () => { cancelled = true }
+  }, [selectedAccountId])
 
   useEffect(() => {
     const load = async () => {
@@ -138,41 +234,26 @@ export default function DashboardPage() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">ダッシュボード</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          {selectedAccount
+      <PageHeader
+        title="ダッシュボード"
+        description={
+          selectedAccount
             ? `${selectedAccount.displayName || selectedAccount.name} の管理画面`
-            : 'LINE公式アカウント CRM 管理画面'}
-        </p>
-      </div>
+            : 'LINE公式アカウント CRM 管理画面'
+        }
+      />
 
       {error && (
-        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
           {error}
         </div>
       )}
 
-      {/* Demo banner */}
-      <a
-        href={`${workerOrigin}/auth/line?ref=dashboard`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="block mb-6 p-4 rounded-xl border border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-100 hover:to-emerald-100 transition-colors"
-      >
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-bold text-gray-900">LINE で体験する</p>
-            <p className="text-xs text-gray-500 mt-0.5">友だち追加でステップ配信・フォーム・自動返信を体験</p>
-          </div>
-          <span className="text-xs px-3 py-1.5 rounded-full text-white font-medium" style={{ backgroundColor: '#06C755' }}>
-            友だち追加
-          </span>
-        </div>
-      </a>
+      {/* 最優先: 承認待ちの予約 (スマホで最初に目に入る位置) */}
+      <PendingBookingsCard eventPending={eventPending} slotPending={slotPending} loading={loading} />
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mb-8">
+      {/* 主要指標。モバイルは 1 列縦積み、重要な順に上から並ぶ。 */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 mb-4 sm:mb-6">
         <StatCard
           title="友だち数"
           value={stats.friendCount}
@@ -213,10 +294,12 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* Round 3 summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 mb-8">
+      {/* 補助指標。スマホでは 2 列の小さいカードにして縦の占有を抑え、
+          クイックアクションが画面外へ押し出されないようにする。 */}
+      <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 mb-4 sm:mb-6">
         <StatCard
           title="テンプレート数"
+          compact
           value={stats.templateCount}
           loading={loading}
           href="/templates"
@@ -230,6 +313,7 @@ export default function DashboardPage() {
         />
         <StatCard
           title="アクティブルール数"
+          compact
           value={stats.automationCount}
           loading={loading}
           href="/automations"
@@ -243,6 +327,7 @@ export default function DashboardPage() {
         />
         <StatCard
           title="スコアリングルール数"
+          compact
           value={stats.scoringRuleCount}
           loading={loading}
           href="/scoring"
@@ -257,12 +342,12 @@ export default function DashboardPage() {
       </div>
 
       {/* Quick links */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <h2 className="text-sm font-semibold text-gray-800 mb-4">クイックアクション</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6">
+        <h2 className="text-sm font-semibold text-gray-800 mb-3 sm:mb-4">クイックアクション</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
           <Link
             href="/friends"
-            className="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-green-300 hover:bg-green-50 transition-colors group"
+            className="flex items-center gap-3 p-3 min-h-14 rounded-lg border border-gray-200 hover:border-green-300 hover:bg-green-50 transition-colors group"
           >
             <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white shrink-0" style={{ backgroundColor: '#06C755' }}>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -278,7 +363,7 @@ export default function DashboardPage() {
 
           <Link
             href="/scenarios"
-            className="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-colors group"
+            className="flex items-center gap-3 p-3 min-h-14 rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-colors group"
           >
             <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white shrink-0 bg-blue-500">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -294,7 +379,7 @@ export default function DashboardPage() {
 
           <Link
             href="/broadcasts"
-            className="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-purple-300 hover:bg-purple-50 transition-colors group"
+            className="flex items-center gap-3 p-3 min-h-14 rounded-lg border border-gray-200 hover:border-purple-300 hover:bg-purple-50 transition-colors group"
           >
             <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white shrink-0 bg-purple-500">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -310,7 +395,7 @@ export default function DashboardPage() {
 
           <Link
             href="/chats"
-            className="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-green-300 hover:bg-green-50 transition-colors group"
+            className="flex items-center gap-3 p-3 min-h-14 rounded-lg border border-gray-200 hover:border-green-300 hover:bg-green-50 transition-colors group"
           >
             <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white shrink-0" style={{ backgroundColor: '#06C755' }}>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -326,7 +411,7 @@ export default function DashboardPage() {
 
           <Link
             href="/health"
-            className="flex items-center gap-3 p-3 rounded-lg border border-gray-200 hover:border-red-300 hover:bg-red-50 transition-colors group"
+            className="flex items-center gap-3 p-3 min-h-14 rounded-lg border border-gray-200 hover:border-red-300 hover:bg-red-50 transition-colors group"
           >
             <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white shrink-0 bg-red-500">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -341,6 +426,22 @@ export default function DashboardPage() {
           </Link>
         </div>
       </div>
+
+      {/* デモ導線。日々の運用作業より優先度が低いので末尾に置く。 */}
+      <a
+        href={`${workerOrigin}/auth/line?ref=dashboard`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-4 flex items-center justify-between gap-3 p-4 rounded-xl border border-green-200 bg-green-50 hover:bg-green-100 transition-colors"
+      >
+        <div className="min-w-0">
+          <p className="text-sm font-bold text-gray-900">LINE で体験する</p>
+          <p className="text-xs text-gray-500 mt-0.5">友だち追加でステップ配信・フォーム・自動返信を体験</p>
+        </div>
+        <span className="shrink-0 text-xs px-3 py-2 rounded-full text-white font-medium" style={{ backgroundColor: '#06C755' }}>
+          友だち追加
+        </span>
+      </a>
 
       <CcPromptButton prompts={ccPrompts} />
     </div>

@@ -74,6 +74,34 @@ const menuSections = [
   },
 ]
 
+// pathname から「今どこにいるか」の表示名を引く。
+// モバイルはサイドバーが隠れていて現在地の手がかりが無いため、
+// 固定ヘッダにこの名前を出す。/events/bookings のような子ルートは
+// 一致した中で最長の href を採用する (/ が常に勝たないように)。
+const ROUTE_LABELS: Array<{ href: string; label: string }> = menuSections
+  .flatMap((s) => s.items)
+  .map((i) => ({ href: i.href, label: i.label }))
+  .concat([
+    { href: '/events/new', label: '新規イベント' },
+    { href: '/events/edit', label: 'イベント編集' },
+    { href: '/events/bookings', label: 'イベント予約管理' },
+    { href: '/scenarios/detail', label: 'シナリオ詳細' },
+    { href: '/broadcasts/detail', label: '配信詳細' },
+    { href: '/inflow-links', label: 'リファラルリンク' },
+    { href: '/form-submissions', label: 'フォーム回答' },
+    { href: '/templates', label: 'テンプレート' },
+    { href: '/settings', label: '設定' },
+  ])
+  .sort((a, b) => b.href.length - a.href.length)
+
+export function currentPageLabel(pathname: string): string {
+  if (pathname === '/') return 'ダッシュボード'
+  const hit = ROUTE_LABELS.find(
+    (r) => r.href !== '/' && (pathname === r.href || pathname.startsWith(r.href + '/')),
+  )
+  return hit?.label ?? 'L Harness'
+}
+
 function AccountAvatar({ account, size = 32 }: { account: AccountWithStats; size?: number }) {
   const displayName = account.displayName || account.name
   if (account.pictureUrl) {
@@ -114,10 +142,10 @@ function AccountSwitcher() {
   const displayName = selectedAccount?.displayName || selectedAccount?.name || ''
 
   return (
-    <div ref={ref} className="px-3 py-3 border-b border-gray-200">
+    <div ref={ref} className="shrink-0 px-3 py-2 border-b border-gray-200">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-gray-50 transition-colors"
+        className="w-full flex items-center gap-2.5 px-2.5 min-h-11 py-2 rounded-lg hover:bg-gray-50 active:bg-gray-100 transition-colors"
       >
         {selectedAccount && <AccountAvatar account={selectedAccount} size={28} />}
         <div className="flex-1 text-left min-w-0">
@@ -152,8 +180,8 @@ function AccountSwitcher() {
                   setSelectedAccountId(account.id)
                   setOpen(false)
                 }}
-                className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors ${
-                  isSelected ? 'bg-green-50' : 'hover:bg-gray-50'
+                className={`w-full flex items-center gap-2.5 px-3 min-h-11 py-2.5 text-left transition-colors ${
+                  isSelected ? 'bg-green-50' : 'hover:bg-gray-50 active:bg-gray-100'
                 }`}
               >
                 <AccountAvatar account={account} size={24} />
@@ -194,8 +222,9 @@ function NavIcon({ d }: { d: string }) {
 
 export default function Sidebar() {
   const pathname = usePathname()
-  const { selectedAccountId } = useAccount()
+  const { selectedAccountId, selectedAccount } = useAccount()
   const [isOpen, setIsOpen] = useState(false)
+  const pageLabel = currentPageLabel(pathname)
   const [staffName, setStaffName] = useState<string | null>(null)
   const [staffRole, setStaffRole] = useState<string | null>(null)
 
@@ -238,6 +267,8 @@ export default function Sidebar() {
     }
   }, [selectedAccountId])
 
+  const totalBadgeCount = unansweredCount + chatUnreadCount + friendEventUnreadCount
+
   useEffect(() => { setIsOpen(false) }, [pathname])
   useEffect(() => {
     document.body.style.overflow = isOpen ? 'hidden' : ''
@@ -248,8 +279,8 @@ export default function Sidebar() {
 
   const sidebarContent = (
     <>
-      {/* ロゴ */}
-      <div className="px-6 py-5 border-b border-gray-200">
+      {/* ロゴ (モバイルは右上の閉じるボタンと重ならないよう右に余白) */}
+      <div className="shrink-0 px-5 py-4 pr-14 lg:pr-5 border-b border-gray-200">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm" style={{ backgroundColor: '#06C755' }}>
             H
@@ -264,8 +295,9 @@ export default function Sidebar() {
       {/* アカウント切替 */}
       <AccountSwitcher />
 
-      {/* ナビゲーション */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+      {/* ナビゲーション: 項目が増えてもここだけがスクロールする。
+          overscroll-contain で端まで来たときに背面ページが動かない。 */}
+      <nav className="flex-1 min-h-0 px-3 py-3 space-y-1 overflow-y-auto overscroll-contain">
         {menuSections.map((section, si) => (
           <div key={si}>
             {section.label && (
@@ -289,12 +321,14 @@ export default function Sidebar() {
                 <Link
                   key={item.href}
                   href={item.href}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  aria-current={active ? 'page' : undefined}
+                  // min-h-11 (44px) は iOS のタップ領域の下限。
+                  className={`flex items-center gap-3 px-3 min-h-11 py-2 rounded-lg text-sm font-medium transition-colors ${
                     active
                       ? 'text-white'
                       : isDanger
-                        ? 'text-red-500 hover:bg-red-50'
-                        : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                        ? 'text-red-500 hover:bg-red-50 active:bg-red-100'
+                        : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 active:bg-gray-200'
                   }`}
                   style={active ? { backgroundColor: isDanger ? '#EF4444' : '#06C755' } : {}}
                 >
@@ -309,6 +343,7 @@ export default function Sidebar() {
                       {badgeCount > 99 ? '99+' : badgeCount}
                     </span>
                   )}
+                  {active && <span className="sr-only">（現在のページ）</span>}
                 </Link>
               )
             })}
@@ -316,8 +351,8 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* フッター */}
-      <div className="border-t border-gray-200">
+      {/* フッター (ホームインジケータに隠れないようセーフエリア分を確保) */}
+      <div className="border-t border-gray-200 shrink-0 lh-safe-pb">
         {staffName && (
           <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-100">
             <div className="font-medium text-gray-700">{staffName}</div>
@@ -330,8 +365,8 @@ export default function Sidebar() {
             </span>
           </div>
         )}
-        <div className="px-6 py-4 space-y-3">
-        <p className="text-xs text-gray-400">L Harness v{process.env.APP_VERSION || '0.0.0'}</p>
+        <div className="px-5 py-2 flex items-center justify-between gap-2">
+        <p className="text-xs text-gray-400">v{process.env.APP_VERSION || '0.0.0'}</p>
         <button
           onClick={async () => {
             try {
@@ -349,7 +384,7 @@ export default function Sidebar() {
             // 生の location 遷移は basePath が自動で付かないので adminPath() を通す。
             window.location.href = adminPath('/login')
           }}
-          className="flex items-center gap-2 text-xs text-gray-400 hover:text-red-500 transition-colors"
+          className="flex items-center gap-1.5 min-h-11 px-2 -mr-2 text-xs text-gray-500 hover:text-red-500 transition-colors"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
@@ -363,12 +398,15 @@ export default function Sidebar() {
 
   return (
     <>
-      {/* モバイル: ハンバーガーヘッダー */}
-      <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3">
+      {/* モバイル: ハンバーガーヘッダー。
+          高さとセーフエリアは globals.css の .lh-app-header で一元管理し、
+          本文側の .lh-app-header-offset と必ず同じ値になるようにする。 */}
+      <div className="lh-app-header lg:hidden fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-200 flex items-center gap-1">
         <button
           onClick={() => setIsOpen(!isOpen)}
-          className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-gray-100 transition-colors"
-          aria-label="メニュー"
+          className="relative shrink-0 min-w-11 min-h-11 flex items-center justify-center rounded-lg hover:bg-gray-100 active:bg-gray-200 transition-colors"
+          aria-label={isOpen ? 'メニューを閉じる' : 'メニューを開く'}
+          aria-expanded={isOpen}
         >
           <svg className="w-6 h-6 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             {isOpen
@@ -376,20 +414,51 @@ export default function Sidebar() {
               : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             }
           </svg>
+          {/* メニューを閉じている間も未読の存在が分かるようにする */}
+          {!isOpen && totalBadgeCount > 0 && (
+            <span className="absolute top-1 right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold leading-[18px] text-center tabular-nums ring-2 ring-white">
+              {totalBadgeCount > 99 ? '99+' : totalBadgeCount}
+            </span>
+          )}
         </button>
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white font-bold text-xs" style={{ backgroundColor: '#06C755' }}>H</div>
-          <p className="text-sm font-bold text-gray-900">L Harness</p>
+
+        {/* 現在地。サイドバーが隠れている間の唯一の手がかりなので、
+            ロゴより現在のページ名を優先して見せる。 */}
+        <div className="min-w-0 flex-1 px-1">
+          <p className="text-[15px] font-bold text-gray-900 truncate leading-tight">{pageLabel}</p>
+          {selectedAccount && (
+            <p className="text-[11px] text-gray-400 truncate leading-tight">
+              {selectedAccount.displayName || selectedAccount.name}
+            </p>
+          )}
+        </div>
+
+        <div className="shrink-0 w-8 h-8 mr-1 rounded-lg flex items-center justify-center text-white font-bold text-xs" style={{ backgroundColor: '#06C755' }}>
+          H
         </div>
       </div>
 
       {/* モバイル: オーバーレイ */}
-      {isOpen && <div className="lg:hidden fixed inset-0 z-40 bg-black/50" onClick={() => setIsOpen(false)} />}
+      {isOpen && (
+        <div
+          className="lg:hidden fixed inset-0 z-40 bg-black/50 lh-fade-in"
+          onClick={() => setIsOpen(false)}
+          aria-hidden="true"
+        />
+      )}
 
-      {/* モバイル: スライドインサイドバー */}
-      <aside className={`lg:hidden fixed top-0 left-0 z-50 w-72 bg-white flex flex-col h-screen transform transition-transform duration-300 ease-in-out ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="absolute top-4 right-4">
-          <button onClick={() => setIsOpen(false)} className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-gray-100" aria-label="閉じる">
+      {/* モバイル: スライドインサイドバー。
+          常時マウントしたまま transform を切り替えるので、開くときも
+          閉じるときも同じ 250ms のアニメーションが効く。
+          h-[100dvh] は iOS のアドレスバー伸縮で下部が切れるのを防ぐ。 */}
+      <aside
+        aria-hidden={!isOpen}
+        className={`lg:hidden fixed top-0 left-0 z-50 w-[min(19rem,85vw)] bg-white flex flex-col h-[100dvh] shadow-xl transform transition-transform duration-[250ms] ease-out lh-safe-pl ${
+          isOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <div className="absolute top-3 right-2 z-10">
+          <button onClick={() => setIsOpen(false)} className="min-w-11 min-h-11 flex items-center justify-center rounded-lg hover:bg-gray-100 active:bg-gray-200" aria-label="閉じる">
             <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>

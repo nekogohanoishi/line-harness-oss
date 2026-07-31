@@ -1,6 +1,47 @@
 @import "tailwindcss";
 
 /* ================================================================
+ * スマホ (iPhone / 375px 基準) 向けの土台。
+ * ================================================================ */
+
+html {
+  /* 横向きにしたとき Safari が本文だけ勝手に拡大するのを止める。 */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  /* タップのたびに出る青いフラッシュを控えめなグレーに。
+     完全な transparent にすると押した手応えが消えるため残す。 */
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0.04);
+}
+
+/* 押下フィードバックを出す要素で、リンクの長押しメニューが
+   出しっぱなしにならないようにする。 */
+button,
+[role='button'] {
+  touch-action: manipulation;
+}
+
+@media (max-width: 639px) {
+  /* iOS Safari は font-size が 16px 未満の入力欄をフォーカスすると
+     ページ全体をズームし、そのまま戻らない。管理画面の入力は
+     text-sm (14px) が大半なので、狭い画面では 16px に底上げする。
+     見た目の詰まりは行間と padding で吸収する。 */
+  input:not([type='checkbox']):not([type='radio']),
+  select,
+  textarea {
+    font-size: 16px;
+    line-height: 1.4;
+  }
+
+  /* 本文は 14px 前後だと iPhone で読みづらいので少しだけ上げる。 */
+  body {
+    font-size: 15px;
+  }
+}
+
+/* ================================================================
  * 共通 UI プリミティブ (components/ui/**) が使う補助クラス。
  * Tailwind のユーティリティでは表現できないもの (keyframes /
  * env(safe-area-inset-*) / scrollbar 非表示) だけをここに置く。
@@ -70,6 +111,33 @@
 
 .lh-safe-pl {
   padding-left: env(safe-area-inset-left, 0px);
+}
+
+/* ---- モバイル固定ヘッダとその分の余白 ----
+   高さをここで一元管理する。ヘッダ側と本文側の padding が
+   別々に書かれていると、セーフエリアの有無でずれる。 */
+
+.lh-app-header {
+  height: calc(56px + env(safe-area-inset-top, 0px));
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: max(0.5rem, env(safe-area-inset-left, 0px));
+  padding-right: max(0.5rem, env(safe-area-inset-right, 0px));
+}
+
+.lh-app-header-offset {
+  padding-top: calc(56px + env(safe-area-inset-top, 0px));
+}
+
+@media (min-width: 1024px) {
+  .lh-app-header-offset {
+    padding-top: 0;
+  }
+}
+
+/* 横向き時にノッチ側へ本文が潜り込まないようにする。 */
+.lh-safe-x {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 /* ---- 横スクロールのチップ列 / パンくず用 ---- */
