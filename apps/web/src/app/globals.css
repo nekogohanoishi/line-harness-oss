@@ -1,1 +1,84 @@
 @import "tailwindcss";
+
+/* ================================================================
+ * 共通 UI プリミティブ (components/ui/**) が使う補助クラス。
+ * Tailwind のユーティリティでは表現できないもの (keyframes /
+ * env(safe-area-inset-*) / scrollbar 非表示) だけをここに置く。
+ * ================================================================ */
+
+/* ---- Sheet の出現アニメーション ---- */
+
+@keyframes lh-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes lh-sheet-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+@keyframes lh-modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
+}
+
+.lh-fade-in {
+  animation: lh-fade-in 0.16s ease-out;
+}
+
+/* モバイルは下からせり上がり、sm 以上は中央でふわっと出す。
+   Tailwind の `sm:` 変種は自前クラスには効かないので、
+   1 クラス内でメディアクエリを切り替える。 */
+.lh-sheet-panel {
+  animation: lh-sheet-up 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@media (min-width: 640px) {
+  .lh-sheet-panel {
+    animation: lh-modal-in 0.16s ease-out;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lh-fade-in,
+  .lh-sheet-panel {
+    animation: none;
+  }
+}
+
+/* ---- iOS セーフエリア ----
+   ホームインジケータ / ノッチに操作要素が隠れないようにする。
+   env() は非対応環境やデスクトップでは 0 になるので、
+   フォールバック値をそのまま使える。 */
+
+.lh-safe-pb {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.lh-safe-pb-3 {
+  padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+}
+
+.lh-safe-pb-4 {
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+}
+
+.lh-safe-pt-3 {
+  padding-top: calc(0.75rem + env(safe-area-inset-top, 0px));
+}
+
+.lh-safe-pl {
+  padding-left: env(safe-area-inset-left, 0px);
+}
+
+/* ---- 横スクロールのチップ列 / パンくず用 ---- */
+
+.lh-no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.lh-no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
