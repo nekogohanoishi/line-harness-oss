@@ -4,7 +4,7 @@ import type { Message, WebhookRequestBody, WebhookEvent, TextEventMessage } from
 import { createStickerMessageContent } from '@line-crm/shared';
 import {
   upsertFriend,
-  updateFriendFollowStatus,
+  recordFriendFollowEvent,
   getFriendByLineUserId,
   getScenarios,
   enrollFriendInScenario,
@@ -86,6 +86,74 @@ async function logIncomingPostback(
   } catch (err) {
     console.error('Failed to log incoming postback', err);
   }
+}
+
+/**
+ * Resolve a friend for an inbound user interaction.
+ *
+ * LINE does not expose an API that lists every existing friend. Users who added
+ * the account before Harness was connected therefore do not exist in `friends`
+ * until an inbound webhook identifies them. Import them here without firing a
+ * friend_add event or enrolling them in friend-add scenarios.
+ */
+async function resolveInboundFriend(
+  db: D1Database,
+  lineClient: LineClient,
+  userId: string,
+  lineAccountId: string | null,
+): Promise<Friend> {
+  let friend = await getFriendByLineUserId(db, userId);
+
+  if (!friend) {
+    let profile: Awaited<ReturnType<LineClient['getProfile']>> | null = null;
+    try {
+      profile = await lineClient.getProfile(userId);
+    } catch (err) {
+      console.error(`[inbound] Failed to get profile for ${userId}`, err);
+    }
+
+    try {
+      friend = await upsertFriend(db, {
+        lineUserId: userId,
+        displayName: profile?.displayName ?? null,
+        pictureUrl: profile?.pictureUrl ?? null,
+        statusMessage: profile?.statusMessage ?? null,
+        isFollowing: true,
+      });
+      console.log(`[inbound] Imported existing LINE friend ${userId}`);
+    } catch (err) {
+      // A redelivered webhook can race the first insert. Reuse the row if the
+      // other request completed it; otherwise preserve the original failure.
+      friend = await getFriendByLineUserId(db, userId);
+      if (!friend) throw err;
+    }
+  }
+
+  if (friend.is_following !== 1 || (lineAccountId && friend.line_account_id !== lineAccountId)) {
+    const now = jstNow();
+    await db
+      .prepare(
+        `UPDATE friends
+         SET line_account_id = COALESCE(?, line_account_id),
+             is_following = 1,
+             blocked_at = NULL,
+             last_unblocked_at = CASE WHEN is_following = 0 THEN ? ELSE last_unblocked_at END,
+             updated_at = ?
+         WHERE id = ?`,
+      )
+      .bind(lineAccountId, now, now, friend.id)
+      .run();
+    friend = {
+      ...friend,
+      line_account_id: lineAccountId ?? friend.line_account_id,
+      is_following: 1,
+      blocked_at: null,
+      last_unblocked_at: friend.is_following === 0 ? now : friend.last_unblocked_at,
+      updated_at: now,
+    };
+  }
+
+  return friend;
 }
 
 async function handleInlineSurveyPostback(
@@ -557,6 +625,14 @@ async function handleEvent(
       displayName: profile?.displayName ?? null,
       pictureUrl: profile?.pictureUrl ?? null,
       statusMessage: profile?.statusMessage ?? null,
+      isFollowing: !isRepeatFollow,
+    });
+
+    await recordFriendFollowEvent(db, {
+      friendId: friend.id,
+      eventType: isRepeatFollow ? 'unblocked' : 'added',
+      eventTimestamp: event.timestamp,
+      webhookEventId: event.webhookEventId,
     });
 
     console.log(`[follow] friend.id=${friend.id} friend.line_account_id=${(friend as any).line_account_id}`);
@@ -778,7 +854,15 @@ async function handleEvent(
       event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
 
-    await updateFriendFollowStatus(db, userId, false);
+    const friend = await getFriendByLineUserId(db, userId);
+    if (!friend) return;
+
+    await recordFriendFollowEvent(db, {
+      friendId: friend.id,
+      eventType: 'blocked',
+      eventTimestamp: event.timestamp,
+      webhookEventId: event.webhookEventId,
+    });
     return;
   }
 
@@ -788,7 +872,7 @@ async function handleEvent(
     const userId = event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
 
-    const friend = await getFriendByLineUserId(db, userId);
+    const friend = await resolveInboundFriend(db, lineClient, userId, lineAccountId);
     if (!friend) return;
 
     const postbackData = (event as unknown as { postback: { data: string } }).postback.data;
@@ -892,8 +976,7 @@ async function handleEvent(
   if (event.type === 'message' && event.message.type !== 'text') {
     const userId = event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
-    const friend = await getFriendByLineUserId(db, userId);
-    if (!friend) return;
+    const friend = await resolveInboundFriend(db, lineClient, userId, lineAccountId);
 
     const msg = event.message as {
       type: string;
@@ -924,11 +1007,12 @@ async function handleEvent(
 
     await db
       .prepare(
-        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, created_at)
-         VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, 'user', ?)`,
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, line_account_id, created_at)
+         VALUES (?, ?, 'incoming', ?, ?, NULL, NULL, 'user', ?, ?)`,
       )
-      .bind(crypto.randomUUID(), friend.id, msg.type, content, jstNow())
+      .bind(crypto.randomUUID(), friend.id, msg.type, content, lineAccountId ?? friend.line_account_id, jstNow())
       .run();
+    await upsertChatOnMessage(db, friend.id);
     return;
   }
 
@@ -938,8 +1022,7 @@ async function handleEvent(
       event.source.type === 'user' ? event.source.userId : undefined;
     if (!userId) return;
 
-    const friend = await getFriendByLineUserId(db, userId);
-    if (!friend) return;
+    const friend = await resolveInboundFriend(db, lineClient, userId, lineAccountId);
 
     const incomingText = textMessage.text;
     const now = jstNow();
@@ -948,10 +1031,10 @@ async function handleEvent(
     // 受信メッセージをログに記録
     await db
       .prepare(
-        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, created_at)
-         VALUES (?, ?, 'incoming', 'text', ?, NULL, NULL, 'user', ?)`,
+        `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, line_account_id, created_at)
+         VALUES (?, ?, 'incoming', 'text', ?, NULL, NULL, 'user', ?, ?)`,
       )
-      .bind(logId, friend.id, incomingText, now)
+      .bind(logId, friend.id, incomingText, lineAccountId ?? friend.line_account_id, now)
       .run();
 
     // Cross-account trigger: send message from another account via UUID

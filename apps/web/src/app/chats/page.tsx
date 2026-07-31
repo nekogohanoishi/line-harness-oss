@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { parseStickerMessageContent, stickerFallback } from '@line-crm/shared'
-import { api, fetchApi } from '@/lib/api'
+import { api, fetchApi, type ChatCounts, type ChatOperatorMetric } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
@@ -17,11 +17,17 @@ interface Chat {
   friendPictureUrl: string | null
   operatorId: string | null
   status: 'unread' | 'in_progress' | 'resolved'
+  priority: 'low' | 'normal' | 'high' | 'urgent'
   notes: string | null
   lastMessageAt: string | null
+  dueAt: string | null
+  openedAt: string | null
+  firstResponseAt: string | null
+  resolvedAt: string | null
   lastMessageContent: string | null
   lastMessageDirection: 'incoming' | 'outgoing' | null
   lastMessageType: string | null
+  hasUnreadMessage: boolean
   createdAt: string
   updatedAt: string
 }
@@ -40,19 +46,49 @@ interface ChatDetail extends Chat {
   messages?: ChatMessage[]
 }
 
-type StatusFilter = 'all' | 'unread' | 'in_progress' | 'resolved'
+interface OperatorItem {
+  id: string
+  name: string
+  isActive: boolean
+}
+
+interface TagItem {
+  id: string
+  name: string
+  color: string
+}
+
+type InboxFilter = 'all' | 'unread_messages' | 'unread' | 'in_progress' | 'overdue' | 'resolved'
+
+const emptyChatCounts: ChatCounts = {
+  all: 0,
+  unreadMessages: 0,
+  unhandled: 0,
+  inProgress: 0,
+  overdue: 0,
+  resolved: 0,
+}
 
 const statusConfig: Record<Chat['status'], { label: string; className: string }> = {
-  unread: { label: '未読', className: 'bg-red-100 text-red-700' },
+  unread: { label: '未対応', className: 'bg-red-100 text-red-700' },
   in_progress: { label: '対応中', className: 'bg-yellow-100 text-yellow-700' },
   resolved: { label: '解決済', className: 'bg-green-100 text-green-700' },
 }
 
-const statusFilters: { key: StatusFilter; label: string }[] = [
-  { key: 'all', label: '全て' },
-  { key: 'unread', label: '未読' },
-  { key: 'in_progress', label: '対応中' },
-  { key: 'resolved', label: '解決済' },
+const priorityConfig: Record<Chat['priority'], { label: string; className: string }> = {
+  low: { label: '低', className: 'text-gray-500' },
+  normal: { label: '通常', className: 'text-gray-600' },
+  high: { label: '高', className: 'text-amber-700' },
+  urgent: { label: '緊急', className: 'font-semibold text-red-700' },
+}
+
+const inboxFilters: { key: InboxFilter; label: string; countKey: keyof ChatCounts }[] = [
+  { key: 'all', label: '全て', countKey: 'all' },
+  { key: 'unread_messages', label: '未確認', countKey: 'unreadMessages' },
+  { key: 'unread', label: '未対応', countKey: 'unhandled' },
+  { key: 'in_progress', label: '対応中', countKey: 'inProgress' },
+  { key: 'overdue', label: '期限超過', countKey: 'overdue' },
+  { key: 'resolved', label: '解決済', countKey: 'resolved' },
 ]
 
 const SHOW_LOADING_PREF_KEY = 'lh_chat_show_loading_indicator'
@@ -86,6 +122,28 @@ function formatDatetime(iso: string | null): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function toDatetimeLocal(iso: string | null): string {
+  if (!iso) return ''
+  const date = new Date(iso)
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 16)
+}
+
+function isOverdue(chat: Pick<Chat, 'status' | 'dueAt'>): boolean {
+  return chat.status !== 'resolved'
+    && Boolean(chat.dueAt)
+    && new Date(chat.dueAt!).getTime() < Date.now()
+}
+
+function formatResponseDuration(seconds: number | null): string {
+  if (seconds === null) return '未計測'
+  if (seconds < 60) return `${seconds}秒`
+  if (seconds < 3600) return `${Math.round(seconds / 60)}分`
+  const hours = seconds / 3600
+  if (hours < 24) return `${hours < 10 ? hours.toFixed(1) : Math.round(hours)}時間`
+  return `${(hours / 24).toFixed(1)}日`
 }
 
 function sameYmd(aIso: string, bIso: string): boolean {
@@ -171,10 +229,7 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
     sendLockRef.current = true
     setSending(true)
     try {
-      await fetchApi(`/api/friends/${friendId}/messages`, {
-        method: 'POST',
-        body: JSON.stringify({ content, messageType: 'text' }),
-      })
+      await api.chats.send(friendId, { content, messageType: 'text' })
       setMessages((prev) => [...prev, {
         id: crypto.randomUUID(),
         direction: 'outgoing',
@@ -183,6 +238,7 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
         createdAt: new Date().toISOString(),
       }])
       setMessage('')
+      onSent()
     } catch { /* silent */ }
     setSending(false)
     sendLockRef.current = false
@@ -310,8 +366,23 @@ export default function ChatsPage() {
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null)
   const [selectedFriendId, setSelectedFriendId] = useState<string | null>(null)
   const [chatDetail, setChatDetail] = useState<ChatDetail | null>(null)
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
-  const statusFilterRef = useRef<StatusFilter>('all')
+  const [inboxFilter, setInboxFilter] = useState<InboxFilter>('all')
+  const inboxFilterRef = useRef<InboxFilter>('all')
+  const [operatorFilter, setOperatorFilter] = useState('')
+  const [tagFilter, setTagFilter] = useState('')
+  const [priorityFilter, setPriorityFilter] = useState<'' | Chat['priority']>('')
+  const [operators, setOperators] = useState<OperatorItem[]>([])
+  const [tags, setTags] = useState<TagItem[]>([])
+  const [chatCounts, setChatCounts] = useState<ChatCounts>(emptyChatCounts)
+  const [operatorMetrics, setOperatorMetrics] = useState<ChatOperatorMetric[]>([])
+  const [showOperatorMetrics, setShowOperatorMetrics] = useState(false)
+  const [selectedChatIds, setSelectedChatIds] = useState<Set<string>>(new Set())
+  const [bulkOperatorId, setBulkOperatorId] = useState('')
+  const [bulkAction, setBulkAction] = useState<'read' | 'assign' | null>(null)
+  const [showOperatorForm, setShowOperatorForm] = useState(false)
+  const [newOperatorName, setNewOperatorName] = useState('')
+  const [newOperatorEmail, setNewOperatorEmail] = useState('')
+  const [creatingOperator, setCreatingOperator] = useState(false)
   // Send mode: 'enter' = Enter sends, Shift+Enter = newline; 'shift-enter' = reverse
   const [sendMode, setSendMode] = useState<'enter' | 'shift-enter'>('enter')
   const [loading, setLoading] = useState(true)
@@ -322,6 +393,9 @@ export default function ChatsPage() {
   const sendLockRef = useRef(false)
   const [notes, setNotes] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
+  const [priorityValue, setPriorityValue] = useState<Chat['priority']>('normal')
+  const [dueAtValue, setDueAtValue] = useState('')
+  const [savingSla, setSavingSla] = useState(false)
   const [showLoadingIndicator, setShowLoadingIndicator] = useState(false)
   const [loadingSeconds, setLoadingSeconds] = useState(5)
   const lastLoadingTriggerAtRef = useRef<Record<string, number>>({})
@@ -353,13 +427,21 @@ export default function ChatsPage() {
     }
   }, [showLoadingIndicator, loadingSeconds])
 
-  const loadChats = useCallback(async () => {
-    setLoading(true)
-    setError('')
+  const filterParams = useCallback(() => ({
+    operatorId: operatorFilter || undefined,
+    tagId: tagFilter || undefined,
+    accountId: selectedAccountId || undefined,
+    priority: priorityFilter || undefined,
+  }), [operatorFilter, tagFilter, priorityFilter, selectedAccountId])
+
+  const loadChats = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
+    if (!silent) setError('')
     try {
-      const params: { status?: string; accountId?: string } = {}
-      if (statusFilter !== 'all') params.status = statusFilter
-      if (selectedAccountId) params.accountId = selectedAccountId
+      const params: Parameters<typeof api.chats.list>[0] = filterParams()
+      if (inboxFilter === 'unread_messages') params.readStatus = 'unread'
+      else if (inboxFilter === 'overdue') params.overdue = true
+      else if (inboxFilter !== 'all') params.status = inboxFilter
       const chatRes = await api.chats.list(params)
       if (chatRes.success) {
         setChats(chatRes.data as unknown as Chat[])
@@ -367,9 +449,33 @@ export default function ChatsPage() {
     } catch {
       setError('チャットの読み込みに失敗しました。もう一度お試しください。')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
-  }, [statusFilter, selectedAccountId])
+  }, [filterParams, inboxFilter])
+
+  const loadChatCounts = useCallback(async () => {
+    try {
+      const response = await api.chats.counts(filterParams())
+      if (response.success) setChatCounts(response.data)
+    } catch {
+      // 一覧が利用できる場合は、件数だけの一時的な失敗を画面全体のエラーにしない。
+    }
+  }, [filterParams])
+
+  const loadOperatorMetrics = useCallback(async () => {
+    try {
+      const response = await api.chats.operatorMetrics({
+        accountId: selectedAccountId || undefined,
+      })
+      if (response.success) setOperatorMetrics(response.data.items)
+    } catch {
+      // Metrics can recover on the next polling cycle without blocking chat work.
+    }
+  }, [selectedAccountId])
+
+  useEffect(() => {
+    setSelectedChatIds(new Set())
+  }, [inboxFilter, operatorFilter, tagFilter, priorityFilter, selectedAccountId])
 
   // Friends list (for the "new direct message" modal) — loaded lazily in the background
   // Previously fetched 800 friends in parallel with chats, which blocked the initial render.
@@ -382,10 +488,24 @@ export default function ChatsPage() {
     } catch { /* silent */ }
   }, [selectedAccountId])
 
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([api.operators.list(), api.tags.list()]).then(([operatorRes, tagRes]) => {
+      if (cancelled) return
+      if (operatorRes.success) {
+        setOperators((operatorRes.data as unknown as OperatorItem[]).filter((operator) => operator.isActive))
+      }
+      if (tagRes.success) setTags(tagRes.data as unknown as TagItem[])
+    }).catch(() => {
+      // 絞り込み候補が取れなくてもチャット本体は利用可能にする。
+    })
+    return () => { cancelled = true }
+  }, [])
+
   useEffect(() => { void loadAllFriends() }, [loadAllFriends])
 
   // Keep ref in sync so setChats updater can read the latest filter without stale closure
-  useEffect(() => { statusFilterRef.current = statusFilter }, [statusFilter])
+  useEffect(() => { inboxFilterRef.current = inboxFilter }, [inboxFilter])
 
   // Load/save sendMode preference (guarded — privacy-restricted browsers throw)
   useEffect(() => {
@@ -398,32 +518,64 @@ export default function ChatsPage() {
     try { localStorage.setItem('chat.sendMode', sendMode) } catch { /* ignore */ }
   }, [sendMode])
 
-  const loadChatDetail = useCallback(async (chatId: string) => {
-    setDetailLoading(true)
-    setError('')
+  const loadChatDetail = useCallback(async (chatId: string, silent = false) => {
+    if (!silent) setDetailLoading(true)
+    if (!silent) setError('')
     try {
       const res = await api.chats.get(chatId)
       if (res.success) {
-        setChatDetail(res.data as unknown as ChatDetail)
-        setNotes((res.data as unknown as ChatDetail).notes || '')
+        const detail = res.data as unknown as ChatDetail
+        setChatDetail(detail)
+        setNotes(detail.notes || '')
+        if (!silent) {
+          setPriorityValue(detail.priority || 'normal')
+          setDueAtValue(toDatetimeLocal(detail.dueAt))
+        }
       } else {
         // API は 200 で success:false を返す可能性 (例: 404 lookup)。詳細を画面に出す。
         const errMsg = (res as { error?: string }).error ?? '不明なエラー'
-        setError(`チャット詳細の読み込みに失敗しました: ${errMsg}`)
+        if (!silent) setError(`チャット詳細の読み込みに失敗しました: ${errMsg}`)
       }
     } catch (err) {
       // ネットワーク / parse / auth fail などの例外。empty catch だと原因不明だったので詳細を出す。
       const msg = err instanceof Error ? err.message : String(err)
-      setError(`チャット詳細の読み込みに失敗しました: ${msg}`)
+      if (!silent) setError(`チャット詳細の読み込みに失敗しました: ${msg}`)
     } finally {
-      setDetailLoading(false)
+      if (!silent) setDetailLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    loadChats()
-  }, [loadChats])
+    void Promise.all([loadChats(), loadChatCounts(), loadOperatorMetrics()])
+    const id = window.setInterval(() => {
+      void Promise.all([loadChats(true), loadChatCounts(), loadOperatorMetrics()])
+    }, 30_000)
+    return () => window.clearInterval(id)
+  }, [loadChats, loadChatCounts, loadOperatorMetrics])
 
+  const markChatRead = useCallback(async (chatId: string) => {
+    try {
+      const response = await api.chats.markRead(chatId)
+      if (!response.success) return
+      setChats((current) => {
+        const updated = current.map((chat) => (
+          chat.id === chatId ? { ...chat, hasUnreadMessage: false } : chat
+        ))
+        return inboxFilterRef.current === 'unread_messages'
+          ? updated.filter((chat) => chat.id !== chatId)
+          : updated
+      })
+      setChatDetail((current) => (
+        current?.id === chatId ? { ...current, hasUnreadMessage: false } : current
+      ))
+      void loadChatCounts()
+      void loadOperatorMetrics()
+      window.dispatchEvent(new Event('lh:notification-counts-changed'))
+    } catch {
+      // The next polling cycle retries the server-derived state.
+    }
+
+  }, [loadChatCounts, loadOperatorMetrics])
   // Deep-link from other pages (e.g. /form-submissions): ?friend=<friendId>
   // chat list returns id = friend_id, so selectedChatId === friendId is correct.
   // If no chat exists yet, loadChatDetail will fail and the user can fall back to
@@ -437,11 +589,16 @@ export default function ChatsPage() {
 
   useEffect(() => {
     if (selectedChatId) {
-      loadChatDetail(selectedChatId)
-    } else {
-      setChatDetail(null)
+      void loadChatDetail(selectedChatId)
+      void markChatRead(selectedChatId)
+      const id = window.setInterval(() => {
+        void loadChatDetail(selectedChatId, true)
+        void markChatRead(selectedChatId)
+      }, 30_000)
+      return () => window.clearInterval(id)
     }
-  }, [selectedChatId, loadChatDetail])
+    setChatDetail(null)
+  }, [selectedChatId, loadChatDetail, markChatRead])
 
   // Surface deep-linked chats in the sidebar even when the current account
   // filter or status filter would exclude them — otherwise the user replies
@@ -465,11 +622,17 @@ export default function ChatsPage() {
         friendPictureUrl: chatDetail.friendPictureUrl,
         operatorId: chatDetail.operatorId ?? null,
         status: chatDetail.status,
+        priority: chatDetail.priority ?? 'normal',
         notes: chatDetail.notes ?? null,
         lastMessageAt: chatDetail.lastMessageAt ?? lastMsg?.createdAt ?? null,
+        dueAt: chatDetail.dueAt ?? null,
+        openedAt: chatDetail.openedAt ?? null,
+        firstResponseAt: chatDetail.firstResponseAt ?? null,
+        resolvedAt: chatDetail.resolvedAt ?? null,
         lastMessageContent: chatDetail.lastMessageContent ?? lastMsg?.content ?? null,
         lastMessageDirection: chatDetail.lastMessageDirection ?? lastMsg?.direction ?? null,
         lastMessageType: chatDetail.lastMessageType ?? lastMsg?.messageType ?? null,
+        hasUnreadMessage: chatDetail.hasUnreadMessage ?? false,
         createdAt: chatDetail.createdAt,
         updatedAt: chatDetail.updatedAt,
       }
@@ -561,7 +724,7 @@ export default function ChatsPage() {
         // Skip reconciliation if the list no longer contains this chat (e.g. tab changed mid-send)
         const exists = prev.some((c) => c.id === sendingChatId)
         if (!exists) return prev
-        const currentFilter = statusFilterRef.current
+        const currentFilter = inboxFilterRef.current
         const updated = prev.map((c) => c.id === sendingChatId ? {
           ...c,
           lastMessageAt: now,
@@ -573,14 +736,22 @@ export default function ChatsPage() {
           lastMessageDirection: 'outgoing' as const,
           lastMessageType: 'text' as const,
         } : c)
-        // Drop rows that no longer match the current tab (e.g. replying from 未読 moves chat to in_progress)
-        const filtered = currentFilter === 'all' ? updated : updated.filter((c) => c.status === currentFilter)
+        // 返信によって現在の絞り込み条件から外れた行は一覧から除く。
+        const filtered = currentFilter === 'all'
+          ? updated
+          : currentFilter === 'unread_messages'
+            ? updated.filter((chat) => chat.hasUnreadMessage)
+            : currentFilter === 'overdue'
+              ? updated.filter(isOverdue)
+              : updated.filter((chat) => chat.status === currentFilter)
         return [...filtered].sort((a, b) => {
           const at = a.lastMessageAt ? new Date(a.lastMessageAt).getTime() : 0
           const bt = b.lastMessageAt ? new Date(b.lastMessageAt).getTime() : 0
           return bt - at
         })
       })
+      void loadChatCounts()
+      void loadOperatorMetrics()
     } catch {
       setError('メッセージの送信に失敗しました。')
     } finally {
@@ -593,10 +764,27 @@ export default function ChatsPage() {
     if (!selectedChatId) return
     try {
       await api.chats.update(selectedChatId, { status: newStatus })
-      loadChatDetail(selectedChatId)
-      loadChats()
+      await Promise.all([loadChatDetail(selectedChatId), loadChats(true), loadChatCounts(), loadOperatorMetrics()])
     } catch {
       setError('ステータスの更新に失敗しました。')
+    }
+  }
+
+  const handleSaveSla = async () => {
+    if (!selectedChatId || savingSla) return
+    setSavingSla(true)
+    setError('')
+    try {
+      const dueAt = dueAtValue ? new Date(dueAtValue).toISOString() : null
+      await api.chats.update(selectedChatId, {
+        priority: priorityValue,
+        dueAt,
+      })
+      await Promise.all([loadChatDetail(selectedChatId), loadChats(true), loadChatCounts(), loadOperatorMetrics()])
+    } catch {
+      setError('優先度と対応期限を保存できませんでした。')
+    } finally {
+      setSavingSla(false)
     }
   }
 
@@ -611,6 +799,98 @@ export default function ChatsPage() {
     } finally {
       setSavingNotes(false)
     }
+  }
+
+  const toggleChatSelection = (chatId: string) => {
+    setSelectedChatIds((current) => {
+      const next = new Set(current)
+      if (next.has(chatId)) next.delete(chatId)
+      else next.add(chatId)
+      return next
+    })
+  }
+
+  const allVisibleSelected = chats.length > 0 && chats.every((chat) => selectedChatIds.has(chat.id))
+
+  const toggleAllVisible = () => {
+    setSelectedChatIds((current) => {
+      const next = new Set(current)
+      if (allVisibleSelected) chats.forEach((chat) => next.delete(chat.id))
+      else chats.forEach((chat) => next.add(chat.id))
+      return next
+    })
+  }
+
+  const handleBulkRead = async () => {
+    const friendIds = [...selectedChatIds]
+    if (friendIds.length === 0 || bulkAction) return
+    setBulkAction('read')
+    setError('')
+    try {
+      const response = await api.chats.markReadBulk(friendIds)
+      if (!response.success) throw new Error('bulk read failed')
+      setSelectedChatIds(new Set())
+      await Promise.all([loadChats(true), loadChatCounts()])
+      window.dispatchEvent(new Event('lh:notification-counts-changed'))
+    } catch {
+      setError('選択したチャットを確認済みにできませんでした。')
+    } finally {
+      setBulkAction(null)
+    }
+  }
+
+  const handleBulkAssign = async () => {
+    const friendIds = [...selectedChatIds]
+    if (friendIds.length === 0 || !bulkOperatorId || bulkAction) return
+    setBulkAction('assign')
+    setError('')
+    try {
+      const operatorId = bulkOperatorId === 'unassigned' ? null : bulkOperatorId
+      const response = await api.chats.bulkAssign(friendIds, operatorId)
+      if (!response.success) throw new Error('bulk assign failed')
+      setSelectedChatIds(new Set())
+      setBulkOperatorId('')
+      await Promise.all([loadChats(true), loadChatCounts()])
+    } catch {
+      setError('選択したチャットの担当者を変更できませんでした。')
+    } finally {
+      setBulkAction(null)
+    }
+  }
+  const handleCreateOperator = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const name = newOperatorName.trim()
+    const email = newOperatorEmail.trim()
+    if (!name || !email || creatingOperator) return
+    setCreatingOperator(true)
+    setError('')
+    try {
+      const response = await api.operators.create({ name, email })
+      if (!response.success) throw new Error('operator create failed')
+      const created = { ...(response.data as unknown as OperatorItem), isActive: true }
+      setOperators((current) => [...current, created].sort((a, b) => a.name.localeCompare(b.name, 'ja')))
+      setBulkOperatorId(created.id)
+      setNewOperatorName('')
+      setNewOperatorEmail('')
+      setShowOperatorForm(false)
+    } catch {
+      setError('担当者を追加できませんでした。')
+    } finally {
+      setCreatingOperator(false)
+    }
+  }
+
+
+  const clearFilters = () => {
+    setInboxFilter('all')
+    setOperatorFilter('')
+    setTagFilter('')
+    setPriorityFilter('')
+  }
+
+  const operatorNameById = (operatorId: string | null) => {
+    if (!operatorId) return '未割当'
+    return operators.find((operator) => operator.id === operatorId)?.name ?? '不明な担当者'
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -639,8 +919,233 @@ export default function ChatsPage() {
 
       <div className="flex gap-4 h-[calc(100vh-120px)] lg:h-[calc(100vh-180px)]">
         {/* Left Panel: Chat List */}
-        <div className={`w-full lg:w-96 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
-          {/* タブ (全て / 未読 / 対応中 / 解決済) は意図的に削除。直近メッセージが見やすい LINE 風一覧を優先。 */}
+        <div className={`w-full lg:w-[26rem] lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
+          <div className="border-b border-gray-200 bg-white">
+            <div className="flex gap-1 overflow-x-auto px-2 pt-2">
+              {inboxFilters.map((filter) => {
+                const active = inboxFilter === filter.key
+                return (
+                  <button
+                    key={filter.key}
+                    type="button"
+                    onClick={() => setInboxFilter(filter.key)}
+                    className={`flex h-8 flex-shrink-0 items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors ${
+                      active
+                        ? 'bg-gray-900 text-white'
+                        : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                    }`}
+                  >
+                    <span>{filter.label}</span>
+                    <span className={`min-w-5 text-center tabular-nums ${active ? 'text-white/80' : 'text-gray-400'}`}>
+                      {chatCounts[filter.countKey]}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 px-2 py-2">
+              <label className="min-w-0">
+                <span className="sr-only">担当者で絞り込む</span>
+                <select
+                  value={operatorFilter}
+                  onChange={(event) => setOperatorFilter(event.target.value)}
+                  className="h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                >
+                  <option value="">担当者：全て</option>
+                  <option value="unassigned">未割当</option>
+                  {operators.map((operator) => (
+                    <option key={operator.id} value={operator.id}>{operator.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="min-w-0">
+                <span className="sr-only">タグで絞り込む</span>
+                <select
+                  value={tagFilter}
+                  onChange={(event) => setTagFilter(event.target.value)}
+                  className="h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                >
+                  <option value="">タグ：全て</option>
+                  {tags.map((tag) => (
+                    <option key={tag.id} value={tag.id}>{tag.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="col-span-2 min-w-0">
+                <span className="sr-only">優先度で絞り込む</span>
+                <select
+                  value={priorityFilter}
+                  onChange={(event) => setPriorityFilter(event.target.value as '' | Chat['priority'])}
+                  className="h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                >
+                  <option value="">優先度：全て</option>
+                  <option value="urgent">緊急</option>
+                  <option value="high">高</option>
+                  <option value="normal">通常</option>
+                  <option value="low">低</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="flex min-h-10 items-center justify-between border-t border-gray-100 px-3 py-2">
+              <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  onChange={toggleAllVisible}
+                  disabled={chats.length === 0}
+                  className="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500 disabled:opacity-40"
+                />
+                表示中を全選択
+              </label>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowOperatorMetrics((current) => !current)}
+                  className="text-xs font-medium text-gray-500 hover:text-gray-800"
+                  aria-expanded={showOperatorMetrics}
+                >
+                  担当者状況
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowOperatorForm((current) => !current)}
+                  className="text-xs font-medium text-gray-500 hover:text-gray-800"
+                >
+                  担当者追加
+                </button>
+                {(inboxFilter !== 'all' || operatorFilter || tagFilter || priorityFilter) && (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="text-xs font-medium text-gray-500 hover:text-gray-800"
+                  >
+                    絞り込み解除
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {showOperatorMetrics && (
+              <div className="max-h-52 overflow-auto border-t border-gray-200">
+                <table className="w-full table-fixed text-left text-[11px]">
+                  <thead className="sticky top-0 bg-gray-50 text-gray-500">
+                    <tr>
+                      <th className="w-[32%] px-3 py-2 font-medium">担当者</th>
+                      <th className="px-1 py-2 text-right font-medium">対応中</th>
+                      <th className="px-1 py-2 text-right font-medium">超過</th>
+                      <th className="px-1 py-2 text-right font-medium">30日解決</th>
+                      <th className="px-3 py-2 text-right font-medium">初回応答</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {operatorMetrics.map((metric) => (
+                      <tr key={metric.operatorId ?? 'unassigned'} className="text-gray-700">
+                        <td className="truncate px-3 py-2" title={metric.operatorName}>{metric.operatorName}</td>
+                        <td className="px-1 py-2 text-right tabular-nums">{metric.active}</td>
+                        <td className={`px-1 py-2 text-right tabular-nums ${metric.overdue > 0 ? 'font-semibold text-red-700' : ''}`}>
+                          {metric.overdue}
+                        </td>
+                        <td className="px-1 py-2 text-right tabular-nums">{metric.resolved}</td>
+                        <td className="px-3 py-2 text-right tabular-nums" title={`計測件数: ${metric.responseSamples}件`}>
+                          {formatResponseDuration(metric.averageFirstResponseSeconds)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {showOperatorForm && (
+              <form onSubmit={handleCreateOperator} className="border-t border-gray-200 bg-gray-50 px-3 py-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <label>
+                    <span className="mb-1 block text-[11px] text-gray-500">担当者名</span>
+                    <input
+                      type="text"
+                      value={newOperatorName}
+                      onChange={(event) => setNewOperatorName(event.target.value)}
+                      required
+                      className="h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-xs focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                    />
+                  </label>
+                  <label>
+                    <span className="mb-1 block text-[11px] text-gray-500">メールアドレス</span>
+                    <input
+                      type="email"
+                      value={newOperatorEmail}
+                      onChange={(event) => setNewOperatorEmail(event.target.value)}
+                      required
+                      autoComplete="email"
+                      className="h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-xs focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                    />
+                  </label>
+                </div>
+                <div className="mt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowOperatorForm(false)}
+                    className="h-8 px-2 text-xs font-medium text-gray-500 hover:text-gray-800"
+                  >
+                    キャンセル
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!newOperatorName.trim() || !newOperatorEmail.trim() || creatingOperator}
+                    className="h-8 rounded-md bg-gray-900 px-3 text-xs font-medium text-white hover:bg-gray-700 disabled:opacity-40"
+                  >
+                    {creatingOperator ? '追加中...' : '追加'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {selectedChatIds.size > 0 && (
+              <div className="border-t border-gray-200 bg-gray-50 px-3 py-2">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-xs font-semibold text-gray-800">{selectedChatIds.size}件を選択中</span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedChatIds(new Set())}
+                    className="text-xs text-gray-500 hover:text-gray-800"
+                  >
+                    選択解除
+                  </button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleBulkRead}
+                    disabled={bulkAction !== null}
+                    className="h-9 rounded-md border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                  >
+                    {bulkAction === 'read' ? '確認中...' : '確認済みにする'}
+                  </button>
+                  <select
+                    value={bulkOperatorId}
+                    onChange={(event) => setBulkOperatorId(event.target.value)}
+                    className="h-9 min-w-32 flex-1 rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                  >
+                    <option value="">担当者を選択</option>
+                    <option value="unassigned">未割当に戻す</option>
+                    {operators.map((operator) => (
+                      <option key={operator.id} value={operator.id}>{operator.name}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleBulkAssign}
+                    disabled={!bulkOperatorId || bulkAction !== null}
+                    className="h-9 rounded-md bg-gray-900 px-3 text-xs font-medium text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {bulkAction === 'assign' ? '変更中...' : '担当を変更'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Chat List */}
           <div className="flex-1 overflow-y-auto">
@@ -662,12 +1167,9 @@ export default function ChatsPage() {
               <>
                 {chats.map((chat) => {
                   const isSelected = selectedChatId === chat.id
-                  // 「真の自発（要対応）」= chat.status='unread'。webhook 側で auto_reply に
-                  // マッチしなかった incoming のみ unread に設定される。auto_reply trigger
-                  // (キーワード "コスト比較" 等) は matched 扱いで unread 化しない。
-                  // bold / 🟥 の表示はこの status を使う。direction だけだと button 押下も
-                  // 強調してしまって S/N 比が悪化する。
-                  const needsAttention = chat.status === 'unread'
+                  const overdue = isOverdue(chat)
+                  // Message read state is independent from the handling workflow status.
+                  const hasUnreadMessage = chat.hasUnreadMessage
                   // 最新メッセージの本文 preview。flex/image は文字列で見せても意味が薄いので type 表記に置換。
                   const previewRaw = chat.lastMessageContent ?? ''
                   const preview = (() => {
@@ -681,49 +1183,86 @@ export default function ChatsPage() {
                     return previewRaw.replace(/\n+/g, ' ').slice(0, 60)
                   })()
                   return (
-                    <button
+                    <div
                       key={chat.id}
-                      onClick={() => { setSelectedFriendId(null); handleSelectChat(chat.id); }}
-                      className={`w-full text-left px-4 py-3 border-b border-gray-100 transition-colors ${
-                        isSelected && !selectedFriendId ? 'bg-green-50' : 'hover:bg-gray-50'
+                      className={`flex border-b border-gray-100 transition-colors ${
+                        isSelected && !selectedFriendId
+                          ? 'bg-green-50'
+                          : selectedChatIds.has(chat.id)
+                            ? 'bg-gray-50'
+                            : 'hover:bg-gray-50'
                       }`}
                     >
-                      <div className="flex items-start gap-3">
-                        {chat.friendPictureUrl ? (
-                          <img src={chat.friendPictureUrl} alt="" className="w-10 h-10 rounded-full flex-shrink-0" />
-                        ) : (
-                          <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
-                            <span className="text-gray-500 text-sm">{chat.friendName.charAt(0)}</span>
-                          </div>
-                        )}
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                              {chat.status === 'unread' && (
-                                <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" aria-label="未読" />
-                              )}
-                              <p className="text-sm font-medium text-gray-900 truncate">{chat.friendName}</p>
+                      <label className="flex flex-shrink-0 cursor-pointer items-start px-3 pt-4">
+                        <span className="sr-only">{chat.friendName}を選択</span>
+                        <input
+                          type="checkbox"
+                          checked={selectedChatIds.has(chat.id)}
+                          onChange={() => toggleChatSelection(chat.id)}
+                          className="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedFriendId(null); handleSelectChat(chat.id); }}
+                        className="min-w-0 flex-1 py-3 pr-3 text-left"
+                      >
+                        <div className="flex items-start gap-3">
+                          {chat.friendPictureUrl ? (
+                            <img src={chat.friendPictureUrl} alt="" className="h-10 w-10 flex-shrink-0 rounded-full" />
+                          ) : (
+                            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-gray-200">
+                              <span className="text-sm text-gray-500">{chat.friendName.charAt(0)}</span>
                             </div>
-                            <span className="text-[10px] text-gray-400 flex-shrink-0">{formatDatetime(chat.lastMessageAt)}</span>
-                          </div>
-                          <p
-                            className={`text-xs mt-0.5 truncate ${
-                              needsAttention
-                                ? 'text-gray-900 font-medium'
-                                : 'text-gray-400'
-                            }`}
-                            title={preview}
-                          >
-                            {chat.lastMessageDirection === 'outgoing' && (
-                              <span className="text-gray-400 mr-1">↪</span>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                                {hasUnreadMessage && (
+                                  <span className="h-2 w-2 flex-shrink-0 rounded-full bg-red-500" aria-label="新着メッセージ" />
+                                )}
+                                <p className="truncate text-sm font-medium text-gray-900">{chat.friendName}</p>
+                              </div>
+                              <span className="flex-shrink-0 text-[10px] text-gray-400">{formatDatetime(chat.lastMessageAt)}</span>
+                            </div>
+                            <p
+                              className={`mt-0.5 truncate text-xs ${
+                                hasUnreadMessage ? 'font-medium text-gray-900' : 'text-gray-400'
+                              }`}
+                              title={preview}
+                            >
+                              {chat.lastMessageDirection === 'outgoing' && (
+                                <span className="mr-1 text-gray-400">↪</span>
+                              )}
+                              {preview || <span className="italic text-gray-300">(まだメッセージなし)</span>}
+                            </p>
+                            <div className="mt-1 flex min-w-0 items-center justify-between gap-2 text-[10px]">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <span className={statusConfig[chat.status].className.split(' ').slice(1).join(' ')}>
+                                  {statusConfig[chat.status].label}
+                                </span>
+                                <span className={priorityConfig[chat.priority || 'normal'].className}>
+                                  優先度：{priorityConfig[chat.priority || 'normal'].label}
+                                </span>
+                              </div>
+                              <span className="truncate text-gray-400">{operatorNameById(chat.operatorId)}</span>
+                            </div>
+                            {chat.status !== 'resolved' && chat.dueAt && (
+                              <p className={`mt-0.5 truncate text-[10px] ${overdue ? 'font-semibold text-red-700' : 'text-gray-500'}`}>
+                                {overdue ? '期限超過' : '期限'}：{formatDatetime(chat.dueAt)}
+                              </p>
                             )}
-                            {preview || <span className="italic text-gray-300">(まだメッセージなし)</span>}
-                          </p>
+                          </div>
                         </div>
-                      </div>
-                    </button>
+                      </button>
+                    </div>
                   )
                 })}
+                {chats.length === 0 && (
+                  <div className="px-4 py-10 text-center text-sm text-gray-400">
+                    条件に一致するチャットはありません
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -737,7 +1276,12 @@ export default function ChatsPage() {
               friendId={selectedFriendId}
               friend={allFriends.find((f) => f.id === selectedFriendId) || null}
               onBack={() => setSelectedFriendId(null)}
-              onSent={() => { setSelectedFriendId(null); loadChats(); }}
+              onSent={() => {
+                const friendId = selectedFriendId
+                setSelectedFriendId(null)
+                if (friendId) setSelectedChatId(friendId)
+                void Promise.all([loadChats(true), loadChatCounts(), loadOperatorMetrics()])
+              }}
             />
           ) : !selectedChatId ? (
             <div className="flex-1 flex items-center justify-center">
@@ -781,7 +1325,7 @@ export default function ChatsPage() {
                       onClick={() => handleStatusUpdate('unread')}
                       className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
                     >
-                      未読に戻す
+                      未対応に戻す
                     </button>
                   )}
                   {chatDetail.status !== 'in_progress' && (
@@ -801,6 +1345,52 @@ export default function ChatsPage() {
                     </button>
                   )}
                 </div>
+              </div>
+
+              <div className="flex flex-wrap items-end gap-3 border-b border-gray-200 bg-gray-50 px-4 py-2">
+                <label className="min-w-28">
+                  <span className="mb-1 block text-[11px] text-gray-500">優先度</span>
+                  <select
+                    value={priorityValue}
+                    onChange={(event) => setPriorityValue(event.target.value as Chat['priority'])}
+                    className="h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                  >
+                    <option value="urgent">緊急</option>
+                    <option value="high">高</option>
+                    <option value="normal">通常</option>
+                    <option value="low">低</option>
+                  </select>
+                </label>
+                <label className="min-w-52 flex-1">
+                  <span className="mb-1 block text-[11px] text-gray-500">対応期限</span>
+                  <input
+                    type="datetime-local"
+                    value={dueAtValue}
+                    onChange={(event) => setDueAtValue(event.target.value)}
+                    className={`h-9 w-full rounded-md border bg-white px-2 text-xs focus:outline-none focus:ring-1 ${
+                      chatDetail && isOverdue(chatDetail)
+                        ? 'border-red-400 text-red-700 focus:border-red-500 focus:ring-red-500'
+                        : 'border-gray-300 text-gray-700 focus:border-green-500 focus:ring-green-500'
+                    }`}
+                  />
+                </label>
+                {dueAtValue && (
+                  <button
+                    type="button"
+                    onClick={() => setDueAtValue('')}
+                    className="h-9 px-2 text-xs font-medium text-gray-500 hover:text-gray-800"
+                  >
+                    期限をクリア
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleSaveSla}
+                  disabled={savingSla}
+                  className="h-9 rounded-md bg-gray-900 px-3 text-xs font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+                >
+                  {savingSla ? '保存中...' : '保存'}
+                </button>
               </div>
 
               {/* Messages — LINE-style chat bubbles */}
@@ -1006,6 +1596,11 @@ export default function ChatsPage() {
                 chatDetail && chatDetail.id === (selectedFriendId || selectedChatId)
                   ? { status: chatDetail.status, notes: chatDetail.notes }
                   : undefined
+              }
+              operatorName={
+                chatDetail && chatDetail.id === (selectedFriendId || selectedChatId)
+                  ? operatorNameById(chatDetail.operatorId)
+                  : null
               }
             />
           </div>

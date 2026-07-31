@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS friends (
   picture_url      TEXT,
   status_message   TEXT,
   is_following     INTEGER NOT NULL DEFAULT 1,
+  blocked_at       TEXT,
+  last_unblocked_at TEXT,
   user_id          TEXT,
   ig_igsid         TEXT,
   score            INTEGER NOT NULL DEFAULT 0,
@@ -21,6 +23,25 @@ CREATE TABLE IF NOT EXISTS friends (
 CREATE INDEX IF NOT EXISTS idx_friends_line_user_id ON friends (line_user_id);
 CREATE INDEX IF NOT EXISTS idx_friends_user_id ON friends (user_id);
 CREATE INDEX IF NOT EXISTS idx_friends_ig_igsid ON friends (ig_igsid);
+CREATE INDEX IF NOT EXISTS idx_friends_following ON friends (is_following);
+
+-- ============================================================
+-- Friend Follow History
+-- ============================================================
+CREATE TABLE IF NOT EXISTS friend_follow_events (
+  id               TEXT PRIMARY KEY,
+  friend_id        TEXT NOT NULL REFERENCES friends (id) ON DELETE CASCADE,
+  event_type       TEXT NOT NULL CHECK (event_type IN ('added', 'blocked', 'unblocked')),
+  event_at         TEXT NOT NULL,
+  webhook_event_id TEXT NOT NULL UNIQUE,
+  created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_friend_follow_events_friend_event_at
+  ON friend_follow_events (friend_id, event_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_friend_follow_events_event_at
+  ON friend_follow_events (event_at DESC);
 
 -- ============================================================
 -- Tags
@@ -463,8 +484,14 @@ CREATE TABLE IF NOT EXISTS chats (
   friend_id     TEXT NOT NULL REFERENCES friends (id) ON DELETE CASCADE,
   operator_id   TEXT REFERENCES operators (id) ON DELETE SET NULL,
   status        TEXT NOT NULL DEFAULT 'unread' CHECK (status IN ('unread', 'in_progress', 'resolved')),
+  priority      TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
   notes         TEXT,
   last_message_at TEXT,
+  due_at        TEXT,
+  opened_at     TEXT,
+  first_response_at TEXT,
+  first_response_operator_id TEXT REFERENCES operators (id) ON DELETE SET NULL,
+  resolved_at  TEXT,
   created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
   updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
@@ -472,6 +499,56 @@ CREATE TABLE IF NOT EXISTS chats (
 CREATE INDEX IF NOT EXISTS idx_chats_friend ON chats (friend_id);
 CREATE INDEX IF NOT EXISTS idx_chats_operator ON chats (operator_id);
 CREATE INDEX IF NOT EXISTS idx_chats_status ON chats (status);
+CREATE INDEX IF NOT EXISTS idx_chats_priority ON chats (priority);
+CREATE INDEX IF NOT EXISTS idx_chats_due_status ON chats (status, due_at);
+CREATE INDEX IF NOT EXISTS idx_chats_operator_status ON chats (operator_id, status);
+
+CREATE TABLE IF NOT EXISTS chat_resolution_events (
+  id                         TEXT PRIMARY KEY,
+  chat_id                    TEXT NOT NULL,
+  friend_id                  TEXT NOT NULL REFERENCES friends (id) ON DELETE CASCADE,
+  operator_id                TEXT REFERENCES operators (id) ON DELETE SET NULL,
+  first_response_operator_id TEXT REFERENCES operators (id) ON DELETE SET NULL,
+  resolved_by_staff_id       TEXT,
+  priority                   TEXT NOT NULL CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+  opened_at                  TEXT,
+  first_response_at          TEXT,
+  resolved_at                TEXT NOT NULL,
+  first_response_seconds     INTEGER,
+  created_at                 TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_resolution_events_resolved
+  ON chat_resolution_events (resolved_at);
+CREATE INDEX IF NOT EXISTS idx_chat_resolution_events_operator
+  ON chat_resolution_events (operator_id, resolved_at);
+CREATE INDEX IF NOT EXISTS idx_chat_resolution_events_responder
+  ON chat_resolution_events (first_response_operator_id, resolved_at);
+
+-- Staff-specific chat read state. This is intentionally separate from
+-- chats.status, which represents the operational handling workflow.
+CREATE TABLE IF NOT EXISTS chat_read_receipts (
+  friend_id    TEXT NOT NULL,
+  staff_id     TEXT NOT NULL,
+  last_read_at TEXT NOT NULL,
+  PRIMARY KEY (friend_id, staff_id),
+  FOREIGN KEY (friend_id) REFERENCES friends (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_read_receipts_staff
+  ON chat_read_receipts (staff_id, last_read_at);
+
+-- Per-staff cursors for activity timelines such as friend add/block/unblock.
+CREATE TABLE IF NOT EXISTS staff_activity_cursors (
+  staff_id        TEXT NOT NULL,
+  line_account_id TEXT NOT NULL,
+  activity_type   TEXT NOT NULL,
+  last_seen_at    TEXT NOT NULL,
+  PRIMARY KEY (staff_id, line_account_id, activity_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_staff_activity_cursors_lookup
+  ON staff_activity_cursors (staff_id, activity_type, line_account_id);
 
 -- ============================================================
 -- Round 3: 通知機能

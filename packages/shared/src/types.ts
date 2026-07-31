@@ -726,8 +726,15 @@ export interface Chat {
   friendId: string;
   operatorId: string | null;
   status: "unread" | "in_progress" | "resolved";
+  priority: "low" | "normal" | "high" | "urgent";
   notes: string | null;
   lastMessageAt: string | null;
+  dueAt: string | null;
+  openedAt: string | null;
+  firstResponseAt: string | null;
+  resolvedAt: string | null;
+  /** Staff-specific message read state. Independent from workflow status. */
+  hasUnreadMessage?: boolean;
   createdAt: string;
   updatedAt: string;
 }

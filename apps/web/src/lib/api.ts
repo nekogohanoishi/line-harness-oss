@@ -13,6 +13,7 @@ import type {
   Automation,
   AutomationLog,
   Chat,
+  Operator,
   Reminder,
   ReminderStep,
   ScoringRule,
@@ -54,6 +55,31 @@ export type BroadcastInsight = {
   fetchedAt?: string | null
 }
 
+export type ChatCounts = {
+  all: number
+  unreadMessages: number
+  unhandled: number
+  inProgress: number
+  overdue: number
+  resolved: number
+}
+
+export type ChatOperatorMetric = {
+  operatorId: string | null
+  operatorName: string
+  isActive: boolean
+  active: number
+  overdue: number
+  resolved: number
+  responseSamples: number
+  averageFirstResponseSeconds: number | null
+}
+
+export type ChatOperatorMetrics = {
+  periodDays: number
+  items: ChatOperatorMetric[]
+}
+
 export type SurveyQuestion = {
   name: string
   label: string
@@ -82,6 +108,10 @@ export type SurveySettings = {
 }
 
 export type RegistrationSurveySettings = SurveySettings & {
+  accountId: string
+  selectedFormId: string
+  candidateFormIds: string[]
+  isActive: boolean
   form: {
     id: string
     name: string
@@ -95,10 +125,15 @@ export type RegistrationSurveySettings = SurveySettings & {
   friendAddScenario: {
     id: string
     name?: string
+    isActive?: boolean
     firstStepId?: string | null
     greetingStepId?: string | null
     surveyStepId?: string | null
   } | null
+}
+
+export type RegistrationSurveyCandidate = SurveySettings & {
+  isSelected: boolean
 }
 
 /**
@@ -193,9 +228,45 @@ export type FriendListParams = {
   sort?: 'recent' | 'oldest'
   /** `unhandled` で「最新が未返信の incoming」だけに絞る (サーバ側 SQL filter). */
   handled?: 'unhandled'
+  /** 現在のLINEフォロー状態で絞り込む。 */
+  followStatus?: 'following' | 'blocked'
 }
 
-export type FriendWithTags = Friend & { tags: Tag[] }
+export type FriendFollowEvent = {
+  id: string
+  eventType: 'added' | 'blocked' | 'unblocked'
+  eventAt: string
+  createdAt: string
+}
+
+export type FriendLifecycleEvent = {
+  id: string
+  eventType: 'added' | 'blocked' | 'unblocked'
+  eventAt: string
+  createdAt: string
+  friendId: string
+  displayName: string | null
+  pictureUrl: string | null
+  refCode: string | null
+  firstTrackedLinkName: string | null
+  isFollowing: boolean
+  isUnread: boolean
+}
+
+export type FriendEventListParams = {
+  offset?: number
+  limit?: number
+  eventType?: FriendLifecycleEvent['eventType']
+  search?: string
+  accountId?: string
+}
+
+export type FriendWithTags = Friend & {
+  tags: Tag[]
+  blockedAt: string | null
+  lastUnblockedAt: string | null
+}
+export type FriendDetail = FriendWithTags & { followEvents: FriendFollowEvent[] }
 /** Friend list items, optionally hydrated with chat status (when ?includeChatStatus=true) */
 export type FriendListItem = FriendWithTags & Partial<{
   latestIncomingMessage: { content: string; messageType: string; createdAt: string } | null
@@ -217,12 +288,13 @@ export const api = {
       if (params?.includeChatStatus) query.includeChatStatus = 'true'
       if (params?.sort) query.sort = params.sort
       if (params?.handled) query.handled = params.handled
+      if (params?.followStatus) query.followStatus = params.followStatus
       return fetchApi<ApiResponse<PaginatedResponse<FriendListItem>>>(
         '/api/friends?' + new URLSearchParams(query)
       )
     },
     get: (id: string) =>
-      fetchApi<ApiResponse<FriendWithTags>>(`/api/friends/${id}`),
+      fetchApi<ApiResponse<FriendDetail>>(`/api/friends/${id}`),
     count: (params?: { accountId?: string }) => {
       const query = params?.accountId ? '?lineAccountId=' + params.accountId : ''
       return fetchApi<ApiResponse<{ count: number }>>('/api/friends/count' + query)
@@ -240,6 +312,33 @@ export const api = {
       fetchApi<ApiResponse<{ id: string | null; name: string | null; isDefault: boolean }>>(
         `/api/friends/${id}/rich-menu`,
       ),
+  },
+  friendEvents: {
+    list: (params?: FriendEventListParams) => {
+      const query: Record<string, string> = {}
+      if (params?.offset !== undefined) query.offset = String(params.offset)
+      if (params?.limit !== undefined) query.limit = String(params.limit)
+      if (params?.eventType) query.eventType = params.eventType
+      if (params?.search) query.search = params.search
+      if (params?.accountId) query.lineAccountId = params.accountId
+      const suffix = new URLSearchParams(query).toString()
+      return fetchApi<ApiResponse<{
+        items: FriendLifecycleEvent[]
+        total: number
+        hasNextPage: boolean
+      }>>(`/api/friend-events${suffix ? `?${suffix}` : ''}`)
+    },
+    unreadCount: (accountId?: string) => {
+      const query = accountId ? `?lineAccountId=${encodeURIComponent(accountId)}` : ''
+      return fetchApi<ApiResponse<{ count: number }>>(
+        `/api/friend-events/unread-count${query}`,
+      )
+    },
+    markRead: (accountId?: string) =>
+      fetchApi<ApiResponse<{ updated: number }>>('/api/friend-events/read', {
+        method: 'POST',
+        body: JSON.stringify(accountId ? { lineAccountId: accountId } : {}),
+      }),
   },
   tags: {
     list: () =>
@@ -266,10 +365,38 @@ export const api = {
       }>>>('/api/tracked-links'),
   },
   registrationSurvey: {
-    get: () =>
-      fetchApi<ApiResponse<RegistrationSurveySettings>>('/api/forms/registration-survey/settings'),
-    update: (data: {
+    get: (accountId?: string) => {
+      const query = accountId ? `?accountId=${encodeURIComponent(accountId)}` : ''
+      return fetchApi<ApiResponse<RegistrationSurveySettings>>(`/api/forms/registration-survey/settings${query}`)
+    },
+    list: (accountId?: string) => {
+      const query = accountId ? `?accountId=${encodeURIComponent(accountId)}` : ''
+      return fetchApi<ApiResponse<RegistrationSurveyCandidate[]>>(`/api/forms/registration-surveys${query}`)
+    },
+    create: (data: {
+      accountId: string
+      name?: string
+      description?: string | null
       questions: RegistrationSurveyQuestion[]
+      onSubmitTagId?: string | null
+      onSubmitScenarioId?: string | null
+      onSubmitMessageContent?: string | null
+    }) =>
+      fetchApi<ApiResponse<RegistrationSurveyCandidate>>('/api/forms/registration-surveys', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    delete: (accountId: string, formId: string) =>
+      fetchApi<ApiResponse<null>>(
+        `/api/forms/registration-surveys/${encodeURIComponent(formId)}?accountId=${encodeURIComponent(accountId)}`,
+        { method: 'DELETE' },
+      ),
+    update: (data: {
+      accountId?: string
+      formId?: string
+      name?: string
+      description?: string | null
+      questions?: RegistrationSurveyQuestion[]
       onSubmitTagId?: string | null
       onSubmitScenarioId?: string | null
       onSubmitMessageContent?: string | null
@@ -805,12 +932,32 @@ export const api = {
         `/api/automations/${id}/logs` + (limit ? `?limit=${limit}` : ''),
       ),
   },
+  operators: {
+    list: () => fetchApi<ApiResponse<Operator[]>>('/api/operators'),
+    create: (data: { name: string; email: string }) =>
+      fetchApi<ApiResponse<Operator>>('/api/operators', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+  },
   chats: {
-    list: (params?: { status?: string; operatorId?: string; accountId?: string }) => {
+    list: (params?: {
+      status?: string
+      readStatus?: 'unread' | 'read'
+      operatorId?: string
+      tagId?: string
+      accountId?: string
+      priority?: Chat['priority']
+      overdue?: boolean
+    }) => {
       const query: Record<string, string> = {}
       if (params?.status) query.status = params.status
+      if (params?.readStatus) query.readStatus = params.readStatus
       if (params?.operatorId) query.operatorId = params.operatorId
+      if (params?.tagId) query.tagId = params.tagId
       if (params?.accountId) query.lineAccountId = params.accountId
+      if (params?.priority) query.priority = params.priority
+      if (params?.overdue) query.overdue = 'true'
       return fetchApi<ApiResponse<Chat[]>>(
         '/api/chats?' + new URLSearchParams(query),
       )
@@ -824,11 +971,53 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
-    update: (id: string, data: { operatorId?: string | null; status?: Chat['status']; notes?: string | null }) =>
+    update: (id: string, data: {
+      operatorId?: string | null
+      status?: Chat['status']
+      priority?: Chat['priority']
+      notes?: string | null
+      dueAt?: string | null
+    }) =>
       fetchApi<ApiResponse<Chat>>(`/api/chats/${id}`, {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
+    counts: (params?: { operatorId?: string; tagId?: string; accountId?: string; priority?: Chat['priority'] }) => {
+      const query = new URLSearchParams()
+      if (params?.operatorId) query.set('operatorId', params.operatorId)
+      if (params?.tagId) query.set('tagId', params.tagId)
+      if (params?.accountId) query.set('lineAccountId', params.accountId)
+      if (params?.priority) query.set('priority', params.priority)
+      const suffix = query.toString()
+      return fetchApi<ApiResponse<ChatCounts>>(`/api/chats/counts${suffix ? `?${suffix}` : ''}`)
+    },
+    operatorMetrics: (params?: { accountId?: string }) => {
+      const query = params?.accountId
+        ? `?lineAccountId=${encodeURIComponent(params.accountId)}`
+        : ''
+      return fetchApi<ApiResponse<ChatOperatorMetrics>>(`/api/chats/operator-metrics${query}`)
+    },
+    markReadBulk: (friendIds: string[]) =>
+      fetchApi<ApiResponse<{ updated: number }>>('/api/chats/read', {
+        method: 'POST',
+        body: JSON.stringify({ friendIds }),
+      }),
+    bulkAssign: (friendIds: string[], operatorId: string | null) =>
+      fetchApi<ApiResponse<{ updated: number }>>('/api/chats/bulk-assign', {
+        method: 'POST',
+        body: JSON.stringify({ friendIds, operatorId }),
+      }),
+    unreadCount: (params?: { accountId?: string }) => {
+      const query = params?.accountId
+        ? `?lineAccountId=${encodeURIComponent(params.accountId)}`
+        : ''
+      return fetchApi<ApiResponse<{ count: number }>>(`/api/chats/unread-count${query}`)
+    },
+    markRead: (id: string) =>
+      fetchApi<ApiResponse<{ friendId: string; lastReadAt: string }>>(
+        `/api/chats/${id}/read`,
+        { method: 'POST' },
+      ),
     send: (id: string, data: { content: string; messageType?: string }) =>
       fetchApi<ApiResponse<unknown>>(`/api/chats/${id}/send`, {
         method: 'POST',

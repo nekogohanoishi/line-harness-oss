@@ -5,6 +5,7 @@ import type { ReactNode } from 'react'
 import Header from '@/components/layout/header'
 import MessageVariableButton from '@/components/message-variable-button'
 import { api, type RegistrationSurveySettings, type SurveyQuestion, type SurveySettings } from '@/lib/api'
+import { useAccount } from '@/contexts/account-context'
 import type { Scenario, Tag } from '@line-crm/shared'
 
 const emptyQuestion = (index: number): SurveyQuestion => ({
@@ -75,9 +76,12 @@ function isRegistrationSettings(settings: SurveySettings | RegistrationSurveySet
 }
 
 export default function SurveysPage() {
+  const { selectedAccountId } = useAccount()
   const [surveyList, setSurveyList] = useState<SurveySettings[]>([])
   const [selectedId, setSelectedId] = useState('')
   const [registrationSurveyId, setRegistrationSurveyId] = useState('')
+  const [registrationSurveyIds, setRegistrationSurveyIds] = useState<string[]>([])
+  const [registrationDeliveryActive, setRegistrationDeliveryActive] = useState(false)
   const [tags, setTags] = useState<Tag[]>([])
   const [scenarios, setScenarios] = useState<Scenario[]>([])
 
@@ -89,6 +93,7 @@ export default function SurveysPage() {
   const [onSubmitMessageContent, setOnSubmitMessageContent] = useState('')
   const [greetingMessageContent, setGreetingMessageContent] = useState('')
   const [isActive, setIsActive] = useState(true)
+  const [savedIsActive, setSavedIsActive] = useState(true)
   const [friendAddScenarioName, setFriendAddScenarioName] = useState('')
 
   const [loading, setLoading] = useState(true)
@@ -105,6 +110,7 @@ export default function SurveysPage() {
     () => surveyList.find((survey) => survey.form.id === selectedId) ?? null,
     [surveyList, selectedId],
   )
+  const isRegistrationCandidate = selectedId !== '' && registrationSurveyIds.includes(selectedId)
   const isRegistrationSelected = selectedId !== '' && selectedId === registrationSurveyId
   const manualScenarios = useMemo(
     () => scenarios.filter((scenario) => scenario.triggerType === 'manual'),
@@ -119,8 +125,13 @@ export default function SurveysPage() {
     setOnSubmitTagId(settings.form.onSubmitTagId ?? '')
     setOnSubmitScenarioId(settings.form.onSubmitScenarioId ?? '')
     setOnSubmitMessageContent(settings.form.onSubmitMessageContent ?? '')
-    setIsActive(settings.form.isActive)
+    const effectiveIsActive = isRegistrationSettings(settings) ? settings.isActive : settings.form.isActive
+    setIsActive(effectiveIsActive)
+    setSavedIsActive(effectiveIsActive)
     if (isRegistrationSettings(settings)) {
+      setRegistrationSurveyId(settings.selectedFormId)
+      setRegistrationSurveyIds(settings.candidateFormIds)
+      setRegistrationDeliveryActive(settings.isActive)
       setGreetingMessageContent(settings.greetingMessageContent ?? '')
       setFriendAddScenarioName(settings.friendAddScenario?.name ?? '')
     } else {
@@ -135,12 +146,19 @@ export default function SurveysPage() {
     return res
   }
 
+  const refreshRegistrationCandidates = async () => {
+    if (!selectedAccountId) return null
+    const res = await api.registrationSurvey.list(selectedAccountId)
+    if (res.success) setRegistrationSurveyIds(res.data.map((candidate) => candidate.form.id))
+    return res
+  }
+
   const loadSelected = async (id: string, registrationId = registrationSurveyId) => {
     setLoadingSelected(true)
     setError('')
     try {
       const res = id === registrationId
-        ? await api.registrationSurvey.get()
+        ? await api.registrationSurvey.get(selectedAccountId ?? undefined)
         : await api.surveys.get(id)
       if (!res.success) {
         setError(res.error)
@@ -155,21 +173,25 @@ export default function SurveysPage() {
   }
 
   const load = async () => {
+    if (!selectedAccountId) return
     setLoading(true)
     setError('')
     try {
-      const [surveysRes, registrationRes, tagsRes, scenariosRes] = await Promise.all([
+      const [surveysRes, registrationRes, registrationCandidatesRes, tagsRes, scenariosRes] = await Promise.all([
         api.surveys.list(),
-        api.registrationSurvey.get(),
+        api.registrationSurvey.get(selectedAccountId),
+        api.registrationSurvey.list(selectedAccountId),
         api.tags.list(),
-        api.scenarios.list(),
+        api.scenarios.list({ accountId: selectedAccountId }),
       ])
       if (surveysRes.success) setSurveyList(surveysRes.data)
+      if (registrationCandidatesRes.success) {
+        setRegistrationSurveyIds(registrationCandidatesRes.data.map((candidate) => candidate.form.id))
+      }
       if (tagsRes.success) setTags(tagsRes.data)
       if (scenariosRes.success) setScenarios(scenariosRes.data)
 
       if (registrationRes.success) {
-        setRegistrationSurveyId(registrationRes.data.form.id)
         applySettings(registrationRes.data)
       } else if (surveysRes.success && surveysRes.data[0]) {
         applySettings(surveysRes.data[0])
@@ -184,8 +206,8 @@ export default function SurveysPage() {
   }
 
   useEffect(() => {
-    load()
-  }, [])
+    void load()
+  }, [selectedAccountId])
 
   const updateQuestion = (index: number, patch: Partial<SurveyQuestion>) => {
     setQuestions((current) => current.map((question, i) => i === index ? { ...question, ...patch } : question))
@@ -258,6 +280,10 @@ export default function SurveysPage() {
       }
       const res = isRegistrationSelected
         ? await api.registrationSurvey.update({
+            accountId: selectedAccountId ?? undefined,
+            formId: selectedId,
+            name: payload.name,
+            description: payload.description,
             questions: payload.questions,
             onSubmitTagId: payload.onSubmitTagId,
             onSubmitScenarioId: payload.onSubmitScenarioId,
@@ -272,7 +298,12 @@ export default function SurveysPage() {
       }
       applySettings(res.data)
       await refreshList()
-      setNotice('保存しました')
+      await refreshRegistrationCandidates()
+      setNotice(
+        isRegistrationSelected
+          ? `保存しました。登録時アンケートは${isActive ? '有効' : '無効'}です`
+          : `保存しました。アンケートは${isActive ? '有効' : '無効'}です`,
+      )
     } catch {
       setError('保存に失敗しました')
     } finally {
@@ -305,18 +336,71 @@ export default function SurveysPage() {
     }
   }
 
+  const createRegistrationSurvey = async () => {
+    if (!selectedAccountId) return
+    setCreating(true)
+    setError('')
+    setNotice('')
+    try {
+      const res = await api.registrationSurvey.create({
+        accountId: selectedAccountId,
+        name: `登録時アンケート ${registrationSurveyIds.length + 1}`,
+        questions: [emptyQuestion(0)],
+        onSubmitMessageContent: 'ご回答ありがとうございました！',
+      })
+      if (!res.success) {
+        setError(res.error)
+        return
+      }
+      await Promise.all([refreshList(), refreshRegistrationCandidates()])
+      applySettings(res.data)
+      setNotice('登録時アンケート候補を作成しました')
+    } catch {
+      setError('作成に失敗しました')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const selectRegistrationSurvey = async () => {
+    if (!selectedAccountId || !selectedId || !isRegistrationCandidate) return
+    setSaving(true)
+    setError('')
+    setNotice('')
+    try {
+      const res = await api.registrationSurvey.update({
+        accountId: selectedAccountId,
+        formId: selectedId,
+      })
+      if (!res.success) {
+        setError(res.error)
+        return
+      }
+      applySettings(res.data)
+      await refreshList()
+      setNotice('友だち追加時に使用するアンケートを変更しました')
+    } catch {
+      setError('切り替えに失敗しました')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const deleteSelected = async () => {
-    if (!selectedId || isRegistrationSelected) return
+    if (!selectedId || isRegistrationSelected || !selectedAccountId) return
     setDeleting(true)
     setError('')
     setNotice('')
     try {
-      const res = await api.surveys.delete(selectedId)
+      const res = isRegistrationCandidate
+        ? await api.registrationSurvey.delete(selectedAccountId, selectedId)
+        : await api.surveys.delete(selectedId)
       if (!res.success) {
         setError(res.error)
         return
       }
       const listRes = await refreshList()
+      await refreshRegistrationCandidates()
       const next = listRes.success ? listRes.data.find((survey) => survey.form.id !== selectedId) : null
       if (registrationSurveyId) {
         await loadSelected(registrationSurveyId, registrationSurveyId)
@@ -342,7 +426,7 @@ export default function SurveysPage() {
         title="アンケート"
         description="LINEトーク内のボタン式アンケート"
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {!isRegistrationSelected && selectedId && (
               <button
                 type="button"
@@ -359,7 +443,15 @@ export default function SurveysPage() {
               disabled={creating || loading}
               className="px-3 py-2 min-h-[44px] text-sm font-medium text-green-700 bg-green-50 rounded-lg disabled:opacity-50"
             >
-              {creating ? '作成中...' : '新規'}
+              通常アンケートを追加
+            </button>
+            <button
+              type="button"
+              onClick={createRegistrationSurvey}
+              disabled={creating || loading || !selectedAccountId}
+              className="px-3 py-2 min-h-[44px] text-sm font-medium text-green-700 bg-green-50 rounded-lg disabled:opacity-50"
+            >
+              {creating ? '作成中...' : '登録時用を追加'}
             </button>
             <button
               type="button"
@@ -397,7 +489,8 @@ export default function SurveysPage() {
             <div className="space-y-1">
               {surveyList.map((survey) => {
                 const active = survey.form.id === selectedId
-                const registration = survey.form.id === registrationSurveyId
+                const registrationCandidate = registrationSurveyIds.includes(survey.form.id)
+                const selectedRegistration = survey.form.id === registrationSurveyId
                 return (
                   <button
                     key={survey.form.id}
@@ -408,7 +501,19 @@ export default function SurveysPage() {
                     <span className="block font-medium truncate">{survey.form.name}</span>
                     <span className="mt-1 flex items-center gap-2 text-xs text-gray-500">
                       <span>{survey.questions.length}問</span>
-                      {registration && <span className="rounded bg-gray-100 px-1.5 py-0.5">友だち追加</span>}
+                      {registrationCandidate ? (
+                        <span className={`inline-flex items-center gap-1 ${selectedRegistration && registrationDeliveryActive ? 'text-green-700' : 'text-gray-500'}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${selectedRegistration && registrationDeliveryActive ? 'bg-green-500' : 'bg-gray-400'}`} />
+                          {selectedRegistration
+                            ? registrationDeliveryActive ? '配信中' : '選択中・停止'
+                            : '登録時用'}
+                        </span>
+                      ) : (
+                        <span className={`inline-flex items-center gap-1 ${survey.form.isActive ? 'text-green-700' : 'text-gray-500'}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${survey.form.isActive ? 'bg-green-500' : 'bg-gray-400'}`} />
+                          {survey.form.isActive ? '有効' : '無効'}
+                        </span>
+                      )}
                     </span>
                   </button>
                 )
@@ -422,26 +527,76 @@ export default function SurveysPage() {
           {selectedId ? (
             <div className="space-y-6 opacity-100">
               <section className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
-                <div className="grid grid-cols-1 lg:grid-cols-[1fr_180px] gap-4">
+                <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-4">
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">アンケート名</label>
                     <input
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      disabled={isRegistrationSelected}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 disabled:bg-gray-50"
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                       placeholder="例: 登録時アンケート"
                     />
                   </div>
-                  <label className="inline-flex items-end gap-3 pb-2">
-                    <span className="text-sm text-gray-700">有効</span>
-                    <input
-                      type="checkbox"
-                      checked={isActive}
-                      onChange={(e) => setIsActive(e.target.checked)}
-                      className="h-5 w-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
-                    />
-                  </label>
+                  <div className="lg:border-l lg:border-gray-200 lg:pl-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-medium text-gray-600">現在の状態</p>
+                        <p className={`mt-1 inline-flex items-center gap-2 text-sm font-semibold ${isRegistrationCandidate && !isRegistrationSelected ? 'text-gray-600' : savedIsActive ? 'text-green-700' : 'text-gray-600'}`}>
+                          <span className={`h-2 w-2 rounded-full ${isRegistrationCandidate && !isRegistrationSelected ? 'bg-gray-400' : savedIsActive ? 'bg-green-500' : 'bg-gray-400'}`} />
+                          {isRegistrationCandidate && !isRegistrationSelected
+                            ? '登録時用の候補'
+                            : savedIsActive ? '有効' : '無効'}
+                        </p>
+                      </div>
+                      {isRegistrationCandidate && !isRegistrationSelected ? (
+                        <button
+                          type="button"
+                          onClick={selectRegistrationSurvey}
+                          disabled={saving || loadingSelected}
+                          className="px-3 py-2 min-h-[40px] text-sm font-medium text-green-700 bg-green-50 rounded-lg disabled:opacity-50"
+                        >
+                          登録時に使用
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={isActive}
+                          aria-label={isActive ? 'アンケートを無効にする' : 'アンケートを有効にする'}
+                          title={isActive ? 'クリックして無効にする' : 'クリックして有効にする'}
+                          onClick={() => setIsActive((current) => !current)}
+                          disabled={saving || loadingSelected}
+                          className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:cursor-wait disabled:opacity-50 ${
+                            isActive ? 'bg-green-500' : 'bg-gray-300'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                              isActive ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                      )}
+                    </div>
+                    <p className="mt-2 text-xs leading-5 text-gray-500">
+                      {isRegistrationCandidate && !isRegistrationSelected
+                        ? '登録時アンケートとして保存されています。使用する場合は右のボタンで切り替えます。'
+                        : savedIsActive
+                        ? isRegistrationSelected
+                          ? '友だち追加・ブロック解除後に、挨拶とアンケートを送信します。'
+                          : '回答を受け付けています。'
+                        : isRegistrationSelected
+                          ? '友だち追加・ブロック解除後は挨拶だけを送信します。アンケートは送信せず、回答も受け付けません。'
+                          : '回答を受け付けていません。'}
+                    </p>
+                    {!(isRegistrationCandidate && !isRegistrationSelected) && isActive !== savedIsActive ? (
+                      <p className="mt-2 text-xs font-medium text-amber-700">
+                        未保存です。右上の「保存」を押すと{isActive ? '有効' : '無効'}になります。
+                      </p>
+                    ) : !(isRegistrationCandidate && !isRegistrationSelected) ? (
+                      <p className="mt-2 text-xs text-gray-400">切り替え後、右上の「保存」で反映されます。</p>
+                    ) : null}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1">説明</label>
@@ -453,7 +608,13 @@ export default function SurveysPage() {
                   />
                 </div>
                 {isRegistrationSelected && (
-                  <p className="text-xs text-gray-500">{friendAddScenarioName || selectedSurvey?.form.name || 'friend_add シナリオ'}</p>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+                    <span>{friendAddScenarioName || selectedSurvey?.form.name || 'friend_add シナリオ'}</span>
+                    <span className="inline-flex items-center gap-1 text-green-700">
+                      <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                      あいさつ配信は有効
+                    </span>
+                  </div>
                 )}
               </section>
 

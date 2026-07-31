@@ -1,18 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { api } from '@/lib/api'
-
-interface FriendDetail {
-  id: string
-  displayName: string | null
-  pictureUrl: string | null
-  isFollowing: boolean
-  metadata: Record<string, unknown>
-  refCode: string | null
-  createdAt: string
-  tags: Array<{ id: string; name: string; color: string }>
-}
+import { api, type FriendDetail } from '@/lib/api'
 
 interface ChatStatusInfo {
   status: 'unread' | 'in_progress' | 'resolved' | null
@@ -67,7 +56,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
     api.friends.get(friendId).then((res) => {
       if (cancelled) return
       if (res.success && res.data) {
-        setFriend(res.data as unknown as FriendDetail)
+        setFriend(res.data)
       } else {
         setError((res as { error?: string }).error ?? '友だち情報を取得できませんでした')
       }
@@ -148,8 +137,56 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                 </p>
                 {!friend.isFollowing && (
                   <span className="inline-block mt-1 px-1.5 py-0 rounded text-[10px] font-medium bg-gray-100 text-gray-500">
-                    ブロック済
+                    ブロック中
                   </span>
+                )}
+              </div>
+            </div>
+
+            {/* LINE follow status and transition history */}
+            <div className="p-4">
+              <h4 className="text-[11px] font-medium text-gray-500 mb-2">LINE状態</h4>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[11px] text-gray-500">現在</span>
+                <span className={`text-xs font-medium ${friend.isFollowing ? 'text-green-700' : 'text-red-600'}`}>
+                  {friend.isFollowing ? 'フォロー中' : 'ブロック中'}
+                </span>
+              </div>
+              {!friend.isFollowing && (
+                <div className="flex items-start justify-between gap-3 mt-1.5">
+                  <span className="text-[11px] text-gray-500">ブロック日時</span>
+                  <span className="text-[11px] text-gray-700 text-right">
+                    {friend.blockedAt ? formatDate(friend.blockedAt) : '日時不明（記録開始前）'}
+                  </span>
+                </div>
+              )}
+              {friend.isFollowing && friend.lastUnblockedAt && (
+                <div className="flex items-start justify-between gap-3 mt-1.5">
+                  <span className="text-[11px] text-gray-500">最終解除日時</span>
+                  <span className="text-[11px] text-gray-700">{formatDate(friend.lastUnblockedAt)}</span>
+                </div>
+              )}
+              <div className="mt-3 pt-3 border-t border-gray-100">
+                <p className="text-[10px] text-gray-400 mb-1.5">直近の履歴</p>
+                {friend.followEvents.length === 0 ? (
+                  <p className="text-[11px] text-gray-400">記録開始後の履歴はありません</p>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {friend.followEvents.map((event) => (
+                      <li key={event.id} className="flex items-center justify-between gap-3 text-[11px]">
+                        <span className={
+                          event.eventType === 'blocked'
+                            ? 'text-red-600'
+                            : event.eventType === 'added'
+                              ? 'text-blue-700'
+                              : 'text-green-700'
+                        }>
+                          {event.eventType === 'blocked' ? 'ブロック' : event.eventType === 'added' ? '友だち追加' : 'ブロック解除'}
+                        </span>
+                        <time className="text-gray-500">{formatDate(event.eventAt)}</time>
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </div>
             </div>

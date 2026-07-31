@@ -1,4 +1,4 @@
-import { jstNow } from './utils.js';
+import { jstNow, toJstString } from './utils.js';
 export interface Friend {
   id: string;
   line_user_id: string;
@@ -6,8 +6,11 @@ export interface Friend {
   picture_url: string | null;
   status_message: string | null;
   is_following: number;
+  blocked_at: string | null;
+  last_unblocked_at: string | null;
   user_id: string | null;
   line_account_id: string | null;
+  ref_code: string | null;
   metadata: string;
   first_tracked_link_id: string | null;
   created_at: string;
@@ -18,6 +21,13 @@ export interface GetFriendsOptions {
   limit?: number;
   offset?: number;
   tagId?: string;
+}
+
+export interface FriendFollowEvent {
+  id: string;
+  event_type: 'added' | 'blocked' | 'unblocked';
+  event_at: string;
+  created_at: string;
 }
 
 export async function getFriends(
@@ -139,6 +149,7 @@ export interface UpsertFriendInput {
   displayName?: string | null;
   pictureUrl?: string | null;
   statusMessage?: string | null;
+  isFollowing?: boolean;
 }
 
 export async function upsertFriend(
@@ -147,6 +158,9 @@ export async function upsertFriend(
 ): Promise<Friend> {
   const now = jstNow();
   const existing = await getFriendByLineUserId(db, input.lineUserId);
+  const isFollowing = input.isFollowing === undefined
+    ? (existing?.is_following ?? 1)
+    : (input.isFollowing ? 1 : 0);
 
   if (existing) {
     await db
@@ -155,7 +169,7 @@ export async function upsertFriend(
          SET display_name = ?,
              picture_url = ?,
              status_message = ?,
-             is_following = 1,
+             is_following = ?,
              updated_at = ?
          WHERE line_user_id = ?`,
       )
@@ -163,6 +177,7 @@ export async function upsertFriend(
         'displayName' in input ? (input.displayName ?? null) : existing.display_name,
         'pictureUrl' in input ? (input.pictureUrl ?? null) : existing.picture_url,
         'statusMessage' in input ? (input.statusMessage ?? null) : existing.status_message,
+        isFollowing,
         now,
         input.lineUserId,
       )
@@ -175,7 +190,7 @@ export async function upsertFriend(
   await db
     .prepare(
       `INSERT INTO friends (id, line_user_id, display_name, picture_url, status_message, is_following, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id,
@@ -183,6 +198,7 @@ export async function upsertFriend(
       input.displayName ?? null,
       input.pictureUrl ?? null,
       input.statusMessage ?? null,
+      isFollowing,
       now,
       now,
     )
@@ -204,6 +220,89 @@ export async function updateFriendFollowStatus(
     )
     .bind(isFollowing ? 1 : 0, jstNow(), lineUserId)
     .run();
+}
+
+/**
+ * Persist a LINE friend lifecycle transition with the original webhook time.
+ * The history insert and current-state update run in one D1 batch. Duplicate
+ * webhook IDs stay idempotent, and delayed older events cannot overwrite a
+ * newer current state.
+ */
+export async function recordFriendFollowEvent(
+  db: D1Database,
+  input: {
+    friendId: string;
+    eventType: 'added' | 'blocked' | 'unblocked';
+    eventTimestamp: number;
+    webhookEventId: string;
+  },
+): Promise<void> {
+  const eventAt = toJstString(new Date(input.eventTimestamp));
+  const createdAt = jstNow();
+
+  const update = input.eventType === 'blocked'
+    ? db.prepare(
+      `UPDATE friends
+       SET is_following = ?, blocked_at = ?, updated_at = ?
+       WHERE id = ?
+         AND ? >= COALESCE(
+           (SELECT MAX(event_at) FROM friend_follow_events WHERE friend_id = ?),
+           ''
+         )`,
+    ).bind(0, eventAt, eventAt, input.friendId, eventAt, input.friendId)
+    : input.eventType === 'unblocked'
+      ? db.prepare(
+        `UPDATE friends
+         SET is_following = 1, blocked_at = NULL, last_unblocked_at = ?, updated_at = ?
+         WHERE id = ?
+           AND ? >= COALESCE(
+             (SELECT MAX(event_at) FROM friend_follow_events WHERE friend_id = ?),
+             ''
+           )`,
+      ).bind(eventAt, eventAt, input.friendId, eventAt, input.friendId)
+      : db.prepare(
+        `UPDATE friends
+         SET is_following = 1, blocked_at = NULL, updated_at = ?
+         WHERE id = ?
+           AND ? >= COALESCE(
+             (SELECT MAX(event_at) FROM friend_follow_events WHERE friend_id = ?),
+             ''
+           )`,
+      ).bind(eventAt, input.friendId, eventAt, input.friendId);
+
+  await db.batch([
+    db.prepare(
+      `INSERT OR IGNORE INTO friend_follow_events
+         (id, friend_id, event_type, event_at, webhook_event_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).bind(
+      crypto.randomUUID(),
+      input.friendId,
+      input.eventType,
+      eventAt,
+      input.webhookEventId,
+      createdAt,
+    ),
+    update,
+  ]);
+}
+
+export async function getFriendFollowEvents(
+  db: D1Database,
+  friendId: string,
+  limit = 20,
+): Promise<FriendFollowEvent[]> {
+  const result = await db
+    .prepare(
+      `SELECT id, event_type, event_at, created_at
+       FROM friend_follow_events
+       WHERE friend_id = ?
+       ORDER BY event_at DESC, created_at DESC
+       LIMIT ?`,
+    )
+    .bind(friendId, limit)
+    .all<FriendFollowEvent>();
+  return result.results;
 }
 
 /** Get merged metadata across all friend records sharing the same user_id (UUID). */

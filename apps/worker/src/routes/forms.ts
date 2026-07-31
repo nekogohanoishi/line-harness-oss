@@ -26,6 +26,12 @@ import {
   normalizeSurveyQuestions,
 } from '../services/intro-message.js';
 import { applySurveyAnswerTags } from '../services/survey-answer-tags.js';
+import { getRegistrationSurveyFlowState } from '../services/registration-survey-flow.js';
+import {
+  loadRegistrationSurveyConfig,
+  saveRegistrationSurveyConfig,
+  type RegistrationSurveyConfig,
+} from '../services/registration-survey-config.js';
 
 const forms = new Hono<Env>();
 
@@ -85,13 +91,13 @@ async function syncSurveyScenarioSteps(
        SET message_type = 'flex',
            message_content = ?,
            template_id = NULL
-       WHERE message_content LIKE ?
-          OR message_content LIKE ?`,
+       WHERE instr(message_content, ?) > 0
+          OR instr(message_content, ?) > 0`,
     )
     .bind(
       content,
-      `%lh:surveyform:${encodedFormId}:%`,
-      `%lh:regsurvey:${encodedFormId}:%`,
+      `lh:surveyform:${encodedFormId}:`,
+      `lh:regsurvey:${encodedFormId}:`,
     )
     .run();
 }
@@ -106,25 +112,77 @@ async function getRegistrationSurveyForm(db: D1Database): Promise<DbForm | null>
   );
 }
 
+async function resolveRegistrationSurveyAccountId(
+  db: D1Database,
+  requestedAccountId?: string | null,
+): Promise<string | null> {
+  if (requestedAccountId) {
+    const requested = await db
+      .prepare(`SELECT id FROM line_accounts WHERE id = ? LIMIT 1`)
+      .bind(requestedAccountId)
+      .first<{ id: string }>();
+    if (requested) return requested.id;
+  }
+
+  const scenarioAccount = await db
+    .prepare(`SELECT line_account_id FROM scenarios WHERE id = ? LIMIT 1`)
+    .bind(REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID)
+    .first<{ line_account_id: string | null }>();
+  if (scenarioAccount?.line_account_id) return scenarioAccount.line_account_id;
+
+  const firstAccount = await db
+    .prepare(`SELECT id FROM line_accounts WHERE is_active = 1 ORDER BY display_order ASC, created_at ASC LIMIT 1`)
+    .first<{ id: string }>();
+  return firstAccount?.id ?? null;
+}
+
+async function getRegistrationSurveyContext(
+  db: D1Database,
+  requestedAccountId?: string | null,
+): Promise<{
+  accountId: string;
+  config: RegistrationSurveyConfig;
+  legacyForm: DbForm | null;
+} | null> {
+  const accountId = await resolveRegistrationSurveyAccountId(db, requestedAccountId);
+  if (!accountId) return null;
+  const legacyForm = await getRegistrationSurveyForm(db);
+  const config = await loadRegistrationSurveyConfig(db, accountId, {
+    formId: legacyForm?.id ?? null,
+    isActive: Boolean(legacyForm?.is_active),
+  });
+  return { accountId, config, legacyForm };
+}
+
 type RegistrationSurveyFriendAddState = {
   scenarioId: string;
   name: string;
+  isActive: boolean;
   greetingStepId: string | null;
   surveyStepId: string | null;
   greetingMessageContent: string;
 };
 
-async function getRegistrationSurveyFriendAddState(db: D1Database): Promise<RegistrationSurveyFriendAddState | null> {
+async function getRegistrationSurveyFriendAddState(
+  db: D1Database,
+  accountId?: string | null,
+): Promise<RegistrationSurveyFriendAddState | null> {
   const scenario = await db
     .prepare(
-      `SELECT id, name FROM scenarios
-       WHERE id = ?
-          OR (trigger_type = 'friend_add' AND name LIKE '%登録時アンケート%')
+      `SELECT id, name, is_active FROM scenarios
+       WHERE (id = ?
+          OR (trigger_type = 'friend_add' AND name LIKE '%登録時アンケート%'))
+         AND (? IS NULL OR line_account_id IS NULL OR line_account_id = ?)
        ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, created_at DESC
        LIMIT 1`,
     )
-    .bind(REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID, REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID)
-    .first<{ id: string; name: string }>();
+    .bind(
+      REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID,
+      accountId ?? null,
+      accountId ?? null,
+      REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID,
+    )
+    .first<{ id: string; name: string; is_active: number }>();
   if (!scenario) return null;
 
   const steps = await db
@@ -146,6 +204,7 @@ async function getRegistrationSurveyFriendAddState(db: D1Database): Promise<Regi
   return {
     scenarioId: scenario.id,
     name: scenario.name,
+    isActive: Boolean(scenario.is_active),
     greetingStepId: firstStep?.message_type === 'text' ? firstStep.id : null,
     surveyStepId: secondStep?.id ?? (firstStep?.message_type !== 'text' ? firstStep?.id ?? null : null),
     greetingMessageContent,
@@ -157,17 +216,25 @@ async function syncRegistrationSurveyFriendAddSteps(
   formId: string,
   fields: ReturnType<typeof toSurveyFields>,
   greetingMessageContent: string,
+  surveyIsActive: boolean,
+  accountId?: string | null,
 ): Promise<RegistrationSurveyFriendAddState | null> {
   const scenario = await db
     .prepare(
-      `SELECT id, name FROM scenarios
-       WHERE id = ?
-          OR (trigger_type = 'friend_add' AND name LIKE '%登録時アンケート%')
+      `SELECT id, name, is_active FROM scenarios
+       WHERE (id = ?
+          OR (trigger_type = 'friend_add' AND name LIKE '%登録時アンケート%'))
+         AND (? IS NULL OR line_account_id IS NULL OR line_account_id = ?)
        ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, created_at DESC
        LIMIT 1`,
     )
-    .bind(REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID, REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID)
-    .first<{ id: string; name: string }>();
+    .bind(
+      REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID,
+      accountId ?? null,
+      accountId ?? null,
+      REGISTRATION_SURVEY_FRIEND_ADD_SCENARIO_ID,
+    )
+    .first<{ id: string; name: string; is_active: number }>();
   if (!scenario) return null;
 
   const existingSteps = await db
@@ -176,15 +243,18 @@ async function syncRegistrationSurveyFriendAddSteps(
     .all<{ id: string }>();
   const greetingStep = existingSteps.results?.[0] ?? null;
   const surveyStep = existingSteps.results?.[1] ?? null;
-  const surveyMessage = buildSurveyQuestionMessageFromQuestions(formId, 0, fields);
-  if (surveyMessage.type !== 'flex') return null;
-  const surveyContent = JSON.stringify(surveyMessage.contents);
   const now = jstNow();
   const normalizedGreeting = normalizeRegistrationSurveyGreetingMessage(greetingMessageContent);
+  const flowState = getRegistrationSurveyFlowState(surveyIsActive);
 
   await db
-    .prepare(`UPDATE scenarios SET description = ?, updated_at = ? WHERE id = ?`)
-    .bind('友だち追加・ブロック解除時に、挨拶のあと登録時アンケートを送る', now, scenario.id)
+    .prepare(`UPDATE scenarios SET description = ?, is_active = ?, updated_at = ? WHERE id = ?`)
+    .bind(
+      flowState.description,
+      flowState.scenarioIsActive ? 1 : 0,
+      now,
+      scenario.id,
+    )
     .run();
 
   const greetingStepId = greetingStep?.id ?? crypto.randomUUID();
@@ -216,43 +286,55 @@ async function syncRegistrationSurveyFriendAddSteps(
       .run();
   }
 
-  const surveyStepId = surveyStep?.id ?? crypto.randomUUID();
-  if (surveyStep) {
+  let surveyStepId: string | null = null;
+  if (flowState.includeSurveyStep) {
+    const surveyMessage = buildSurveyQuestionMessageFromQuestions(formId, 0, fields);
+    if (surveyMessage.type !== 'flex') return null;
+    const surveyContent = JSON.stringify(surveyMessage.contents);
+    surveyStepId = surveyStep?.id ?? crypto.randomUUID();
+    if (surveyStep) {
+      await db
+        .prepare(
+          `UPDATE scenario_steps
+           SET step_order = 1,
+               delay_minutes = 0,
+               message_type = 'flex',
+               message_content = ?,
+               offset_days = NULL,
+               offset_minutes = NULL,
+               delivery_time = NULL,
+               template_id = NULL,
+               on_reach_tag_id = NULL
+           WHERE id = ?`,
+        )
+        .bind(surveyContent, surveyStepId)
+        .run();
+    } else {
+      await db
+        .prepare(
+          `INSERT INTO scenario_steps
+           (id, scenario_id, step_order, delay_minutes, message_type, message_content, created_at)
+           VALUES (?, ?, 1, 0, 'flex', ?, ?)`,
+        )
+        .bind(surveyStepId, scenario.id, surveyContent, now)
+        .run();
+    }
+
     await db
-      .prepare(
-        `UPDATE scenario_steps
-         SET step_order = 1,
-             delay_minutes = 0,
-             message_type = 'flex',
-             message_content = ?,
-             offset_days = NULL,
-             offset_minutes = NULL,
-             delivery_time = NULL,
-             template_id = NULL,
-             on_reach_tag_id = NULL
-         WHERE id = ?`,
-      )
-      .bind(surveyContent, surveyStepId)
+      .prepare(`DELETE FROM scenario_steps WHERE scenario_id = ? AND id NOT IN (?, ?)`)
+      .bind(scenario.id, greetingStepId, surveyStepId)
       .run();
   } else {
     await db
-      .prepare(
-        `INSERT INTO scenario_steps
-         (id, scenario_id, step_order, delay_minutes, message_type, message_content, created_at)
-         VALUES (?, ?, 1, 0, 'flex', ?, ?)`,
-      )
-      .bind(surveyStepId, scenario.id, surveyContent, now)
+      .prepare(`DELETE FROM scenario_steps WHERE scenario_id = ? AND id != ?`)
+      .bind(scenario.id, greetingStepId)
       .run();
   }
-
-  await db
-    .prepare(`DELETE FROM scenario_steps WHERE scenario_id = ? AND id NOT IN (?, ?)`)
-    .bind(scenario.id, greetingStepId, surveyStepId)
-    .run();
 
   return {
     scenarioId: scenario.id,
     name: scenario.name,
+    isActive: flowState.scenarioIsActive,
     greetingStepId,
     surveyStepId,
     greetingMessageContent: normalizedGreeting,
@@ -294,6 +376,16 @@ function serializeSubmission(row: DbFormSubmission & { friend_name?: string | nu
     data: JSON.parse(row.data || '{}') as Record<string, unknown>,
     createdAt: row.created_at,
   };
+}
+
+async function getRegistrationSurveyCandidateForms(
+  db: D1Database,
+  config: RegistrationSurveyConfig,
+): Promise<DbForm[]> {
+  const formsById = await Promise.all(
+    config.candidateFormIds.map((formId) => getFormById(db, formId)),
+  );
+  return formsById.filter((form): form is DbForm => form !== null);
 }
 
 // GET /api/forms — list all forms (with submission stats + delivering accounts)
@@ -469,19 +561,133 @@ forms.put('/api/surveys/:id/settings', async (c) => {
   }
 });
 
-// GET /api/forms/registration-survey/settings — settings for in-chat registration survey
-forms.get('/api/forms/registration-survey/settings', async (c) => {
+// GET /api/forms/registration-surveys — list saved registration-survey candidates
+forms.get('/api/forms/registration-surveys', async (c) => {
   try {
-    const form = await getRegistrationSurveyForm(c.env.DB);
-    if (!form) {
-      return c.json({ success: false, error: '登録時アンケートが見つかりません' }, 404);
+    const context = await getRegistrationSurveyContext(c.env.DB, c.req.query('accountId'));
+    if (!context) {
+      return c.json({ success: false, error: 'LINEアカウントが見つかりません' }, 404);
+    }
+    const candidates = await getRegistrationSurveyCandidateForms(c.env.DB, context.config);
+    return c.json({
+      success: true,
+      data: candidates.map((form) => ({
+        form: serializeForm(form),
+        questions: normalizeSurveyQuestions(form.fields),
+        isSelected: form.id === context.config.selectedFormId,
+      })),
+    });
+  } catch (err) {
+    console.error('GET /api/forms/registration-surveys error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// POST /api/forms/registration-surveys — create a saved registration-survey candidate
+forms.post('/api/forms/registration-surveys', async (c) => {
+  try {
+    const body = await c.req.json<{
+      accountId?: string;
+      name?: string;
+      description?: string | null;
+      questions?: SurveyQuestionInput[];
+      onSubmitTagId?: string | null;
+      onSubmitScenarioId?: string | null;
+      onSubmitMessageContent?: string | null;
+    }>();
+    const context = await getRegistrationSurveyContext(c.env.DB, body.accountId);
+    if (!context) {
+      return c.json({ success: false, error: 'LINEアカウントが見つかりません' }, 404);
+    }
+    const fields = toSurveyFields(body.questions ?? []);
+    const validationError = validateSurveyFields(fields);
+    if (validationError) {
+      return c.json({ success: false, error: validationError }, 400);
     }
 
-    const friendAddScenario = await getRegistrationSurveyFriendAddState(c.env.DB);
+    let form = await createForm(c.env.DB, {
+      name: body.name?.trim() || `登録時アンケート ${context.config.candidateFormIds.length + 1}`,
+      description: body.description ?? null,
+      fields: JSON.stringify(fields),
+      onSubmitTagId: body.onSubmitTagId ?? null,
+      onSubmitScenarioId: body.onSubmitScenarioId ?? null,
+      onSubmitMessageType: 'text',
+      onSubmitMessageContent: body.onSubmitMessageContent ?? null,
+      saveToMetadata: true,
+    });
+    const inactive = await updateForm(c.env.DB, form.id, { isActive: false });
+    if (inactive) form = inactive;
+
+    const config: RegistrationSurveyConfig = {
+      ...context.config,
+      candidateFormIds: [...new Set([...context.config.candidateFormIds, form.id])],
+    };
+    await saveRegistrationSurveyConfig(c.env.DB, context.accountId, config);
 
     return c.json({
       success: true,
       data: {
+        form: serializeForm(form),
+        questions: normalizeSurveyQuestions(form.fields),
+        isSelected: false,
+      },
+    }, 201);
+  } catch (err) {
+    console.error('POST /api/forms/registration-surveys error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// DELETE /api/forms/registration-surveys/:id — delete an unused candidate
+forms.delete('/api/forms/registration-surveys/:id', async (c) => {
+  try {
+    const context = await getRegistrationSurveyContext(c.env.DB, c.req.query('accountId'));
+    if (!context) {
+      return c.json({ success: false, error: 'LINEアカウントが見つかりません' }, 404);
+    }
+    const formId = c.req.param('id');
+    if (!context.config.candidateFormIds.includes(formId)) {
+      return c.json({ success: false, error: '登録時アンケート候補が見つかりません' }, 404);
+    }
+    if (context.config.selectedFormId === formId) {
+      return c.json({ success: false, error: '現在使用中の登録時アンケートは削除できません' }, 409);
+    }
+
+    await deleteForm(c.env.DB, formId);
+    await saveRegistrationSurveyConfig(c.env.DB, context.accountId, {
+      ...context.config,
+      candidateFormIds: context.config.candidateFormIds.filter((id) => id !== formId),
+    });
+    return c.json({ success: true, data: null });
+  } catch (err) {
+    console.error('DELETE /api/forms/registration-surveys/:id error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// GET /api/forms/registration-survey/settings — selected registration survey and delivery settings
+forms.get('/api/forms/registration-survey/settings', async (c) => {
+  try {
+    const context = await getRegistrationSurveyContext(c.env.DB, c.req.query('accountId'));
+    if (!context) {
+      return c.json({ success: false, error: 'LINEアカウントが見つかりません' }, 404);
+    }
+    const candidates = await getRegistrationSurveyCandidateForms(c.env.DB, context.config);
+    const form = candidates.find((candidate) => candidate.id === context.config.selectedFormId)
+      ?? candidates[0]
+      ?? null;
+    if (!form) {
+      return c.json({ success: false, error: '登録時アンケートが見つかりません' }, 404);
+    }
+
+    const friendAddScenario = await getRegistrationSurveyFriendAddState(c.env.DB, context.accountId);
+    return c.json({
+      success: true,
+      data: {
+        accountId: context.accountId,
+        selectedFormId: form.id,
+        candidateFormIds: candidates.map((candidate) => candidate.id),
+        isActive: context.config.isActive,
         form: serializeForm(form),
         questions: normalizeSurveyQuestions(form.fields),
         greetingMessageContent: friendAddScenario?.greetingMessageContent ?? DEFAULT_REGISTRATION_SURVEY_GREETING_MESSAGE,
@@ -489,6 +695,7 @@ forms.get('/api/forms/registration-survey/settings', async (c) => {
           ? {
               id: friendAddScenario.scenarioId,
               name: friendAddScenario.name,
+              isActive: friendAddScenario.isActive,
               greetingStepId: friendAddScenario.greetingStepId,
               surveyStepId: friendAddScenario.surveyStepId,
               firstStepId: friendAddScenario.greetingStepId,
@@ -502,15 +709,14 @@ forms.get('/api/forms/registration-survey/settings', async (c) => {
   }
 });
 
-// PUT /api/forms/registration-survey/settings — edit questions + completion behavior safely
+// PUT /api/forms/registration-survey/settings — select one candidate and edit delivery settings
 forms.put('/api/forms/registration-survey/settings', async (c) => {
   try {
-    const form = await getRegistrationSurveyForm(c.env.DB);
-    if (!form) {
-      return c.json({ success: false, error: '登録時アンケートが見つかりません' }, 404);
-    }
-
     const body = await c.req.json<{
+      accountId?: string;
+      formId?: string;
+      name?: string;
+      description?: string | null;
       questions?: SurveyQuestionInput[];
       onSubmitTagId?: string | null;
       onSubmitScenarioId?: string | null;
@@ -518,6 +724,18 @@ forms.put('/api/forms/registration-survey/settings', async (c) => {
       greetingMessageContent?: string | null;
       isActive?: boolean;
     }>();
+    const context = await getRegistrationSurveyContext(c.env.DB, body.accountId);
+    if (!context) {
+      return c.json({ success: false, error: 'LINEアカウントが見つかりません' }, 404);
+    }
+    const formId = body.formId ?? context.config.selectedFormId;
+    if (!formId || !context.config.candidateFormIds.includes(formId)) {
+      return c.json({ success: false, error: '登録時アンケート候補を選択してください' }, 400);
+    }
+    const form = await getFormById(c.env.DB, formId);
+    if (!form) {
+      return c.json({ success: false, error: '登録時アンケートが見つかりません' }, 404);
+    }
 
     const fields = body.questions !== undefined
       ? toSurveyFields(body.questions)
@@ -533,31 +751,53 @@ forms.put('/api/forms/registration-survey/settings', async (c) => {
       return c.json({ success: false, error: validationError }, 400);
     }
 
-    const currentFriendAddScenario = await getRegistrationSurveyFriendAddState(c.env.DB);
+    const currentFriendAddScenario = await getRegistrationSurveyFriendAddState(c.env.DB, context.accountId);
     const greetingMessageContent = normalizeRegistrationSurveyGreetingMessage(
       body.greetingMessageContent ?? currentFriendAddScenario?.greetingMessageContent,
     );
+    const isActive = body.isActive ?? context.config.isActive;
 
+    if (context.config.selectedFormId && context.config.selectedFormId !== formId) {
+      await updateForm(c.env.DB, context.config.selectedFormId, { isActive: false });
+    }
     const updated = await updateForm(c.env.DB, form.id, {
-      name: '登録時アンケート',
+      name: body.name?.trim() || form.name,
+      description: body.description ?? form.description,
       fields: JSON.stringify(fields),
       onSubmitTagId: body.onSubmitTagId ?? form.on_submit_tag_id,
       onSubmitScenarioId: body.onSubmitScenarioId ?? form.on_submit_scenario_id,
       onSubmitMessageType: 'text',
       onSubmitMessageContent: body.onSubmitMessageContent ?? form.on_submit_message_content,
       saveToMetadata: true,
-      isActive: body.isActive ?? Boolean(form.is_active),
+      isActive,
     });
     if (!updated) {
       return c.json({ success: false, error: '登録時アンケートの更新に失敗しました' }, 500);
     }
 
-    const synced = await syncRegistrationSurveyFriendAddSteps(c.env.DB, updated.id, fields, greetingMessageContent);
+    const synced = await syncRegistrationSurveyFriendAddSteps(
+      c.env.DB,
+      updated.id,
+      fields,
+      greetingMessageContent,
+      isActive,
+      context.accountId,
+    );
     await syncSurveyScenarioSteps(c.env.DB, updated.id, fields);
+    const config: RegistrationSurveyConfig = {
+      candidateFormIds: context.config.candidateFormIds,
+      selectedFormId: updated.id,
+      isActive,
+    };
+    await saveRegistrationSurveyConfig(c.env.DB, context.accountId, config);
 
     return c.json({
       success: true,
       data: {
+        accountId: context.accountId,
+        selectedFormId: updated.id,
+        candidateFormIds: config.candidateFormIds,
+        isActive,
         form: serializeForm(updated),
         questions: normalizeSurveyQuestions(updated.fields),
         greetingMessageContent,
@@ -565,6 +805,7 @@ forms.put('/api/forms/registration-survey/settings', async (c) => {
           ? {
               id: synced.scenarioId,
               name: synced.name,
+              isActive: synced.isActive,
               greetingStepId: synced.greetingStepId,
               surveyStepId: synced.surveyStepId,
               firstStepId: synced.greetingStepId,

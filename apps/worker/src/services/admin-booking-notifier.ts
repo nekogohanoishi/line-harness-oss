@@ -22,6 +22,23 @@ export interface AdminBookingNotifyParams {
   adminUrl?: string;
 }
 
+/**
+ * 予約管理画面へのディープリンク。
+ *
+ * 第1引数は「管理画面のベースURL」で、Worker 同一オリジン配信では base path
+ * (`https://xxx.workers.dev/admin`) を含む。呼び出し側は
+ * `resolveAdminBaseUrl(env)` を通して渡すこと。ADMIN_ORIGIN を直接渡すと
+ * カンマ区切りの複数オリジン指定を壊す。
+ */
+export function buildAdminBookingUrl(
+  adminBaseUrl: string | null | undefined,
+  eventId: string,
+): string | undefined {
+  if (!adminBaseUrl) return undefined;
+  const base = adminBaseUrl.replace(/\/+$/, '');
+  return `${base}/events/bookings?id=${encodeURIComponent(eventId)}`;
+}
+
 export function renderAdminBookingNotificationText(p: AdminBookingNotifyParams): string {
   const noteLine = p.customerNote?.trim()
     ? `\n備考: ${p.customerNote.trim().slice(0, 200)}`

@@ -23,7 +23,11 @@ import {
 import { getSlotsWithRemaining } from '../services/event-availability.js';
 import { verifyCallerLineUserId } from '../services/liff-auth.js';
 import { computeIdentityKey } from '../lib/identity-key.js';
-import { notifyAdminsOfBooking } from '../services/admin-booking-notifier.js';
+import {
+  buildAdminBookingUrl,
+  notifyAdminsOfBooking,
+} from '../services/admin-booking-notifier.js';
+import { resolveAdminBaseUrl } from '../middleware/admin-auth-config.js';
 import {
   reserveEventIdempotency,
   finalizeEventIdempotencyResponse,
@@ -734,7 +738,7 @@ events.post('/api/liff/events/me/:bookingId/cancel', async (c) => {
 
   const row = await c.env.DB
     .prepare(
-      `SELECT b.id, b.status, b.customer_note, e.name AS event_name,
+      `SELECT b.id, b.event_id, b.status, b.customer_note, e.name AS event_name,
               e.cancel_deadline_hours_before, s.starts_at AS slot_starts_at
          FROM event_bookings b
          JOIN events e ON e.id = b.event_id
@@ -744,6 +748,7 @@ events.post('/api/liff/events/me/:bookingId/cancel', async (c) => {
     .bind(c.req.param('bookingId'), friend.id, account_id)
     .first<{
       id: string;
+      event_id: string;
       status: string;
       customer_note: string | null;
       event_name: string;
@@ -783,7 +788,7 @@ events.post('/api/liff/events/me/:bookingId/cancel', async (c) => {
         friendDisplayName: friend.display_name ?? '(名前未取得)',
         customerNote: row.customer_note,
         status: 'cancelled',
-        adminUrl: c.env.ADMIN_ORIGIN ? `${c.env.ADMIN_ORIGIN}/events/bookings` : undefined,
+        adminUrl: buildAdminBookingUrl(resolveAdminBaseUrl(c.env, { requestOrigin: new URL(c.req.url).origin }), row.event_id),
       });
     }
   } catch (e) {
@@ -1207,7 +1212,7 @@ events.post('/api/liff/events/:id/bookings', async (c) => {
         friendDisplayName: friend.display_name ?? '(名前未取得)',
         customerNote: body.customer_note ?? null,
         status,
-        adminUrl: c.env.ADMIN_ORIGIN ? `${c.env.ADMIN_ORIGIN}/events/bookings` : undefined,
+        adminUrl: buildAdminBookingUrl(resolveAdminBaseUrl(c.env, { requestOrigin: new URL(c.req.url).origin }), event.id),
       });
     }
   } catch (e) {

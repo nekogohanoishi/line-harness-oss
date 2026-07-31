@@ -1,11 +1,11 @@
 'use client'
 
 import { Suspense, useCallback, useEffect, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import Header from '@/components/layout/header'
 import { useAccount } from '@/contexts/account-context'
-import { eventsApi, type EventBookingItem, type EventDetail } from '@/lib/api'
+import { eventsApi, type EventBookingItem, type EventDetail, type EventListItem } from '@/lib/api'
 import { formatJstDateTime } from '@line-crm/shared'
 
 // 「全件」を先頭 & 初期表示にする。承認不要イベント (requires_approval=0)
@@ -34,9 +34,11 @@ const statusBadge: Record<string, string> = {
 
 function BookingsInner() {
   const params = useSearchParams()
+  const router = useRouter()
   const eventId = params.get('id')
   const { selectedAccountId, accounts } = useAccount()
   const [event, setEvent] = useState<EventDetail | null>(null)
+  const [eventChoices, setEventChoices] = useState<EventListItem[] | null>(null)
   const [items, setItems] = useState<EventBookingItem[]>([])
   const [tab, setTab] = useState<string>('all')
   const [loading, setLoading] = useState(true)
@@ -76,8 +78,77 @@ function BookingsInner() {
     setItems([])
   }, [eventId])
 
+  useEffect(() => {
+    if (eventId || !selectedAccountId) return
+
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    void eventsApi.listEvents(selectedAccountId)
+      .then((response) => {
+        if (cancelled) return
+        if (response.items.length === 1) {
+          router.replace(`/events/bookings?id=${encodeURIComponent(response.items[0].id)}`)
+          return
+        }
+        setEventChoices(response.items)
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [eventId, router, selectedAccountId])
+
   if (!eventId) {
-    return <div className="p-4 text-red-700">id クエリが必要です</div>
+    return (
+      <>
+        <Header title="イベント予約管理" />
+        <div className="p-6 max-w-4xl mx-auto">
+          <div className="mb-4">
+            <h1 className="text-2xl font-bold text-gray-900">予約を確認するイベント</h1>
+            <p className="text-sm text-gray-500 mt-0.5">イベントを選ぶと、承認待ち・確定・キャンセルを確認できます</p>
+          </div>
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+              {error}
+            </div>
+          )}
+
+          {loading || eventChoices === null ? (
+            <div className="py-12 text-center text-gray-500">予約情報を読み込み中...</div>
+          ) : eventChoices.length === 0 ? (
+            <div className="py-12 text-center text-gray-500 text-sm">
+              予約受付中のイベントがありません
+            </div>
+          ) : (
+            <div className="border border-gray-200 bg-white overflow-hidden">
+              {eventChoices.map((choice) => (
+                <Link
+                  key={choice.id}
+                  href={`/events/bookings?id=${encodeURIComponent(choice.id)}`}
+                  className="flex items-center justify-between gap-4 px-4 py-4 border-b border-gray-100 last:border-b-0 hover:bg-gray-50"
+                >
+                  <div className="min-w-0">
+                    <div className="font-medium text-gray-900 truncate">{choice.name}</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      予約 {choice.total_active}件 ・ 承認待ち {choice.pending_count}件
+                    </div>
+                  </div>
+                  <span className="text-sm font-medium text-blue-600 whitespace-nowrap">予約を確認</span>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+      </>
+    )
   }
 
   async function decide(id: string, action: 'confirm' | 'reject') {

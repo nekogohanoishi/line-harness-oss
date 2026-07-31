@@ -3,12 +3,14 @@ import {
   getFriends,
   getFriendById,
   getFriendCount,
+  getFriendFollowEvents,
   addTagToFriend,
   removeTagFromFriend,
   getFriendTags,
   getScenarios,
   enrollFriendInScenario,
   jstNow,
+  recordManualChatMessage,
 } from '@line-crm/db';
 import type { Friend as DbFriend, Tag as DbTag } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
@@ -34,6 +36,8 @@ function serializeFriend(row: DbFriend) {
     pictureUrl: row.picture_url,
     statusMessage: row.status_message,
     isFollowing: Boolean(row.is_following),
+    blockedAt: row.blocked_at,
+    lastUnblockedAt: row.last_unblocked_at,
     metadata: JSON.parse(row.metadata || '{}'),
     refCode: (row as unknown as Record<string, unknown>).ref_code as string | null,
     userId: row.user_id,
@@ -108,6 +112,10 @@ friends.get('/api/friends', async (c) => {
     // hide rows on the current page and leave `total` misleading.
     const handledFilter: 'unhandled' | null =
       c.req.query('handled') === 'unhandled' ? 'unhandled' : null;
+    const followStatus: 'following' | 'blocked' | null =
+      c.req.query('followStatus') === 'following' || c.req.query('followStatus') === 'blocked'
+        ? c.req.query('followStatus') as 'following' | 'blocked'
+        : null;
 
     const db = c.env.DB;
 
@@ -121,6 +129,11 @@ friends.get('/api/friends', async (c) => {
     if (lineAccountId) {
       conditions.push('f.line_account_id = ?');
       binds.push(lineAccountId);
+    }
+    if (followStatus === 'following') {
+      conditions.push('f.is_following = 1');
+    } else if (followStatus === 'blocked') {
+      conditions.push('f.is_following = 0');
     }
     if (search) {
       conditions.push('f.display_name LIKE ?');
@@ -395,9 +408,10 @@ friends.get('/api/friends/:id', async (c) => {
     const id = c.req.param('id');
     const db = c.env.DB;
 
-    const [friend, tags] = await Promise.all([
+    const [friend, tags, followEvents] = await Promise.all([
       getFriendById(db, id),
       getFriendTags(db, id),
+      getFriendFollowEvents(db, id),
     ]);
 
     if (!friend) {
@@ -409,6 +423,12 @@ friends.get('/api/friends/:id', async (c) => {
       data: {
         ...serializeFriend(friend),
         tags: tags.map(serializeTag),
+        followEvents: followEvents.map((event) => ({
+          id: event.id,
+          eventType: event.event_type,
+          eventAt: event.event_at,
+          createdAt: event.created_at,
+        })),
       },
     });
   } catch (err) {
@@ -587,13 +607,15 @@ friends.post('/api/friends/:id/messages', async (c) => {
 
     // Log outgoing message
     const logId = crypto.randomUUID();
+    const sentAt = jstNow();
     await db
       .prepare(
         `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, source, created_at)
          VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, 'manual', ?)`,
       )
-      .bind(logId, friend.id, messageType, expandedContent, jstNow())
+      .bind(logId, friend.id, messageType, expandedContent, sentAt)
       .run();
+    await recordManualChatMessage(db, friend.id, sentAt);
 
     return c.json({ success: true, data: { messageId: logId } });
   } catch (err) {

@@ -78,7 +78,12 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
           <p className="text-sm font-medium text-gray-900 truncate">{friend.displayName}</p>
           <p className="text-[10px] text-gray-400 mt-0.5">登録: {formatJstDate(friend.createdAt)}</p>
           {!isFollowing && (
-            <p className="text-[10px] text-red-400 mt-0.5">ブロック / 退会</p>
+            <div className="mt-0.5">
+              <p className="text-[10px] font-medium text-red-500">ブロック中</p>
+              <p className="text-[10px] text-gray-400">
+                {friend.blockedAt ? `日時: ${formatJstTimestamp(friend.blockedAt)}` : '日時不明（記録開始前）'}
+              </p>
+            </div>
           )}
         </div>
       </div>

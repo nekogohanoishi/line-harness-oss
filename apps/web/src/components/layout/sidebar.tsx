@@ -17,6 +17,7 @@ const menuSections = [
     items: [
       { href: '/', label: 'ダッシュボード', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
       { href: '/friends', label: '友だち管理', icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z' },
+      { href: '/friend-events', label: '友だち追加・ブロック', icon: 'M12 8v4l3 2m6-2a9 9 0 11-3.219-6.899M21 3v6h-6' },
       { href: '/chats', label: '個別チャット', icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z' },
     ],
   },
@@ -193,6 +194,7 @@ function NavIcon({ d }: { d: string }) {
 
 export default function Sidebar() {
   const pathname = usePathname()
+  const { selectedAccountId } = useAccount()
   const [isOpen, setIsOpen] = useState(false)
   const [staffName, setStaffName] = useState<string | null>(null)
   const [staffRole, setStaffRole] = useState<string | null>(null)
@@ -202,26 +204,39 @@ export default function Sidebar() {
     setStaffRole(localStorage.getItem('lh_staff_role'))
   }, [])
 
-  // 未対応件数 polling — メニュー項目にバッジを出す。5 分間隔。
   const [unansweredCount, setUnansweredCount] = useState<number>(0)
+  const [chatUnreadCount, setChatUnreadCount] = useState<number>(0)
+  const [friendEventUnreadCount, setFriendEventUnreadCount] = useState<number>(0)
   useEffect(() => {
     let cancelled = false
-    const fetchCount = async () => {
+    const fetchCounts = async () => {
       try {
         const { api } = await import('@/lib/api')
-        const res = await api.inbox.unanswered.count()
-        if (!cancelled && res.success) setUnansweredCount(res.data.total)
+        const [unanswered, chats, friendEvents] = await Promise.all([
+          api.inbox.unanswered.count(),
+          api.chats.unreadCount({ accountId: selectedAccountId || undefined }),
+          api.friendEvents.unreadCount(selectedAccountId || undefined),
+        ])
+        if (cancelled) return
+        if (unanswered.success) setUnansweredCount(unanswered.data.total)
+        if (chats.success) setChatUnreadCount(chats.data.count)
+        if (friendEvents.success) setFriendEventUnreadCount(friendEvents.data.count)
       } catch {
-        // サイレント失敗
+        // Navigation remains usable when a background count request fails.
       }
     }
-    fetchCount()
-    const id = setInterval(fetchCount, 5 * 60_000)
+    const handleRefresh = () => { void fetchCounts() }
+    void fetchCounts()
+    const id = window.setInterval(fetchCounts, 30_000)
+    window.addEventListener('lh:notification-counts-changed', handleRefresh)
+    document.addEventListener('visibilitychange', handleRefresh)
     return () => {
       cancelled = true
-      clearInterval(id)
+      window.clearInterval(id)
+      window.removeEventListener('lh:notification-counts-changed', handleRefresh)
+      document.removeEventListener('visibilitychange', handleRefresh)
     }
-  }, [])
+  }, [selectedAccountId])
 
   useEffect(() => { setIsOpen(false) }, [pathname])
   useEffect(() => {
@@ -265,6 +280,11 @@ export default function Sidebar() {
             }).map((item) => {
               const active = isActive(item.href)
               const isDanger = 'danger' in item && item.danger
+              const badgeCount = item.href === '/chats'
+                ? chatUnreadCount
+                : item.href === '/friend-events'
+                  ? friendEventUnreadCount
+                  : item.href === '/notifications' ? unansweredCount : 0
               return (
                 <Link
                   key={item.href}
@@ -280,13 +300,13 @@ export default function Sidebar() {
                 >
                   <NavIcon d={item.icon} />
                   <span className="flex-1">{item.label}</span>
-                  {item.href === '/notifications' && unansweredCount > 0 && (
+                  {badgeCount > 0 && (
                     <span
                       className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
                         active ? 'bg-white text-rose-600' : 'bg-rose-500 text-white'
                       }`}
                     >
-                      {unansweredCount > 99 ? '99+' : unansweredCount}
+                      {badgeCount > 99 ? '99+' : badgeCount}
                     </span>
                   )}
                 </Link>

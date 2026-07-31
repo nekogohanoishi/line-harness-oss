@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+  buildAdminBookingUrl,
   notifyAdminsOfBooking,
   renderAdminBookingNotificationText,
 } from './admin-booking-notifier.js';
@@ -12,6 +13,31 @@ const baseParams = {
   status: 'requested' as const,
   adminUrl: 'https://admin.example.com/events/bookings',
 };
+
+describe('buildAdminBookingUrl', () => {
+  test('対象イベントID付きの予約確認URLを生成する', () => {
+    expect(buildAdminBookingUrl('https://admin.example.com', 'event-1')).toBe(
+      'https://admin.example.com/events/bookings?id=event-1',
+    );
+  });
+
+  test('末尾スラッシュとURLエンコードを処理する', () => {
+    expect(buildAdminBookingUrl('https://admin.example.com/', 'event / 2')).toBe(
+      'https://admin.example.com/events/bookings?id=event%20%2F%202',
+    );
+  });
+
+  test('管理画面URLが未設定ならリンクを生成しない', () => {
+    expect(buildAdminBookingUrl(undefined, 'event-1')).toBeUndefined();
+    expect(buildAdminBookingUrl(null, 'event-1')).toBeUndefined();
+  });
+
+  test('Worker 同一オリジン配信の base path (/admin) を保持する', () => {
+    expect(
+      buildAdminBookingUrl('https://line-harness.example.workers.dev/admin', 'event-1'),
+    ).toBe('https://line-harness.example.workers.dev/admin/events/bookings?id=event-1');
+  });
+});
 
 describe('renderAdminBookingNotificationText', () => {
   test('requested は要承認の文言と管理画面URLを含む', () => {

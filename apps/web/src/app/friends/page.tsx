@@ -32,6 +32,7 @@ const PAGE_SIZE = 20
 
 type SortMode = 'recent' | 'oldest'
 type ResponseFilter = 'all' | 'unhandled'
+type FollowStatusFilter = 'all' | 'following' | 'blocked'
 
 export default function FriendsPage() {
   const { selectedAccountId } = useAccount()
@@ -45,6 +46,7 @@ export default function FriendsPage() {
   const [searchSubmitted, setSearchSubmitted] = useState('')
   const [sortMode, setSortMode] = useState<SortMode>('recent')
   const [responseFilter, setResponseFilter] = useState<ResponseFilter>('all')
+  const [followStatusFilter, setFollowStatusFilter] = useState<FollowStatusFilter>('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -70,6 +72,7 @@ export default function FriendsPage() {
         includeChatStatus: true,
         sort: sortMode,
         handled: responseFilter === 'unhandled' ? 'unhandled' : undefined,
+        followStatus: followStatusFilter === 'all' ? undefined : followStatusFilter,
       })
       if (res.success) {
         setFriends(res.data.items)
@@ -83,7 +86,7 @@ export default function FriendsPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, selectedTagId, selectedAccountId, searchSubmitted, sortMode, responseFilter])
+  }, [page, selectedTagId, selectedAccountId, searchSubmitted, sortMode, responseFilter, followStatusFilter])
 
   useEffect(() => {
     loadTags()
@@ -127,6 +130,7 @@ export default function FriendsPage() {
   const handleSortChange = (v: SortMode) => updateAndResetPage(() => setSortMode(v))
   const handleResponseFilterChange = (v: ResponseFilter) => updateAndResetPage(() => setResponseFilter(v))
   const handleTagFilterChange = (v: string) => updateAndResetPage(() => setSelectedTagId(v))
+  const handleFollowStatusChange = (v: FollowStatusFilter) => updateAndResetPage(() => setFollowStatusFilter(v))
 
   return (
     <div>
@@ -186,6 +190,18 @@ export default function FriendsPage() {
             >
               <option value="all">すべて</option>
               <option value="unhandled">未対応のみ</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-gray-600 font-medium whitespace-nowrap">LINE状態:</label>
+            <select
+              className="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              value={followStatusFilter}
+              onChange={(e) => handleFollowStatusChange(e.target.value as FollowStatusFilter)}
+            >
+              <option value="all">すべて</option>
+              <option value="following">フォロー中</option>
+              <option value="blocked">ブロック中</option>
             </select>
           </div>
           <span className="text-xs text-gray-500 ml-auto">
