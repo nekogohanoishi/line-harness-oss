@@ -118,7 +118,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
     <div
       className={
         embedded
-          ? 'flex min-h-0 w-full flex-1 flex-col'
+          ? 'w-full'
           : 'w-full lg:w-80 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col overflow-hidden'
       }
     >
@@ -128,7 +128,8 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto">
+      {/* embedded 時のスクロールは親 (Sheet) が持つので、ここでは作らない。 */}
+      <div className={embedded ? '' : 'flex-1 overflow-y-auto'}>
         {loading ? (
           <div className="p-4 space-y-3 animate-pulse">
             <div className="flex items-center gap-3">

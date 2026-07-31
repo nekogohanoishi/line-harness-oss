@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { fetchApi } from '@/lib/api'
 import { countryFlag } from '@/lib/country-flag'
 import Header from '@/components/layout/header'
+import { Sheet } from '@/components/ui'
 
 interface UsedByAccount {
   id: string
@@ -376,67 +377,53 @@ export default function FormSubmissionsPage() {
         </section>
       )}
 
-      {/* Detail panel — 狭幅ではボトムシート、sm 以上は従来どおり右からのドロワー */}
+      {/* Detail panel — 共通の Sheet（モバイルはボトムシート、sm 以上は中央モーダル） */}
       {detailSubmission && (
-        <div className="fixed inset-0 z-40 flex items-end justify-center sm:items-stretch sm:justify-end">
-          <div
-            className="absolute inset-0 bg-black/30"
-            onClick={() => setDetailSubmission(null)}
-            aria-hidden
-          />
-          <aside className="relative max-h-[85dvh] w-full overflow-y-auto rounded-t-2xl bg-white shadow-xl sm:h-full sm:max-h-none sm:max-w-md sm:rounded-none">
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-5 py-3 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-gray-900">回答詳細</h3>
-              <button
-                onClick={() => setDetailSubmission(null)}
-                className="-mr-2 flex h-11 w-11 items-center justify-center text-gray-400 hover:text-gray-600 text-xl leading-none"
-                aria-label="閉じる"
-              >
-                ×
-              </button>
+        <Sheet
+          open
+          onClose={() => setDetailSubmission(null)}
+          title="回答詳細"
+        >
+          <div className="space-y-5">
+            <div>
+              <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-1">回答者</div>
+              {detailSubmission.friendId ? (
+                <Link
+                  href={`/chats?friend=${encodeURIComponent(detailSubmission.friendId)}`}
+                  className="inline-flex min-h-11 items-center gap-2 text-sm text-[#06C755] hover:underline sm:min-h-0"
+                >
+                  <span className="font-medium">{detailSubmission.friendName || '不明'}</span>
+                  <span className="text-[11px] text-gray-400">→ チャットを開く</span>
+                </Link>
+              ) : (
+                <span className="text-sm text-gray-700">{detailSubmission.friendName || '不明'}</span>
+              )}
             </div>
 
-            <div className="p-5 space-y-5">
-              <div>
-                <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-1">回答者</div>
-                {detailSubmission.friendId ? (
-                  <Link
-                    href={`/chats?friend=${encodeURIComponent(detailSubmission.friendId)}`}
-                    className="inline-flex items-center gap-2 text-sm text-[#06C755] hover:underline"
-                  >
-                    <span className="font-medium">{detailSubmission.friendName || '不明'}</span>
-                    <span className="text-[11px] text-gray-400">→ チャットを開く</span>
-                  </Link>
+            <div>
+              <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-1">送信日時</div>
+              <div className="text-sm text-gray-700">{formatDateTime(detailSubmission.createdAt)}</div>
+            </div>
+
+            <div>
+              <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-2">回答内容</div>
+              <dl className="space-y-3">
+                {fieldKeys.length === 0 ? (
+                  <div className="text-sm text-gray-400">項目なし</div>
                 ) : (
-                  <span className="text-sm text-gray-700">{detailSubmission.friendName || '不明'}</span>
+                  fieldKeys.map((key) => (
+                    <div key={key} className="grid grid-cols-1 gap-1">
+                      <dt className="text-[11px] text-gray-500">{fieldLabels[key] || key}</dt>
+                      <dd className="text-sm text-gray-900 break-words whitespace-pre-wrap">
+                        {formatValue(detailSubmission.data[key])}
+                      </dd>
+                    </div>
+                  ))
                 )}
-              </div>
-
-              <div>
-                <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-1">送信日時</div>
-                <div className="text-sm text-gray-700">{formatDateTime(detailSubmission.createdAt)}</div>
-              </div>
-
-              <div>
-                <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-2">回答内容</div>
-                <dl className="space-y-3">
-                  {fieldKeys.length === 0 ? (
-                    <div className="text-sm text-gray-400">項目なし</div>
-                  ) : (
-                    fieldKeys.map((key) => (
-                      <div key={key} className="grid grid-cols-1 gap-1">
-                        <dt className="text-[11px] text-gray-500">{fieldLabels[key] || key}</dt>
-                        <dd className="text-sm text-gray-900 break-words whitespace-pre-wrap">
-                          {formatValue(detailSubmission.data[key])}
-                        </dd>
-                      </div>
-                    ))
-                  )}
-                </dl>
-              </div>
+              </dl>
             </div>
-          </aside>
-        </div>
+          </div>
+        </Sheet>
       )}
     </div>
   )
