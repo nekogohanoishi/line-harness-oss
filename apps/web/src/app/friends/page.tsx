@@ -30,6 +30,17 @@ const ccPrompts = [
 
 const PAGE_SIZE = 20
 
+// 絞り込み項目1つ分のラッパー。モバイルはラベルを上に置いた縦積み、
+// sm 以上は従来どおりラベルとコントロールを横並びにする。
+function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+      <span className="text-xs font-medium text-gray-600 whitespace-nowrap">{label}:</span>
+      {children}
+    </label>
+  )
+}
+
 type SortMode = 'recent' | 'oldest'
 type ResponseFilter = 'all' | 'unhandled'
 type FollowStatusFilter = 'all' | 'following' | 'blocked'
@@ -49,6 +60,16 @@ export default function FriendsPage() {
   const [followStatusFilter, setFollowStatusFilter] = useState<FollowStatusFilter>('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // モバイルの絞り込みパネル開閉。sm 以上では常時表示のため参照されない。
+  const [filtersOpen, setFiltersOpen] = useState(false)
+
+  // 既定値から変更されている絞り込み条件の数。トグルのバッジと
+  // 「絞り込みを解除」の表示可否に使う。
+  const activeFilterCount =
+    (selectedTagId ? 1 : 0) +
+    (responseFilter !== 'all' ? 1 : 0) +
+    (followStatusFilter !== 'all' ? 1 : 0) +
+    (sortMode !== 'recent' ? 1 : 0)
 
   const loadTags = useCallback(async () => {
     try {
@@ -131,6 +152,12 @@ export default function FriendsPage() {
   const handleResponseFilterChange = (v: ResponseFilter) => updateAndResetPage(() => setResponseFilter(v))
   const handleTagFilterChange = (v: string) => updateAndResetPage(() => setSelectedTagId(v))
   const handleFollowStatusChange = (v: FollowStatusFilter) => updateAndResetPage(() => setFollowStatusFilter(v))
+  const clearFilters = () => updateAndResetPage(() => {
+    setSelectedTagId('')
+    setResponseFilter('all')
+    setFollowStatusFilter('all')
+    setSortMode('recent')
+  })
 
   return (
     <div>
@@ -141,37 +168,66 @@ export default function FriendsPage() {
 
       {/* Search + sort bar — L-step style */}
       <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4">
-        <form onSubmit={handleSearchSubmit} className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <form onSubmit={handleSearchSubmit} className="flex items-center gap-2 sm:gap-3">
           <input
             type="text"
             value={searchInput}
             onChange={(e) => handleSearchInputChange(e.target.value)}
             placeholder="友だち名を検索"
-            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+            className="h-11 min-w-0 flex-1 border border-gray-300 rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 sm:h-10"
           />
-          <select
-            value={sortMode}
-            onChange={(e) => handleSortChange(e.target.value as SortMode)}
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
-          >
-            <option value="recent">友だち追加の新しい順</option>
-            <option value="oldest">友だち追加の古い順</option>
-          </select>
           <button
             type="submit"
-            className="px-4 py-2 rounded-lg text-white text-sm font-medium"
+            className="h-11 flex-shrink-0 rounded-lg px-4 text-white text-sm font-medium sm:h-10"
             style={{ backgroundColor: '#06C755' }}
           >
             検索
           </button>
         </form>
 
-        {/* Secondary filters — タグ + 対応マーク */}
-        <div className="flex flex-wrap items-center gap-3 mt-3 pt-3 border-t border-gray-100">
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-gray-600 font-medium whitespace-nowrap">タグ:</label>
+        {/* 絞り込みトグル — モバイルのみ。既定は畳んでおき、一覧を先に見せる。 */}
+        <button
+          type="button"
+          onClick={() => setFiltersOpen((open) => !open)}
+          aria-expanded={filtersOpen}
+          className="mt-3 flex h-11 w-full items-center justify-between rounded-lg border border-gray-200 px-3 text-sm text-gray-700 sm:hidden"
+        >
+          <span className="flex items-center gap-2">
+            絞り込み・並び順
+            {activeFilterCount > 0 && (
+              <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-gray-900 px-1.5 text-[11px] font-medium text-white">
+                {activeFilterCount}
+              </span>
+            )}
+          </span>
+          <svg
+            className={`h-4 w-4 text-gray-400 transition-transform ${filtersOpen ? 'rotate-180' : ''}`}
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        {/* Secondary filters — 並び順 + タグ + 対応マーク + LINE状態
+            モバイルでは縦積み（トグルで開閉）、sm 以上では従来どおり横並び。 */}
+        <div
+          className={`mt-3 gap-3 border-t border-gray-100 pt-3 sm:flex sm:flex-wrap sm:items-center ${
+            filtersOpen ? 'grid grid-cols-1' : 'hidden'
+          }`}
+        >
+          <FilterField label="並び順">
             <select
-              className="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              className="h-11 w-full rounded-lg border border-gray-300 bg-white px-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 sm:h-auto sm:w-auto sm:py-1.5 sm:text-xs"
+              value={sortMode}
+              onChange={(e) => handleSortChange(e.target.value as SortMode)}
+            >
+              <option value="recent">友だち追加の新しい順</option>
+              <option value="oldest">友だち追加の古い順</option>
+            </select>
+          </FilterField>
+          <FilterField label="タグ">
+            <select
+              className="h-11 w-full rounded-lg border border-gray-300 bg-white px-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 sm:h-auto sm:w-auto sm:py-1.5 sm:text-xs"
               value={selectedTagId}
               onChange={(e) => handleTagFilterChange(e.target.value)}
             >
@@ -180,22 +236,20 @@ export default function FriendsPage() {
                 <option key={tag.id} value={tag.id}>{tag.name}</option>
               ))}
             </select>
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-gray-600 font-medium whitespace-nowrap">対応マーク:</label>
+          </FilterField>
+          <FilterField label="対応マーク">
             <select
-              className="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              className="h-11 w-full rounded-lg border border-gray-300 bg-white px-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 sm:h-auto sm:w-auto sm:py-1.5 sm:text-xs"
               value={responseFilter}
               onChange={(e) => handleResponseFilterChange(e.target.value as ResponseFilter)}
             >
               <option value="all">すべて</option>
               <option value="unhandled">未対応のみ</option>
             </select>
-          </div>
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-gray-600 font-medium whitespace-nowrap">LINE状態:</label>
+          </FilterField>
+          <FilterField label="LINE状態">
             <select
-              className="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+              className="h-11 w-full rounded-lg border border-gray-300 bg-white px-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 sm:h-auto sm:w-auto sm:py-1.5 sm:text-xs"
               value={followStatusFilter}
               onChange={(e) => handleFollowStatusChange(e.target.value as FollowStatusFilter)}
             >
@@ -203,11 +257,24 @@ export default function FriendsPage() {
               <option value="following">フォロー中</option>
               <option value="blocked">ブロック中</option>
             </select>
-          </div>
-          <span className="text-xs text-gray-500 ml-auto">
+          </FilterField>
+          {activeFilterCount > 0 && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="h-11 rounded-lg border border-gray-200 px-3 text-sm text-gray-600 hover:bg-gray-50 sm:h-auto sm:border-0 sm:px-0 sm:text-xs sm:underline"
+            >
+              絞り込みを解除
+            </button>
+          )}
+          <span className="hidden text-xs text-gray-500 sm:ml-auto sm:inline">
             {loading ? '読み込み中...' : `${total.toLocaleString('ja-JP')} 件`}
           </span>
         </div>
+
+        <p className="mt-3 text-xs text-gray-500 sm:hidden">
+          {loading ? '読み込み中...' : `${total.toLocaleString('ja-JP')} 件`}
+        </p>
       </div>
 
       {error && (
@@ -219,7 +286,9 @@ export default function FriendsPage() {
       {loading ? (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           {[...Array(5)].map((_, i) => (
-            <div key={i} className="px-4 py-4 border-b border-gray-100 grid grid-cols-[80px_220px_120px_1fr_280px] gap-3 animate-pulse">
+            // スケルトンも本体と同じブレークポイントで切り替える。5カラムの
+            // グリッドを常時適用すると、読み込み中だけモバイルで横にはみ出す。
+            <div key={i} className="px-4 py-4 border-b border-gray-100 flex flex-col gap-3 animate-pulse lg:grid lg:grid-cols-[80px_220px_120px_1fr_280px]">
               <div className="h-5 bg-gray-100 rounded w-16" />
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-full bg-gray-200" />
@@ -243,19 +312,20 @@ export default function FriendsPage() {
           <p className="text-sm text-gray-500">
             {((page - 1) * PAGE_SIZE) + 1}〜{Math.min(page * PAGE_SIZE, total)} 件 / 全{total.toLocaleString('ja-JP')}件
           </p>
+          {/* モバイルでは前へ/次へを均等に伸ばして親指で押せる幅を確保する。 */}
           <div className="flex items-center gap-2">
             <button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}
-              className="px-3 py-2 min-h-[44px] text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="flex-1 sm:flex-none px-4 min-h-[44px] text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               前へ
             </button>
-            <span className="text-sm text-gray-600 px-1">{page} ページ</span>
+            <span className="text-sm text-gray-600 px-1 whitespace-nowrap">{page} ページ</span>
             <button
               onClick={() => setPage((p) => p + 1)}
               disabled={!hasNextPage}
-              className="px-3 py-2 min-h-[44px] text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="flex-1 sm:flex-none px-4 min-h-[44px] text-sm border border-gray-300 rounded-lg bg-white hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               次へ
             </button>

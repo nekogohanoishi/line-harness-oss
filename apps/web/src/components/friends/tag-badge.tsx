@@ -23,7 +23,9 @@ export default function TagBadge({ tag, onRemove }: TagBadgeProps) {
       {onRemove && (
         <button
           onClick={onRemove}
-          className="ml-0.5 hover:opacity-70 transition-opacity"
+          // 12px のアイコンだけではタップ領域が狭すぎるので、見た目を変えずに
+          // padding で当たり判定を広げる（負のマージンで占有幅を相殺）。
+          className="-my-1 -mr-1 ml-0.5 p-1 hover:opacity-70 transition-opacity"
           aria-label={`タグ「${tag.name}」を削除`}
         >
           <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">

@@ -80,9 +80,13 @@ export default function FriendListTable({ friends, allTags, onRefresh }: Props) 
       {/* Header sits inside the same overflow container as the body so the
           column labels stay aligned with their values when the user scrolls
           horizontally on narrower viewports (e.g. desktop with sidebar open
-          and the body forced to min-w-[900px]). */}
-      <div className="overflow-x-auto">
-        <div className="min-w-[900px]">
+          and the body forced to min-w-[900px]).
+
+          横スクロールと最小幅は lg 以上でのみ適用する。lg 未満では
+          FriendListRow がカード表示に切り替わるため、min-w を残すと
+          375px 幅の端末で画面外へはみ出してしまう。 */}
+      <div className="lg:overflow-x-auto">
+        <div className="lg:min-w-[900px]">
           <div className="hidden lg:grid grid-cols-[80px_220px_120px_1fr_280px] gap-3 px-4 py-2 bg-gray-50 border-b border-gray-200 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
             <div>対応マーク</div>
             <div>名前</div>
@@ -105,7 +109,7 @@ export default function FriendListTable({ friends, allTags, onRefresh }: Props) 
                 />
 
                 {isExpanded && (
-                  <div className="bg-gray-50 px-6 py-4 border-b border-gray-100 space-y-3">
+                  <div className="bg-gray-50 px-4 py-4 lg:px-6 border-b border-gray-100 space-y-3">
                     <div>
                       <p className="text-xs font-semibold text-gray-500 mb-1">LINE ユーザーID</p>
                       <p className="text-xs text-gray-600 font-mono break-all select-all">{friend.lineUserId}</p>
@@ -122,9 +126,9 @@ export default function FriendListTable({ friends, allTags, onRefresh }: Props) 
                     </div>
 
                     {isAddingTag ? (
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                         <select
-                          className="text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-green-500"
+                          className="h-11 w-full sm:h-9 sm:w-auto text-sm border border-gray-300 rounded-md px-2 bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
                           value={selectedTagId}
                           onChange={(e) => setSelectedTagId(e.target.value)}
                         >
@@ -133,26 +137,28 @@ export default function FriendListTable({ friends, allTags, onRefresh }: Props) 
                             <option key={tag.id} value={tag.id}>{tag.name}</option>
                           ))}
                         </select>
-                        <button
-                          onClick={() => handleAddTag(friend.id)}
-                          disabled={!selectedTagId || loading}
-                          className="px-3 py-1 text-xs font-medium rounded-md text-white disabled:opacity-50 transition-opacity"
-                          style={{ backgroundColor: '#06C755' }}
-                        >
-                          追加
-                        </button>
-                        <button
-                          onClick={() => { setAddingTagForFriend(null); setSelectedTagId('') }}
-                          className="px-3 py-1 text-xs font-medium rounded-md text-gray-600 bg-gray-200 hover:bg-gray-300 transition-colors"
-                        >
-                          キャンセル
-                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleAddTag(friend.id)}
+                            disabled={!selectedTagId || loading}
+                            className="h-11 sm:h-9 flex-1 sm:flex-none px-4 text-sm font-medium rounded-md text-white disabled:opacity-50 transition-opacity"
+                            style={{ backgroundColor: '#06C755' }}
+                          >
+                            追加
+                          </button>
+                          <button
+                            onClick={() => { setAddingTagForFriend(null); setSelectedTagId('') }}
+                            className="h-11 sm:h-9 flex-1 sm:flex-none px-4 text-sm font-medium rounded-md text-gray-600 bg-gray-200 hover:bg-gray-300 transition-colors"
+                          >
+                            キャンセル
+                          </button>
+                        </div>
                       </div>
                     ) : (
                       availableTags.length > 0 && (
                         <button
                           onClick={() => setAddingTagForFriend(friend.id)}
-                          className="text-xs font-medium text-green-600 hover:text-green-700 flex items-center gap-1 transition-colors"
+                          className="-ml-1 inline-flex min-h-11 items-center gap-1 px-1 text-sm font-medium text-green-600 hover:text-green-700 transition-colors lg:min-h-0 lg:text-xs"
                         >
                           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />

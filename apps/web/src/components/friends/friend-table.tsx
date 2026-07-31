@@ -78,20 +78,22 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
           {error}
         </div>
       )}
-      <div className="overflow-x-auto">
-      <table className="w-full min-w-[640px]">
+      {/* 最小幅と横スクロールは sm 以上でのみ効かせる。375px 幅では
+          ステータス／登録日の列を畳み、名前セルの中に寄せて表示する。 */}
+      <div className="sm:overflow-x-auto">
+      <table className="w-full sm:min-w-[640px]">
         <thead>
           <tr className="bg-gray-50 border-b border-gray-200">
             <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
               アイコン / 表示名
             </th>
-            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+            <th className="hidden sm:table-cell px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
               ステータス
             </th>
             <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
               タグ / 流入
             </th>
-            <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+            <th className="hidden sm:table-cell px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
               登録日
             </th>
             <th className="px-4 py-3" />
@@ -126,17 +128,24 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                           {friend.displayName?.charAt(0) ?? '?'}
                         </div>
                       )}
-                      <div>
+                      <div className="min-w-0">
                         <p className="text-sm font-medium text-gray-900">{friend.displayName}</p>
                         {friend.statusMessage && (
                           <p className="text-xs text-gray-400 truncate max-w-[160px]">{friend.statusMessage}</p>
                         )}
+                        {/* モバイルで畳んだ列の代替表示 */}
+                        <p className="sm:hidden mt-1 flex items-center gap-2 text-[11px]">
+                          <span className={friend.isFollowing ? 'text-green-700' : 'text-gray-500'}>
+                            {friend.isFollowing ? 'フォロー中' : 'ブロック/退会'}
+                          </span>
+                          <span className="text-gray-400">{formatDate(friend.createdAt)}</span>
+                        </p>
                       </div>
                     </div>
                   </td>
 
                   {/* Following status */}
-                  <td className="px-4 py-3">
+                  <td className="hidden sm:table-cell px-4 py-3">
                     {friend.isFollowing ? (
                       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
                         フォロー中
@@ -165,7 +174,7 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                   </td>
 
                   {/* Registered date */}
-                  <td className="px-4 py-3 text-sm text-gray-500">
+                  <td className="hidden sm:table-cell px-4 py-3 text-sm text-gray-500">
                     {formatDate(friend.createdAt)}
                   </td>
 
