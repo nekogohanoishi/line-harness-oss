@@ -8,6 +8,7 @@ import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 import FlexPreviewComponent from '@/components/flex-preview'
 import FriendInfoSidebar from '@/components/chats/friend-info-sidebar'
+import FriendInfoSheet from '@/components/chats/friend-info-sheet'
 import MessageVariableButton from '@/components/message-variable-button'
 
 interface Chat {
@@ -277,7 +278,7 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 py-4 border-b border-gray-200 flex items-center gap-3">
-        <button onClick={onBack} className="lg:hidden text-gray-400 hover:text-gray-600">
+        <button onClick={onBack} aria-label="戻る" className="lg:hidden -ml-2 flex h-11 w-9 flex-shrink-0 items-center justify-center text-gray-400 hover:text-gray-600">
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
@@ -302,7 +303,7 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
         ) : (
           messages.map((msg) => (
             <div key={msg.id} className={`flex ${msg.direction === 'outgoing' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[75%] rounded-2xl px-4 py-2 ${
+              <div className={`max-w-[78%] min-w-0 rounded-2xl px-4 py-2 sm:max-w-[75%] ${
                 msg.direction === 'outgoing'
                   ? 'bg-green-500 text-white'
                   : 'bg-gray-100 text-gray-900'
@@ -316,7 +317,7 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
           ))
         )}
       </div>
-      <div className="px-4 py-3 border-t border-gray-200">
+      <div className="flex-shrink-0 border-t border-gray-200 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
         <div className="mb-2 flex justify-end">
           <MessageVariableButton
             targetRef={messageInputRef}
@@ -343,12 +344,12 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
               }
             }}
             placeholder="メッセージを入力..."
-            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+            className="h-11 min-w-0 flex-1 border border-gray-300 rounded-lg px-3 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
           />
           <button
             onClick={handleSend}
             disabled={!message.trim() || sending}
-            className="px-4 py-2 rounded-lg text-white text-sm font-medium disabled:opacity-50"
+            className="h-11 min-w-[4.5rem] flex-shrink-0 rounded-lg px-4 text-white text-sm font-medium disabled:opacity-50"
             style={{ backgroundColor: '#06C755' }}
           >
             {sending ? '...' : '送信'}
@@ -400,6 +401,14 @@ export default function ChatsPage() {
   const [loadingSeconds, setLoadingSeconds] = useState(5)
   const lastLoadingTriggerAtRef = useRef<Record<string, number>>({})
   const [isMessageInputFocused, setIsMessageInputFocused] = useState(false)
+  // 狭幅 (xl 未満) 用の表示状態。xl 以上では常時展開なので参照されない。
+  const [showFriendSheet, setShowFriendSheet] = useState(false)
+  const [showChatSettings, setShowChatSettings] = useState(false)
+  const [showSendOptions, setShowSendOptions] = useState(false)
+  // 「ここから未読」の区切りを出す対象のチャットID。
+  // チャットを開いた直後に markChatRead が走って hasUnreadMessage が false に
+  // なるため、一覧の値を選択時にスナップショットしておく。
+  const [unreadAnchorChatId, setUnreadAnchorChatId] = useState<string | null>(null)
   const isComposingRef = useRef(false)
   const messagesScrollRef = useRef<HTMLDivElement | null>(null)
   const messageContentRef = useRef<HTMLTextAreaElement | null>(null)
@@ -670,9 +679,30 @@ export default function ChatsPage() {
   }, [chatDetail?.id, chatDetail?.messages?.length])
 
   const handleSelectChat = (chatId: string) => {
+    // 未読の目印は「開く直前の一覧の状態」で決める。既読化 API はこの直後に
+    // 走るので、chatDetail 側の値を見ると常に false になってしまう。
+    const target = chats.find((chat) => chat.id === chatId)
+    setUnreadAnchorChatId(target?.hasUnreadMessage ? chatId : null)
     setSelectedChatId(chatId)
     setMessageContent('')
+    setShowChatSettings(false)
+    setShowSendOptions(false)
   }
+
+  /**
+   * 「ここから未読」を挿入する位置。未読とは「末尾に連続する受信メッセージが
+   * まだ読まれていない」状態なので、末尾から受信が続く区間の先頭を返す。
+   * 対象外なら -1（どのインデックスとも一致しない）。
+   */
+  const unreadStartIndex = (() => {
+    if (!chatDetail || chatDetail.id !== unreadAnchorChatId) return -1
+    const messages = chatDetail.messages ?? []
+    if (messages.length === 0) return -1
+    let index = messages.length
+    while (index > 0 && messages[index - 1].direction === 'incoming') index -= 1
+    // 全件が受信メッセージなら区切り線を出す意味がないので出さない。
+    return index === 0 || index === messages.length ? -1 : index
+  })()
 
   const triggerLoadingAnimation = useCallback(async (chatId: string) => {
     if (!showLoadingIndicator) return
@@ -917,7 +947,12 @@ export default function ChatsPage() {
         </div>
       )}
 
-      <div className="flex gap-4 h-[calc(100vh-120px)] lg:h-[calc(100vh-180px)]">
+      {/*
+        高さは dvh 基準。100vh は iOS Safari だとアドレスバーの高さを含んだまま
+        固定されるため、下端（＝入力欄）が画面外へ隠れてしまう。dvh なら
+        アドレスバーの伸縮に追従する。極端に低い画面でも潰れないよう下限を置く。
+      */}
+      <div className="flex gap-4 h-[calc(100dvh-120px)] min-h-[26rem] lg:h-[calc(100dvh-180px)]">
         {/* Left Panel: Chat List */}
         <div className={`w-full lg:w-[26rem] lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex-col overflow-hidden ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
           <div className="border-b border-gray-200 bg-white">
@@ -929,7 +964,7 @@ export default function ChatsPage() {
                     key={filter.key}
                     type="button"
                     onClick={() => setInboxFilter(filter.key)}
-                    className={`flex h-8 flex-shrink-0 items-center gap-1 rounded-md px-2 text-xs font-medium transition-colors ${
+                    className={`flex h-10 flex-shrink-0 items-center gap-1 rounded-md px-3 text-xs font-medium transition-colors lg:h-8 lg:px-2 ${
                       active
                         ? 'bg-gray-900 text-white'
                         : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
@@ -950,7 +985,7 @@ export default function ChatsPage() {
                 <select
                   value={operatorFilter}
                   onChange={(event) => setOperatorFilter(event.target.value)}
-                  className="h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                  className="h-11 w-full rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 lg:h-9"
                 >
                   <option value="">担当者：全て</option>
                   <option value="unassigned">未割当</option>
@@ -964,7 +999,7 @@ export default function ChatsPage() {
                 <select
                   value={tagFilter}
                   onChange={(event) => setTagFilter(event.target.value)}
-                  className="h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                  className="h-11 w-full rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 lg:h-9"
                 >
                   <option value="">タグ：全て</option>
                   {tags.map((tag) => (
@@ -977,7 +1012,7 @@ export default function ChatsPage() {
                 <select
                   value={priorityFilter}
                   onChange={(event) => setPriorityFilter(event.target.value as '' | Chat['priority'])}
-                  className="h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                  className="h-11 w-full rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 lg:h-9"
                 >
                   <option value="">優先度：全て</option>
                   <option value="urgent">緊急</option>
@@ -988,8 +1023,10 @@ export default function ChatsPage() {
               </label>
             </div>
 
-            <div className="flex min-h-10 items-center justify-between border-t border-gray-100 px-3 py-2">
-              <label className="inline-flex cursor-pointer items-center gap-2 text-xs text-gray-600">
+            {/* 狭幅では4項目が1行に収まらないので折り返しを許可し、
+                各操作のタップ高さも確保する。 */}
+            <div className="flex min-h-10 flex-wrap items-center justify-between gap-x-3 border-t border-gray-100 px-3 py-1">
+              <label className="inline-flex min-h-9 cursor-pointer items-center gap-2 text-xs text-gray-600">
                 <input
                   type="checkbox"
                   checked={allVisibleSelected}
@@ -1003,7 +1040,7 @@ export default function ChatsPage() {
                 <button
                   type="button"
                   onClick={() => setShowOperatorMetrics((current) => !current)}
-                  className="text-xs font-medium text-gray-500 hover:text-gray-800"
+                  className="min-h-9 text-xs font-medium text-gray-500 hover:text-gray-800"
                   aria-expanded={showOperatorMetrics}
                 >
                   担当者状況
@@ -1011,7 +1048,7 @@ export default function ChatsPage() {
                 <button
                   type="button"
                   onClick={() => setShowOperatorForm((current) => !current)}
-                  className="text-xs font-medium text-gray-500 hover:text-gray-800"
+                  className="min-h-9 text-xs font-medium text-gray-500 hover:text-gray-800"
                 >
                   担当者追加
                 </button>
@@ -1019,7 +1056,7 @@ export default function ChatsPage() {
                   <button
                     type="button"
                     onClick={clearFilters}
-                    className="text-xs font-medium text-gray-500 hover:text-gray-800"
+                    className="min-h-9 text-xs font-medium text-gray-500 hover:text-gray-800"
                   >
                     絞り込み解除
                   </button>
@@ -1029,7 +1066,31 @@ export default function ChatsPage() {
 
             {showOperatorMetrics && (
               <div className="max-h-52 overflow-auto border-t border-gray-200">
-                <table className="w-full table-fixed text-left text-[11px]">
+                {/* モバイル: 5列の表は 375px では読めないので1人1ブロックに展開する */}
+                <ul className="divide-y divide-gray-100 lg:hidden">
+                  {operatorMetrics.map((metric) => (
+                    <li key={metric.operatorId ?? 'unassigned'} className="px-3 py-2.5">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="truncate text-sm font-medium text-gray-800">{metric.operatorName}</span>
+                        <span className="flex-shrink-0 text-xs tabular-nums text-gray-500">
+                          初回応答 {formatResponseDuration(metric.averageFirstResponseSeconds)}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
+                        <span className="tabular-nums">対応中 {metric.active}</span>
+                        <span className={`tabular-nums ${metric.overdue > 0 ? 'font-semibold text-red-700' : ''}`}>
+                          超過 {metric.overdue}
+                        </span>
+                        <span className="tabular-nums">30日解決 {metric.resolved}</span>
+                      </div>
+                    </li>
+                  ))}
+                  {operatorMetrics.length === 0 && (
+                    <li className="px-3 py-4 text-center text-xs text-gray-400">担当者の実績はまだありません</li>
+                  )}
+                </ul>
+
+                <table className="hidden w-full table-fixed text-left text-[11px] lg:table">
                   <thead className="sticky top-0 bg-gray-50 text-gray-500">
                     <tr>
                       <th className="w-[32%] px-3 py-2 font-medium">担当者</th>
@@ -1114,19 +1175,21 @@ export default function ChatsPage() {
                     選択解除
                   </button>
                 </div>
+                {/* 一括操作 — 狭幅では「確認済みにする」を全幅、担当者選択と
+                    変更ボタンを1行にして、どのボタンも押しやすい幅を保つ。 */}
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={handleBulkRead}
                     disabled={bulkAction !== null}
-                    className="h-9 rounded-md border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+                    className="h-11 w-full rounded-md border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:opacity-50 sm:h-9 sm:w-auto"
                   >
                     {bulkAction === 'read' ? '確認中...' : '確認済みにする'}
                   </button>
                   <select
                     value={bulkOperatorId}
                     onChange={(event) => setBulkOperatorId(event.target.value)}
-                    className="h-9 min-w-32 flex-1 rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                    className="h-11 min-w-32 flex-1 rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 sm:h-9"
                   >
                     <option value="">担当者を選択</option>
                     <option value="unassigned">未割当に戻す</option>
@@ -1138,7 +1201,7 @@ export default function ChatsPage() {
                     type="button"
                     onClick={handleBulkAssign}
                     disabled={!bulkOperatorId || bulkAction !== null}
-                    className="h-9 rounded-md bg-gray-900 px-3 text-xs font-medium text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="h-11 flex-shrink-0 rounded-md bg-gray-900 px-3 text-xs font-medium text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-40 sm:h-9"
                   >
                     {bulkAction === 'assign' ? '変更中...' : '担当を変更'}
                   </button>
@@ -1294,36 +1357,63 @@ export default function ChatsPage() {
           ) : chatDetail ? (
             <>
               {/* Chat Header */}
-              <div className="px-4 py-4 border-b border-gray-200 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <button
-                    onClick={() => setSelectedChatId(null)}
-                    className="lg:hidden flex-shrink-0 p-1 -ml-1 text-gray-500 hover:text-gray-700"
-                    aria-label="戻る"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                    </svg>
-                  </button>
-                  {chatDetail.friendPictureUrl && (
-                    <img src={chatDetail.friendPictureUrl} alt="" className="w-8 h-8 rounded-full flex-shrink-0" />
-                  )}
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">
-                      {chatDetail.friendName}
-                    </p>
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium mt-1 ${statusConfig[chatDetail.status].className}`}
+              <div className="flex-shrink-0 border-b border-gray-200 px-4 py-3 lg:py-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <button
+                      onClick={() => setSelectedChatId(null)}
+                      className="lg:hidden flex-shrink-0 -ml-2 flex h-11 w-9 items-center justify-center text-gray-500 hover:text-gray-700"
+                      aria-label="戻る"
                     >
-                      {statusConfig[chatDetail.status].label}
-                    </span>
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                      </svg>
+                    </button>
+                    {chatDetail.friendPictureUrl && (
+                      <img src={chatDetail.friendPictureUrl} alt="" className="w-8 h-8 rounded-full flex-shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">
+                        {chatDetail.friendName}
+                      </p>
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium mt-1 ${statusConfig[chatDetail.status].className}`}
+                      >
+                        {statusConfig[chatDetail.status].label}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-shrink-0 items-center gap-1">
+                    {/* 対応設定（優先度・期限・メモ）は狭幅でのみ畳んで本文の高さを稼ぐ。
+                        lg 以上は従来どおり常時表示するのでトグル自体を出さない。 */}
+                    <button
+                      type="button"
+                      onClick={() => setShowChatSettings((open) => !open)}
+                      aria-expanded={showChatSettings}
+                      className={`flex h-11 items-center rounded-md px-3 text-xs font-medium transition-colors lg:hidden ${
+                        showChatSettings ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      対応設定
+                    </button>
+                    {/* xl 未満はサイドバーが出ないので、友だち詳細はシートで開く */}
+                    <button
+                      type="button"
+                      onClick={() => setShowFriendSheet(true)}
+                      className="flex h-11 items-center rounded-md px-3 text-xs font-medium text-gray-600 hover:bg-gray-100 xl:hidden"
+                    >
+                      友だち情報
+                    </button>
                   </div>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+
+                {/* 対応ステータスの切り替え — 狭幅では横スクロールで1行に収める */}
+                <div className="-mx-1 mt-2 flex items-center gap-2 overflow-x-auto px-1 lg:mt-3 lg:flex-wrap lg:overflow-visible">
                   {chatDetail.status !== 'unread' && (
                     <button
                       onClick={() => handleStatusUpdate('unread')}
-                      className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
+                      className="h-10 flex-shrink-0 px-3 lg:h-auto lg:py-1 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
                     >
                       未対応に戻す
                     </button>
@@ -1331,7 +1421,7 @@ export default function ChatsPage() {
                   {chatDetail.status !== 'in_progress' && (
                     <button
                       onClick={() => handleStatusUpdate('in_progress')}
-                      className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-yellow-700 bg-yellow-50 hover:bg-yellow-100 rounded-md transition-colors"
+                      className="h-10 flex-shrink-0 px-3 lg:h-auto lg:py-1 text-xs font-medium text-yellow-700 bg-yellow-50 hover:bg-yellow-100 rounded-md transition-colors"
                     >
                       対応中にする
                     </button>
@@ -1339,7 +1429,7 @@ export default function ChatsPage() {
                   {chatDetail.status !== 'resolved' && (
                     <button
                       onClick={() => handleStatusUpdate('resolved')}
-                      className="px-3 py-1 min-h-[44px] lg:min-h-0 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded-md transition-colors"
+                      className="h-10 flex-shrink-0 px-3 lg:h-auto lg:py-1 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 rounded-md transition-colors"
                     >
                       解決済にする
                     </button>
@@ -1347,13 +1437,13 @@ export default function ChatsPage() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-end gap-3 border-b border-gray-200 bg-gray-50 px-4 py-2">
+              <div className={`${showChatSettings ? 'flex' : 'hidden'} flex-shrink-0 flex-wrap items-end gap-3 border-b border-gray-200 bg-gray-50 px-4 py-2 lg:flex`}>
                 <label className="min-w-28">
                   <span className="mb-1 block text-[11px] text-gray-500">優先度</span>
                   <select
                     value={priorityValue}
                     onChange={(event) => setPriorityValue(event.target.value as Chat['priority'])}
-                    className="h-9 w-full rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                    className="h-11 w-full rounded-md border border-gray-300 bg-white px-2 text-xs text-gray-700 focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 lg:h-9"
                   >
                     <option value="urgent">緊急</option>
                     <option value="high">高</option>
@@ -1367,7 +1457,7 @@ export default function ChatsPage() {
                     type="datetime-local"
                     value={dueAtValue}
                     onChange={(event) => setDueAtValue(event.target.value)}
-                    className={`h-9 w-full rounded-md border bg-white px-2 text-xs focus:outline-none focus:ring-1 ${
+                    className={`h-11 w-full rounded-md border bg-white px-2 text-xs focus:outline-none focus:ring-1 lg:h-9 ${
                       chatDetail && isOverdue(chatDetail)
                         ? 'border-red-400 text-red-700 focus:border-red-500 focus:ring-red-500'
                         : 'border-gray-300 text-gray-700 focus:border-green-500 focus:ring-green-500'
@@ -1378,7 +1468,7 @@ export default function ChatsPage() {
                   <button
                     type="button"
                     onClick={() => setDueAtValue('')}
-                    className="h-9 px-2 text-xs font-medium text-gray-500 hover:text-gray-800"
+                    className="h-11 px-2 text-xs font-medium text-gray-500 hover:text-gray-800 lg:h-9"
                   >
                     期限をクリア
                   </button>
@@ -1387,7 +1477,7 @@ export default function ChatsPage() {
                   type="button"
                   onClick={handleSaveSla}
                   disabled={savingSla}
-                  className="h-9 rounded-md bg-gray-900 px-3 text-xs font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+                  className="h-11 rounded-md bg-gray-900 px-4 text-xs font-medium text-white hover:bg-gray-700 disabled:opacity-50 lg:h-9 lg:px-3"
                 >
                   {savingSla ? '保存中...' : '保存'}
                 </button>
@@ -1403,13 +1493,16 @@ export default function ChatsPage() {
                   (chatDetail.messages ?? []).map((msg, idx) => {
                     const prevMsg = idx > 0 ? (chatDetail.messages ?? [])[idx - 1] : null
                     const showDateSep = !prevMsg || !sameYmd(prevMsg.createdAt, msg.createdAt)
+                    const showUnreadSep = idx === unreadStartIndex
                     const isOutgoing = msg.direction === 'outgoing'
 
                     // メッセージ表示の分岐
                     let bubbleContent: React.ReactNode
                     if (msg.messageType === 'flex') {
                       bubbleContent = (
-                        <div className="max-w-[300px]">
+                        // Flex は内部で固定幅を持つので、狭幅ではバブル内を
+                        // 横スクロールさせて画面全体のはみ出しを防ぐ。
+                        <div className="max-w-full overflow-x-auto sm:max-w-[300px]">
                           <FlexPreviewComponent content={msg.content} maxWidth={280} />
                         </div>
                       )
@@ -1417,7 +1510,7 @@ export default function ChatsPage() {
                       try {
                         const parsed = JSON.parse(msg.content)
                         bubbleContent = (
-                          <img src={parsed.originalContentUrl || parsed.previewImageUrl} alt="" className="max-w-[200px] rounded" />
+                          <img src={parsed.originalContentUrl || parsed.previewImageUrl} alt="" className="max-w-full rounded sm:max-w-[200px]" />
                         )
                       } catch {
                         bubbleContent = <span>🖼️ [画像]</span>
@@ -1432,9 +1525,18 @@ export default function ChatsPage() {
                       <div key={msg.id}>
                         {showDateSep && (
                           <div className="flex justify-center my-3">
-                            <span className="text-[11px] text-white/85 bg-black/20 px-2.5 py-0.5 rounded-full">
+                            <span className="text-xs text-white bg-black/25 px-3 py-1 rounded-full">
                               {formatYmdSlash(msg.createdAt)}
                             </span>
+                          </div>
+                        )}
+                        {showUnreadSep && (
+                          <div className="my-3 flex items-center gap-2" aria-label="ここから未読">
+                            <span className="h-px flex-1 bg-red-300/70" />
+                            <span className="rounded-full bg-red-500 px-2.5 py-0.5 text-[11px] font-medium text-white">
+                              ここから未読
+                            </span>
+                            <span className="h-px flex-1 bg-red-300/70" />
                           </div>
                         )}
                         <div
@@ -1449,10 +1551,15 @@ export default function ChatsPage() {
                             )
                           )}
 
-                          <div className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}>
+                          {/*
+                            バブル幅は固定 320px だと 375px 端末（アイコン+余白で
+                            実質 295px しかない）ではみ出すため、狭幅では列全体を
+                            割合で抑え、sm 以上で従来の 320px 上限に戻す。
+                          */}
+                          <div className={`flex min-w-0 max-w-[76%] flex-col sm:max-w-[320px] ${isOutgoing ? 'items-end' : 'items-start'}`}>
                             {/* メッセージバブル */}
                             <div
-                              className={`max-w-[320px] px-3 py-2 text-sm break-words whitespace-pre-wrap ${
+                              className={`max-w-full px-3 py-2 text-sm break-words whitespace-pre-wrap ${
                                 isOutgoing
                                   ? 'rounded-tl-2xl rounded-tr-md rounded-bl-2xl rounded-br-2xl text-white'
                                   : 'rounded-tl-md rounded-tr-2xl rounded-bl-2xl rounded-br-2xl bg-white text-gray-900'
@@ -1461,8 +1568,8 @@ export default function ChatsPage() {
                             >
                               {bubbleContent}
                             </div>
-                            {/* 時刻 */}
-                            <span className="text-xs text-white/50 mt-0.5 px-1">
+                            {/* 時刻 — 背景色(#7494C0)に対して white/50 は薄すぎるので上げる */}
+                            <span className="text-[11px] text-white/80 mt-0.5 px-1">
                               {new Date(msg.createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           </div>
@@ -1473,29 +1580,48 @@ export default function ChatsPage() {
                 )}
               </div>
 
-              {/* Notes */}
-              <div className="px-4 py-2 border-t border-gray-200 bg-gray-50">
+              {/* Notes — 狭幅では「対応設定」に畳んで本文の高さを確保する */}
+              <div className={`${showChatSettings ? 'block' : 'hidden'} flex-shrink-0 border-t border-gray-200 bg-gray-50 px-4 py-2 lg:block`}>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     placeholder="メモを入力..."
-                    className="flex-1 text-xs border border-gray-300 rounded-md px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-green-500"
+                    className="h-11 min-w-0 flex-1 text-xs border border-gray-300 rounded-md px-2 bg-white focus:outline-none focus:ring-1 focus:ring-green-500 lg:h-7"
                   />
                   <button
                     onClick={handleSaveNotes}
                     disabled={savingNotes}
-                    className="px-2 py-1 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors disabled:opacity-50"
+                    className="h-11 flex-shrink-0 px-3 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors disabled:opacity-50 lg:h-7 lg:px-2"
                   >
                     {savingNotes ? '保存中...' : 'メモ保存'}
                   </button>
                 </div>
               </div>
 
-              {/* Send Message Form */}
-              <div className="px-4 py-3 border-t border-gray-200">
-                <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-gray-600">
+              {/*
+                Send Message Form
+                下端の余白に safe-area を足して、ホームインジケータ上に
+                送信ボタンが潜り込まないようにする。
+              */}
+              <div className="flex-shrink-0 border-t border-gray-200 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
+                {/* 送信オプションは狭幅だと入力欄を押し下げるので折りたたむ */}
+                <button
+                  type="button"
+                  onClick={() => setShowSendOptions((open) => !open)}
+                  aria-expanded={showSendOptions}
+                  className="mb-2 flex min-h-9 items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-800 lg:hidden"
+                >
+                  送信オプション
+                  <svg
+                    className={`h-3.5 w-3.5 transition-transform ${showSendOptions ? 'rotate-180' : ''}`}
+                    fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                <div className={`${showSendOptions ? 'flex' : 'hidden'} mb-2 flex-wrap items-center gap-x-3 gap-y-2 text-xs text-gray-600 lg:flex`}>
                   <label className="inline-flex items-center gap-2 cursor-pointer select-none">
                     <input
                       type="checkbox"
@@ -1565,12 +1691,12 @@ export default function ChatsPage() {
                     onBlur={() => setIsMessageInputFocused(false)}
                     onKeyDown={handleKeyDown}
                     placeholder="メッセージを入力..."
-                    className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
+                    className="min-w-0 flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
                   />
                   <button
                     onClick={handleSendMessage}
                     disabled={sending || !messageContent.trim()}
-                    className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="h-11 min-w-[4.5rem] flex-shrink-0 px-4 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{ backgroundColor: '#06C755' }}
                   >
                     {sending ? '送信中...' : '送信'}
@@ -1606,6 +1732,23 @@ export default function ChatsPage() {
           </div>
         )}
       </div>
+
+      {/* xl 未満では同じ内容をボトムシートで開く */}
+      <FriendInfoSheet
+        open={showFriendSheet}
+        onClose={() => setShowFriendSheet(false)}
+        friendId={selectedFriendId || selectedChatId}
+        chatStatus={
+          chatDetail && chatDetail.id === (selectedFriendId || selectedChatId)
+            ? { status: chatDetail.status, notes: chatDetail.notes }
+            : undefined
+        }
+        operatorName={
+          chatDetail && chatDetail.id === (selectedFriendId || selectedChatId)
+            ? operatorNameById(chatDetail.operatorId)
+            : null
+        }
+      />
       <CcPromptButton prompts={ccPrompts} />
     </div>
   )

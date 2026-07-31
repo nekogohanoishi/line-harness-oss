@@ -14,7 +14,16 @@ interface Props {
   chatStatus?: ChatStatusInfo
   /** 担当者名 (ChatDetail で operatorId → name 変換済を渡す想定) */
   operatorName?: string | null
+  /**
+   * シート等に埋め込んで使う場合は true。カードの枠線・角丸・見出しを外し、
+   * 親（シート）側のヘッダーと二重にならないようにする。
+   */
+  embedded?: boolean
 }
+
+/** 折りたたみ前に見せる件数。これを超えた分は「すべて表示」で開く。 */
+const EVENT_PREVIEW_COUNT = 3
+const METADATA_PREVIEW_COUNT = 4
 
 function formatDate(iso: string | null): string {
   if (!iso) return '-'
@@ -40,10 +49,12 @@ function renderValue(value: unknown): string {
   }
 }
 
-export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }: Props) {
+export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, embedded = false }: Props) {
   const [friend, setFriend] = useState<FriendDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [showAllEvents, setShowAllEvents] = useState(false)
+  const [showAllMetadata, setShowAllMetadata] = useState(false)
 
   useEffect(() => {
     if (!friendId) {
@@ -53,6 +64,9 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
     let cancelled = false
     setLoading(true)
     setError(null)
+    // 友だちを切り替えたら折りたたみ状態も初期化する。
+    setShowAllEvents(false)
+    setShowAllMetadata(false)
     api.friends.get(friendId).then((res) => {
       if (cancelled) return
       if (res.success && res.data) {
@@ -101,10 +115,18 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
   if (!friendId) return null
 
   return (
-    <div className="w-full lg:w-80 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
-        <h3 className="text-sm font-semibold text-gray-700">友だち詳細</h3>
-      </div>
+    <div
+      className={
+        embedded
+          ? 'flex min-h-0 w-full flex-1 flex-col'
+          : 'w-full lg:w-80 lg:flex-shrink-0 bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col overflow-hidden'
+      }
+    >
+      {!embedded && (
+        <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+          <h3 className="text-sm font-semibold text-gray-700">友だち詳細</h3>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto">
         {loading ? (
@@ -172,7 +194,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                   <p className="text-[11px] text-gray-400">記録開始後の履歴はありません</p>
                 ) : (
                   <ul className="space-y-1.5">
-                    {friend.followEvents.map((event) => (
+                    {(showAllEvents ? friend.followEvents : friend.followEvents.slice(0, EVENT_PREVIEW_COUNT)).map((event) => (
                       <li key={event.id} className="flex items-center justify-between gap-3 text-[11px]">
                         <span className={
                           event.eventType === 'blocked'
@@ -187,6 +209,17 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
                       </li>
                     ))}
                   </ul>
+                )}
+                {friend.followEvents.length > EVENT_PREVIEW_COUNT && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllEvents((open) => !open)}
+                    className="mt-2 min-h-9 text-[11px] font-medium text-blue-600 hover:text-blue-800"
+                  >
+                    {showAllEvents
+                      ? '履歴を折りたたむ'
+                      : `残り${friend.followEvents.length - EVENT_PREVIEW_COUNT}件を表示`}
+                  </button>
                 )}
               </div>
             </div>
@@ -215,7 +248,10 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
             {chatStatus?.notes && (
               <div className="p-4">
                 <h4 className="text-[11px] font-medium text-gray-500 mb-1.5">個別メモ</h4>
-                <p className="text-xs text-gray-700 whitespace-pre-wrap break-words">{chatStatus.notes}</p>
+                {/* 長文メモで詳細全体が押し流されないよう、既定は8行までに抑える。 */}
+                <p className="max-h-40 overflow-y-auto text-xs text-gray-700 whitespace-pre-wrap break-words">
+                  {chatStatus.notes}
+                </p>
               </div>
             )}
 
@@ -263,20 +299,36 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName }
               )}
             </div>
 
-            {/* Metadata custom fields */}
-            {friend.metadata && Object.keys(friend.metadata).length > 0 && (
-              <div className="p-4">
-                <h4 className="text-[11px] font-medium text-gray-500 mb-2">友だち情報</h4>
-                <dl className="space-y-2 text-xs">
-                  {Object.entries(friend.metadata).map(([key, value]) => (
-                    <div key={key}>
-                      <dt className="text-[10px] text-gray-400 uppercase tracking-wide">{key}</dt>
-                      <dd className="text-gray-700 mt-0.5 whitespace-pre-wrap break-words">{renderValue(value)}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </div>
-            )}
+            {/* Metadata custom fields — 項目が多いと下に伸び続けるので折りたたむ */}
+            {friend.metadata && Object.keys(friend.metadata).length > 0 && (() => {
+              const entries = Object.entries(friend.metadata)
+              const visible = showAllMetadata ? entries : entries.slice(0, METADATA_PREVIEW_COUNT)
+              const hidden = entries.length - visible.length
+              return (
+                <div className="p-4">
+                  <h4 className="text-[11px] font-medium text-gray-500 mb-2">友だち情報</h4>
+                  <dl className="space-y-2 text-xs">
+                    {visible.map(([key, value]) => (
+                      <div key={key}>
+                        <dt className="text-[10px] text-gray-400 uppercase tracking-wide">{key}</dt>
+                        <dd className="max-h-32 overflow-y-auto text-gray-700 mt-0.5 whitespace-pre-wrap break-words">
+                          {renderValue(value)}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                  {(hidden > 0 || showAllMetadata) && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllMetadata((open) => !open)}
+                      className="mt-2 min-h-9 text-[11px] font-medium text-blue-600 hover:text-blue-800"
+                    >
+                      {showAllMetadata ? '折りたたむ' : `残り${hidden}項目を表示`}
+                    </button>
+                  )}
+                </div>
+              )
+            })()}
 
             {/*
               編集導線は将来追加予定 (現在の /friends は ?id= をハンドルしないため、
