@@ -45,7 +45,7 @@ export default function MessageVariableButton({
       type="button"
       onClick={handleInsert}
       disabled={disabled}
-      className="inline-flex min-h-[32px] items-center justify-center rounded-md border border-green-200 bg-green-50 px-2.5 py-1.5 text-xs font-medium text-green-700 hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-50"
+      className="inline-flex min-h-[44px] sm:min-h-[32px] shrink-0 items-center justify-center rounded-md border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-50"
     >
       {label}
     </button>

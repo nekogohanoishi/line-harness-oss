@@ -104,12 +104,13 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="px-5 py-4 border-b">
+    // モバイルはボトムシート、sm 以上は従来どおり中央のダイアログ
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+      <div className="bg-white rounded-t-2xl sm:rounded-lg shadow-xl w-full sm:max-w-lg max-h-[92vh] sm:max-h-[90vh] flex flex-col">
+        <div className="shrink-0 px-4 sm:px-5 py-4 border-b">
           <h3 className="text-base font-semibold">{draft.id ? '自動返信ルール 編集' : '新規 自動返信ルール'}</h3>
         </div>
-        <div className="p-5 space-y-4">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5 space-y-4">
           <div>
             <label className="block text-xs text-gray-600 mb-1">keyword</label>
             <input
@@ -127,7 +128,7 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
                 <button
                   key={mt}
                   onClick={() => setMatchType(mt)}
-                  className={`px-3 py-1.5 text-xs rounded-md ${matchType === mt ? 'text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                  className={`px-4 py-1.5 min-h-[44px] text-xs rounded-md ${matchType === mt ? 'text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                   style={matchType === mt ? { backgroundColor: '#06C755' } : undefined}
                 >
                   {mt === 'exact' ? '完全一致' : '包含'}
@@ -148,7 +149,7 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
                 <button
                   key={key}
                   onClick={() => setMode(key)}
-                  className={`px-3 py-1.5 text-xs rounded-md ${mode === key ? 'text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                  className={`px-4 py-1.5 min-h-[44px] text-xs rounded-md ${mode === key ? 'text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                   style={mode === key ? { backgroundColor: '#06C755' } : undefined}
                 >
                   {label}
@@ -210,30 +211,35 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
               </div>
               <textarea
                 ref={responseContentRef}
-                rows={mode === 'inline-flex' ? 8 : mode === 'inline-image' ? 5 : 4}
+                rows={mode === 'inline-flex' ? 8 : mode === 'inline-image' ? 5 : 5}
                 value={responseContent}
                 onChange={(e) => setResponseContent(e.target.value)}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y"
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y min-h-[140px]"
               />
             </div>
           )}
-          <label className="inline-flex items-center gap-2 cursor-pointer">
+          <label className="inline-flex min-h-[44px] items-center gap-2 cursor-pointer">
             <input
               type="checkbox"
               checked={isActive}
               onChange={(e) => setIsActive(e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+              className="h-5 w-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
             />
             <span className="text-xs text-gray-600">有効</span>
           </label>
           {error && <p className="text-xs text-red-600">{error}</p>}
         </div>
-        <div className="px-5 py-3 border-t flex gap-2 justify-end">
-          <button onClick={onClose} className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md">キャンセル</button>
+        <div className="shrink-0 px-4 sm:px-5 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t flex gap-2 justify-end">
+          <button
+            onClick={onClose}
+            className="flex-1 sm:flex-none px-3 py-1.5 min-h-[44px] text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md"
+          >
+            キャンセル
+          </button>
           <button
             onClick={handleSave}
             disabled={saving}
-            className="px-3 py-1.5 text-xs font-medium text-white rounded-md disabled:opacity-50"
+            className="flex-1 sm:flex-none px-3 py-1.5 min-h-[44px] text-xs font-medium text-white rounded-md disabled:opacity-50"
             style={{ backgroundColor: '#06C755' }}
           >
             {saving ? '保存中...' : '保存'}

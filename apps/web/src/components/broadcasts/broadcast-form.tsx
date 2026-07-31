@@ -111,7 +111,7 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6 mb-6">
       <h2 className="text-sm font-semibold text-gray-800 mb-5">新規配信を作成</h2>
 
       <div className="space-y-4 max-w-lg">
@@ -132,7 +132,7 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
         {/* Message type */}
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-2">メッセージ種別</label>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {(Object.keys(messageTypeLabels) as ApiBroadcast['messageType'][]).map((type) => (
               <button
                 key={type}
@@ -231,8 +231,8 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
             </div>
           )}
           <textarea
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-y"
-            rows={form.messageType === 'flex' ? 8 : form.messageType === 'image' ? 3 : 4}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-y min-h-[140px]"
+            rows={form.messageType === 'flex' ? 8 : form.messageType === 'image' ? 3 : 5}
             placeholder={
               form.messageType === 'text'
                 ? '配信するメッセージを入力...'
@@ -360,12 +360,12 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
         {/* Error */}
         {error && <p className="text-xs text-red-600">{error}</p>}
 
-        {/* Actions */}
-        <div className="flex gap-2 pt-1">
+        {/* Actions: モバイルは画面下に貼り付けて、長いフォームでも保存に指が届くようにする */}
+        <div className="flex gap-2 pt-1 sticky bottom-0 bg-white pb-1 -mx-4 px-4 sm:static sm:mx-0 sm:px-0 sm:pb-0">
           <button
             onClick={handleSave}
             disabled={saving}
-            className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
+            className="flex-1 sm:flex-none px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
             style={{ backgroundColor: '#06C755' }}
           >
             {saving ? '作成中...' : '作成'}
@@ -373,7 +373,7 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
           <button
             onClick={onCancel}
             disabled={saving}
-            className="px-4 py-2 min-h-[44px] text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+            className="flex-1 sm:flex-none px-4 py-2 min-h-[44px] text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
           >
             キャンセル
           </button>

@@ -188,6 +188,9 @@ function FlexBubble({ bubble, maxWidth }: { bubble: FlexNode; maxWidth?: number 
   return (
     <div style={{
       width: w,
+      // 375px 幅の端末で bubble がカードからはみ出さないようにする
+      maxWidth: '100%',
+      flexShrink: 0,
       backgroundColor: '#fff',
       borderRadius: '12px',
       overflow: 'hidden',

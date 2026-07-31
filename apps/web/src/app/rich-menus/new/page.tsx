@@ -50,7 +50,7 @@ export default function NewRichMenuPage() {
   }
 
   return (
-    <main className="p-6 max-w-2xl mx-auto">
+    <main className="p-0 sm:p-6 max-w-2xl mx-auto">
       <Header
         title="新規リッチメニュー"
         description="作成後の編集画面で画像 upload や areas 編集ができます。"
@@ -62,7 +62,7 @@ export default function NewRichMenuPage() {
         ← 一覧に戻る
       </Link>
 
-      <form onSubmit={handleSubmit} className="space-y-5 bg-white border border-gray-200 rounded-lg shadow-sm p-6">
+      <form onSubmit={handleSubmit} className="space-y-5 bg-white border border-gray-200 rounded-lg shadow-sm p-4 sm:p-6">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             名前 <span className="text-gray-400">(管理用)</span>
@@ -136,17 +136,17 @@ export default function NewRichMenuPage() {
           </div>
         )}
 
-        <div className="flex justify-end gap-2 pt-4 border-t border-gray-200">
+        <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-4 border-t border-gray-200">
           <Link
             href="/rich-menus"
-            className="px-4 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            className="inline-flex items-center justify-center px-4 py-2 min-h-[44px] text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
           >
             キャンセル
           </Link>
           <button
             type="submit"
             disabled={submitting || !selectedAccount}
-            className="px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity hover:opacity-90"
+            className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity hover:opacity-90"
             style={{ backgroundColor: '#06C755' }}
           >
             {submitting ? '作成中...' : '作成して編集へ'}
