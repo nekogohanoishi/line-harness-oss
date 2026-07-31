@@ -6,6 +6,7 @@ import { api } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import EditDialog, { type AutoReplyDraft } from '@/components/auto-replies/edit-dialog'
+import { ResponsiveTable, EmptyState } from '@/components/ui'
 
 interface EffectiveAccount {
   accountId: string
@@ -35,6 +36,15 @@ interface TemplateLite {
 }
 
 const matchTypeLabel: Record<'exact' | 'contains', string> = { exact: '完全一致', contains: '包含' }
+
+/** 適用アカウントバッジの凡例 (モバイルは折りたたみ / デスクトップは常時表示で使い回す) */
+const legend = (
+  <>
+    <p><span className="inline-flex items-center px-1.5 py-0.5 rounded bg-green-100 text-green-700">✓ アカ名</span> 返信あり (inline) / <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-green-100 text-green-700">✓ アカ名 ⚙</span> automation 経由</p>
+    <p><span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">⚠ アカ名</span> silent rule のみ — match するが返信しない (同 keyword の automation rule 未登録)</p>
+    <p><span className="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-50 text-gray-300 line-through">アカ名</span> 適用外 (line_account_id が別アカに固定)</p>
+  </>
+)
 
 export default function AutoRepliesPage() {
   const { selectedAccountId, accounts } = useAccount()
@@ -176,74 +186,72 @@ export default function AutoRepliesPage() {
         </div>
       )}
 
-      <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-800 space-y-1">
-        <p><span className="inline-flex items-center px-1.5 py-0.5 rounded bg-green-100 text-green-700">✓ アカ名</span> 返信あり (inline) / <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-green-100 text-green-700">✓ アカ名 ⚙</span> automation 経由</p>
-        <p><span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">⚠ アカ名</span> silent rule のみ — match するが返信しない (同 keyword の automation rule 未登録)</p>
-        <p><span className="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-50 text-gray-300 line-through">アカ名</span> 適用外 (line_account_id が別アカに固定)</p>
+      {/* 凡例。モバイルでは縦に長くなるため折りたたみ、sm 以上は従来どおり開いたまま表示する */}
+      <details className="mb-4 rounded-lg border border-blue-200 bg-blue-50 text-xs text-blue-800 sm:hidden">
+        <summary className="flex min-h-[44px] cursor-pointer list-none items-center px-3 font-medium">
+          バッジの見かた
+        </summary>
+        <div className="space-y-1 px-3 pb-3">{legend}</div>
+      </details>
+      <div className="mb-4 hidden rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 sm:block">
+        <div className="space-y-1">{legend}</div>
       </div>
 
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[860px]">
-            <thead>
-              <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">keyword</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">match</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">response</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">template</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">適用アカウント</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">状態</th>
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {loading ? (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400 text-sm">読み込み中...</td></tr>
-              ) : items.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400 text-sm">自動返信ルールがありません</td></tr>
-              ) : (
-                items.map((r) => (
-                  <tr key={r.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm font-medium text-gray-900">{r.keyword}</td>
-                    <td className="px-4 py-3 text-xs text-gray-600">{matchTypeLabel[r.matchType]}</td>
-                    <td className="px-4 py-3">{renderResponseCell(r)}</td>
-                    <td className="px-4 py-3">{renderTemplateCell(r)}</td>
-                    <td className="px-4 py-3">{renderEffectiveCell(r)}</td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${r.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                        {r.isActive ? '有効' : '無効'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap">
-                      <button
-                        onClick={() => setEditing({
-                          id: r.id,
-                          keyword: r.keyword,
-                          matchType: r.matchType,
-                          responseType: r.responseType,
-                          responseContent: r.responseContent,
-                          templateId: r.templateId,
-                          lineAccountId: r.lineAccountId,
-                          isActive: r.isActive,
-                        })}
-                        className="px-2.5 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded-md"
-                      >
-                        編集
-                      </button>
-                      <button
-                        onClick={() => handleDelete(r.id)}
-                        className="ml-1 px-2.5 py-1 text-xs font-medium text-red-500 hover:bg-red-50 rounded-md"
-                      >
-                        削除
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <ResponsiveTable
+        rows={items}
+        loading={loading}
+        rowKey={(r) => r.id}
+        className="shadow-sm"
+        empty={<EmptyState size="sm" title="自動返信ルールがありません" />}
+        columns={[
+          {
+            key: 'keyword',
+            label: 'keyword',
+            priority: 'primary',
+            render: (r) => <span className="text-sm font-medium text-gray-900 break-words">{r.keyword}</span>,
+          },
+          {
+            key: 'isActive',
+            label: '状態',
+            priority: 'meta',
+            render: (r) => (
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${r.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                {r.isActive ? '有効' : '無効'}
+              </span>
+            ),
+          },
+          { key: 'matchType', label: 'match', render: (r) => matchTypeLabel[r.matchType] },
+          { key: 'response', label: 'response', render: renderResponseCell },
+          { key: 'template', label: 'template', render: renderTemplateCell },
+          { key: 'effective', label: '適用アカウント', render: renderEffectiveCell },
+        ]}
+        actions={(r) => (
+          <>
+            <button
+              onClick={() => setEditing({
+                id: r.id,
+                keyword: r.keyword,
+                matchType: r.matchType,
+                responseType: r.responseType,
+                responseContent: r.responseContent,
+                templateId: r.templateId,
+                lineAccountId: r.lineAccountId,
+                isActive: r.isActive,
+              })}
+              className="px-2.5 py-1 min-h-[44px] sm:min-h-0 text-xs font-medium text-blue-600 bg-blue-50 sm:bg-transparent hover:bg-blue-50 rounded-md"
+            >
+              編集
+            </button>
+            <button
+              onClick={() => handleDelete(r.id)}
+              className="px-2.5 py-1 min-h-[44px] sm:min-h-0 text-xs font-medium text-red-500 bg-red-50 sm:bg-transparent hover:bg-red-50 rounded-md"
+            >
+              削除
+            </button>
+          </>
+        )}
+      />
+
 
       {editing && (
         <EditDialog

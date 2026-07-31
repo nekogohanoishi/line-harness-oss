@@ -7,6 +7,7 @@ import Header from '@/components/layout/header'
 import FlexPreviewComponent from '@/components/flex-preview'
 import CcPromptButton from '@/components/cc-prompt-button'
 import MessageVariableButton from '@/components/message-variable-button'
+import { ResponsiveTable, EmptyState } from '@/components/ui'
 
 interface Template {
   id: string
@@ -251,7 +252,7 @@ export default function TemplatesPage() {
           <button
             key={key}
             onClick={() => setTypeFilter(key)}
-            className={`px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${
+            className={`px-4 py-1.5 min-h-[40px] text-xs font-medium rounded-full transition-colors ${
               typeFilter === key ? 'text-white' : 'text-gray-600 bg-gray-100 hover:bg-gray-200'
             }`}
             style={typeFilter === key ? { backgroundColor: '#06C755' } : undefined}
@@ -263,7 +264,7 @@ export default function TemplatesPage() {
 
       {/* Create form */}
       {showCreate && (
-        <div className="mb-6 bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <div className="mb-6 bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6">
           <h2 className="text-sm font-semibold text-gray-800 mb-4">新規テンプレートを作成</h2>
           <div className="space-y-4 max-w-lg">
             <div>
@@ -311,8 +312,8 @@ export default function TemplatesPage() {
               </div>
               <textarea
                 ref={createContentRef}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y"
-                rows={form.messageType === 'flex' ? 10 : 4}
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y min-h-[140px]"
+                rows={form.messageType === 'flex' ? 10 : 5}
                 placeholder={form.messageType === 'flex' ? '{"type":"bubble","body":...}' : 'メッセージ内容'}
                 value={form.messageContent}
                 onChange={(e) => setForm({ ...form, messageContent: e.target.value })}
@@ -321,18 +322,18 @@ export default function TemplatesPage() {
 
             {formError && <p className="text-xs text-red-600">{formError}</p>}
 
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2 sticky bottom-0 bg-white pt-2 pb-1 -mx-4 px-4 sm:static sm:mx-0 sm:px-0 sm:pt-0 sm:pb-0">
               <button
                 onClick={handleCreate}
                 disabled={saving}
-                className="px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50"
+                className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50"
                 style={{ backgroundColor: '#06C755' }}
               >
                 {saving ? '作成中...' : '作成'}
               </button>
               <button
                 onClick={() => { setShowCreate(false); setFormError('') }}
-                className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg"
+                className="px-4 py-2 min-h-[44px] text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg"
               >
                 キャンセル
               </button>
@@ -356,67 +357,68 @@ export default function TemplatesPage() {
             </div>
           ))}
         </div>
-      ) : filteredTemplates.length === 0 ? (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
-          <p className="text-gray-500">該当するテンプレートがありません</p>
-        </div>
       ) : (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px]">
-              <thead>
-                <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">タイプ</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">名前</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">カテゴリ</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase">使用数</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">更新日</th>
-                  <th className="px-4 py-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filteredTemplates.map((t) => (
-                  <tr
-                    key={t.id}
-                    onClick={() => setDrawerId(t.id)}
-                    className={`hover:bg-gray-50 cursor-pointer transition-colors ${drawerId === t.id ? 'bg-green-50' : ''}`}
-                  >
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${typeBadgeColor[t.messageType] ?? 'bg-gray-100 text-gray-700'}`}>
-                        {messageTypeLabels[t.messageType] ?? t.messageType}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <p className="text-sm font-medium text-gray-900">{t.name}</p>
-                      <p className="text-[11px] text-gray-400 mt-0.5 truncate max-w-md">
-                        {t.messageContent.slice(0, 60)}{t.messageContent.length > 60 ? '...' : ''}
-                      </p>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700">
-                        {t.category}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <span className={`text-sm ${t.usageCount === 0 ? 'text-gray-400' : 'text-gray-900 font-medium'}`}>
-                        {t.usageCount}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-gray-500">{formatDate(t.updatedAt)}</td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleDelete(t.id, t.usageCount) }}
-                        className="px-2.5 py-1 text-xs font-medium text-red-500 hover:bg-red-50 rounded-md"
-                      >
-                        削除
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <ResponsiveTable
+          rows={filteredTemplates}
+          rowKey={(t) => t.id}
+          className="shadow-sm"
+          onRowClick={(t) => setDrawerId(t.id)}
+          empty={<EmptyState size="sm" title="該当するテンプレートがありません" />}
+          columns={[
+            {
+              key: 'name',
+              label: '名前',
+              priority: 'primary',
+              render: (t) => (
+                // 選択中の行はデスクトップの行ハイライトが使えないため、左の緑線で示す
+                <div className={drawerId === t.id ? 'border-l-2 border-green-500 pl-2 -ml-2' : ''}>
+                  <p className="text-sm font-medium text-gray-900 break-words">{t.name}</p>
+                  <p className="text-[11px] font-normal text-gray-400 mt-0.5 truncate max-w-md">
+                    {t.messageContent.slice(0, 60)}{t.messageContent.length > 60 ? '...' : ''}
+                  </p>
+                </div>
+              ),
+            },
+            {
+              key: 'messageType',
+              label: 'タイプ',
+              priority: 'meta',
+              render: (t) => (
+                <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${typeBadgeColor[t.messageType] ?? 'bg-gray-100 text-gray-700'}`}>
+                  {messageTypeLabels[t.messageType] ?? t.messageType}
+                </span>
+              ),
+            },
+            {
+              key: 'category',
+              label: 'カテゴリ',
+              render: (t) => (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700">
+                  {t.category}
+                </span>
+              ),
+            },
+            {
+              key: 'usageCount',
+              label: '使用数',
+              align: 'right',
+              render: (t) => (
+                <span className={`text-sm ${t.usageCount === 0 ? 'text-gray-400' : 'text-gray-900 font-medium'}`}>
+                  {t.usageCount}
+                </span>
+              ),
+            },
+            { key: 'updatedAt', label: '更新日', render: (t) => formatDate(t.updatedAt) },
+          ]}
+          actions={(t) => (
+            <button
+              onClick={() => handleDelete(t.id, t.usageCount)}
+              className="px-2.5 py-1 min-h-[44px] sm:min-h-0 text-xs font-medium text-red-500 bg-red-50 sm:bg-transparent hover:bg-red-50 rounded-md"
+            >
+              削除
+            </button>
+          )}
+        />
       )}
 
       {/* Drawer */}

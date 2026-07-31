@@ -6,6 +6,7 @@ import { api, eventsApi, type EventListItem } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
+import { EmptyState } from '@/components/ui'
 
 type AutomationEventType =
   | "friend_add"
@@ -315,7 +316,7 @@ export default function AutomationsPage() {
 
       {/* Create form */}
       {showCreate && (
-        <div className="mb-6 bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <div className="mb-6 bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6">
           <h2 className="text-sm font-semibold text-gray-800 mb-4">新規オートメーションを作成</h2>
           <div className="space-y-4 max-w-lg">
             <div>
@@ -426,7 +427,7 @@ export default function AutomationsPage() {
 
             {formError && <p className="text-xs text-red-600">{formError}</p>}
 
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2 sticky bottom-0 bg-white pt-2 pb-1 -mx-4 px-4 sm:static sm:mx-0 sm:px-0 sm:pt-0 sm:pb-0">
               <button
                 onClick={handleCreate}
                 disabled={saving}
@@ -461,8 +462,11 @@ export default function AutomationsPage() {
           ))}
         </div>
       ) : automations.length === 0 && !showCreate ? (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
-          <p className="text-gray-500">オートメーションがありません。「新規ルール」から作成してください。</p>
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+          <EmptyState
+            title="オートメーションがありません"
+            description="「新規ルール」から作成してください。"
+          />
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -472,20 +476,28 @@ export default function AutomationsPage() {
               className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 hover:shadow-md transition-shadow"
             >
               {/* Header row */}
-              <div className="flex items-start justify-between mb-2">
-                <h3 className="text-sm font-semibold text-gray-900 leading-tight">{automation.name}</h3>
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <h3 className="text-sm font-semibold text-gray-900 leading-tight break-words">{automation.name}</h3>
+                {/* トグル本体は h-6/w-11 だが、外側ボタンで 44px のタップ領域を確保する */}
                 <button
                   onClick={() => handleToggleActive(automation.id, automation.isActive)}
-                  className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                    automation.isActive ? 'bg-green-500' : 'bg-gray-300'
-                  }`}
+                  role="switch"
+                  aria-checked={automation.isActive}
+                  aria-label={automation.isActive ? '有効 - タップで無効化' : '無効 - タップで有効化'}
+                  className="-my-2.5 -mr-2 inline-flex h-11 shrink-0 cursor-pointer items-center justify-center px-2 focus:outline-none"
                   title={automation.isActive ? '有効 - クリックで無効化' : '無効 - クリックで有効化'}
                 >
                   <span
-                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      automation.isActive ? 'translate-x-4' : 'translate-x-0'
+                    className={`relative inline-flex h-6 w-11 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                      automation.isActive ? 'bg-green-500' : 'bg-gray-300'
                     }`}
-                  />
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        automation.isActive ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </span>
                 </button>
               </div>
 
@@ -512,7 +524,7 @@ export default function AutomationsPage() {
                   (a) => a.type === 'send_message' && (a.params as { template_id?: string }).template_id,
                 ).length
                 return (
-                  <div className="flex items-center gap-4 text-xs text-gray-400 mb-3">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-400 mb-3">
                     <span>アクション: {automation.actions.length}件</span>
                     {sendMsgWithTpl > 0 && (
                       <Link href="/templates" className="text-blue-600 hover:underline" title="template_id 参照を含む send_message action あり">

@@ -6,6 +6,7 @@ import Header from '@/components/layout/header'
 import { useAccount } from '@/contexts/account-context'
 import { api } from '@/lib/api'
 import { ApplyToTagModal } from '@/components/rich-menus/apply-to-tag-modal'
+import { ResponsiveTable, EmptyState } from '@/components/ui'
 
 type RichMenuGroupListItem = {
   id: string
@@ -213,17 +214,19 @@ export default function RichMenusListPage() {
       )}
 
       {selectedAccount && !loading && !error && groups.length === 0 && (
-        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-12 text-center">
-          <p className="text-gray-500 mb-4">
-            まだリッチメニューが作成されていません。
-          </p>
-          <Link
-            href="/rich-menus/new"
-            className="inline-flex items-center gap-1 px-4 py-2 text-white rounded-lg text-sm font-medium transition-opacity hover:opacity-90"
-            style={{ backgroundColor: '#06C755' }}
-          >
-            <span className="text-lg leading-none">+</span> 最初のメニューを作る
-          </Link>
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
+          <EmptyState
+            title="まだリッチメニューが作成されていません"
+            action={
+              <Link
+                href="/rich-menus/new"
+                className="inline-flex items-center gap-1 px-4 py-2 text-white rounded-lg text-sm font-medium transition-opacity hover:opacity-90"
+                style={{ backgroundColor: '#06C755' }}
+              >
+                <span className="text-lg leading-none">+</span> 最初のメニューを作る
+              </Link>
+            }
+          />
         </div>
       )}
 
@@ -274,11 +277,11 @@ export default function RichMenusListPage() {
                   </div>
                 </div>
               </Link>
-              <div className="border-t border-gray-100 px-4 py-2.5 flex justify-end gap-4 text-xs">
+              <div className="border-t border-gray-100 px-2 py-1 flex justify-end items-center gap-1 text-xs">
                 {g.status === 'published' && (
                   <button
                     onClick={() => setApplyTo(g)}
-                    className="font-medium hover:underline"
+                    className="inline-flex min-h-[44px] items-center rounded-md px-3 font-medium hover:bg-gray-50 hover:underline"
                     style={{ color: '#06C755' }}
                   >
                     友だちに表示
@@ -286,13 +289,13 @@ export default function RichMenusListPage() {
                 )}
                 <Link
                   href={`/rich-menus/edit?id=${g.id}`}
-                  className="text-gray-600 hover:underline"
+                  className="inline-flex min-h-[44px] items-center rounded-md px-3 text-gray-600 hover:bg-gray-50 hover:underline"
                 >
                   編集
                 </Link>
                 <button
                   onClick={() => handleDelete(g)}
-                  className="text-gray-400 hover:text-red-600 hover:underline"
+                  className="inline-flex min-h-[44px] items-center rounded-md px-3 text-gray-400 hover:bg-gray-50 hover:text-red-600 hover:underline"
                   title={g.status === 'published' ? 'LINE から取り下げてから削除' : '削除'}
                 >
                   削除
@@ -392,108 +395,117 @@ function ExternalSection({
           LINE 公式アカウントにはまだ rich menu が登録されていません。
         </div>
       ) : (
-        <div className="border border-gray-200 rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50">
-              <tr className="text-left text-xs font-medium text-gray-600">
-                <th className="px-3 py-2 w-[88px]">画像</th>
-                <th className="px-3 py-2">名前</th>
-                <th className="px-3 py-2">サイズ</th>
-                <th className="px-3 py-2">管理状態</th>
-                <th className="px-3 py-2 w-px"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {sortedMenus.map((m) => (
-                <tr key={m.richMenuId} className="text-gray-700">
-                  <td className="px-3 py-2.5">
-                    <div
-                      className="w-20 bg-gray-100 rounded overflow-hidden"
-                      style={{
-                        aspectRatio:
-                          m.size.width === 2500 && m.size.height === 1686
-                            ? '2500 / 1686'
-                            : m.size.width === 2500 && m.size.height === 843
-                              ? '2500 / 843'
-                              : `${m.size.width} / ${m.size.height}`,
-                      }}
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={api.richMenuGroups.externalImageUrl(m.richMenuId, accountId)}
-                        alt={m.name}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                      />
-                    </div>
-                  </td>
-                  <td className="px-3 py-2.5">
-                    <div className="flex items-center gap-2 mb-1">
-                      {m.isCurrentDefault && (
-                        <span
-                          className="text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded"
-                          title="LINE 公式アカウントの全員のデフォルト"
-                        >
-                          DEFAULT
-                        </span>
-                      )}
-                      <span className="font-medium truncate max-w-[180px]">{m.name}</span>
-                    </div>
-                    <div className="text-[11px] text-gray-500 truncate max-w-[200px]">
-                      {m.chatBarText}
-                    </div>
-                    <div className="text-[10px] text-gray-400 font-mono truncate max-w-[280px]">
-                      {m.richMenuId}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2.5 text-xs text-gray-600 whitespace-nowrap">
-                    {m.size.width}×{m.size.height}
-                    <div className="text-[10px] text-gray-400">{m.areasCount} エリア</div>
-                  </td>
-                  <td className="px-3 py-2.5 text-xs">
-                    {m.adminManaged && m.adminInfo ? (
-                      <Link
-                        href={`/rich-menus/edit?id=${m.adminInfo.groupId}`}
-                        className="text-gray-700 hover:underline"
-                      >
-                        管理画面 → {m.adminInfo.groupName}
-                        <span className="text-gray-400 ml-1">({m.adminInfo.pageName})</span>
-                      </Link>
-                    ) : (
+        <ResponsiveTable
+          rows={sortedMenus}
+          rowKey={(m) => m.richMenuId}
+          columns={[
+            {
+              key: 'image',
+              label: '画像',
+              priority: 'meta',
+              className: 'w-[88px]',
+              render: (m) => (
+                <div
+                  className="w-20 bg-gray-100 rounded overflow-hidden"
+                  style={{
+                    aspectRatio:
+                      m.size.width === 2500 && m.size.height === 1686
+                        ? '2500 / 1686'
+                        : m.size.width === 2500 && m.size.height === 843
+                          ? '2500 / 843'
+                          : `${m.size.width} / ${m.size.height}`,
+                  }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={api.richMenuGroups.externalImageUrl(m.richMenuId, accountId)}
+                    alt={m.name}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                  />
+                </div>
+              ),
+            },
+            {
+              key: 'name',
+              label: '名前',
+              priority: 'primary',
+              render: (m) => (
+                <div className="text-gray-700">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    {m.isCurrentDefault && (
                       <span
-                        className="text-amber-700 font-medium"
-                        title="LINE 公式マネージャー、または旧 MCP/CLI から作成された可能性"
+                        className="text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded"
+                        title="LINE 公式アカウントの全員のデフォルト"
                       >
-                        管理画面外
+                        DEFAULT
                       </span>
                     )}
-                  </td>
-                  <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                    {!m.adminManaged && (
-                      <div className="flex flex-col items-end gap-1">
-                        <button
-                          onClick={() => onImport(m)}
-                          className="text-xs font-medium hover:underline"
-                          style={{ color: '#06C755' }}
-                          title="管理画面に取り込んで以後 UI で操作可能にする"
-                        >
-                          管理画面に取り込む
-                        </button>
-                        <button
-                          onClick={() => onDeleteExternal(m)}
-                          className="text-xs text-gray-400 hover:text-red-600 hover:underline"
-                          title="LINE から削除 (管理画面外メニューのみ)"
-                        >
-                          LINE から削除
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    <span className="font-medium break-words">{m.name}</span>
+                  </div>
+                  <div className="text-[11px] font-normal text-gray-500 break-words">
+                    {m.chatBarText}
+                  </div>
+                  <div className="text-[10px] font-normal text-gray-400 font-mono break-all">
+                    {m.richMenuId}
+                  </div>
+                </div>
+              ),
+            },
+            {
+              key: 'size',
+              label: 'サイズ',
+              render: (m) => (
+                <span className="text-xs text-gray-600 whitespace-nowrap">
+                  {m.size.width}×{m.size.height}
+                  <span className="text-[10px] text-gray-400 ml-1">{m.areasCount} エリア</span>
+                </span>
+              ),
+            },
+            {
+              key: 'managed',
+              label: '管理状態',
+              render: (m) =>
+                m.adminManaged && m.adminInfo ? (
+                  <Link
+                    href={`/rich-menus/edit?id=${m.adminInfo.groupId}`}
+                    className="text-xs text-gray-700 hover:underline break-words"
+                  >
+                    管理画面 → {m.adminInfo.groupName}
+                    <span className="text-gray-400 ml-1">({m.adminInfo.pageName})</span>
+                  </Link>
+                ) : (
+                  <span
+                    className="text-xs text-amber-700 font-medium"
+                    title="LINE 公式マネージャー、または旧 MCP/CLI から作成された可能性"
+                  >
+                    管理画面外
+                  </span>
+                ),
+            },
+          ]}
+          actions={(m) =>
+            m.adminManaged ? null : (
+              <>
+                <button
+                  onClick={() => onImport(m)}
+                  className="inline-flex min-h-[44px] sm:min-h-0 items-center justify-center rounded-md px-3 text-xs font-medium hover:underline"
+                  style={{ color: '#06C755' }}
+                  title="管理画面に取り込んで以後 UI で操作可能にする"
+                >
+                  管理画面に取り込む
+                </button>
+                <button
+                  onClick={() => onDeleteExternal(m)}
+                  className="inline-flex min-h-[44px] sm:min-h-0 items-center justify-center rounded-md px-3 text-xs text-gray-400 hover:text-red-600 hover:underline"
+                  title="LINE から削除 (管理画面外メニューのみ)"
+                >
+                  LINE から削除
+                </button>
+              </>
+            )
+          }
+        />
       )}
     </section>
   )

@@ -32,7 +32,7 @@ function IconButton({
       title={label}
       disabled={disabled}
       onClick={onClick}
-      className="min-w-[40px] min-h-[40px] inline-flex items-center justify-center rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+      className="min-w-[44px] min-h-[44px] sm:min-w-[40px] sm:min-h-[40px] inline-flex items-center justify-center rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
     >
       {children}
     </button>
@@ -485,7 +485,8 @@ export default function SurveysPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-[280px_1fr] gap-6">
-          <aside className="bg-white border border-gray-200 rounded-lg p-3 h-fit">
+          {/* モバイルでは一覧が長くなると編集欄が下に追いやられるため高さを制限する */}
+          <aside className="bg-white border border-gray-200 rounded-lg p-3 h-fit max-h-[45vh] overflow-y-auto xl:max-h-none xl:overflow-visible">
             <div className="space-y-1">
               {surveyList.map((survey) => {
                 const active = survey.form.id === selectedId
@@ -526,7 +527,7 @@ export default function SurveysPage() {
 
           {selectedId ? (
             <div className="space-y-6 opacity-100">
-              <section className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
+              <section className="bg-white border border-gray-200 rounded-lg p-4 sm:p-5 space-y-4">
                 <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-4">
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">アンケート名</label>
@@ -619,7 +620,7 @@ export default function SurveysPage() {
               </section>
 
               {isRegistrationSelected && (
-                <section className="bg-white border border-gray-200 rounded-lg p-5 space-y-3">
+                <section className="bg-white border border-gray-200 rounded-lg p-4 sm:p-5 space-y-3">
                   <div className="flex items-center justify-between gap-2">
                     <h2 className="text-sm font-semibold text-gray-900">最初の挨拶メッセージ</h2>
                     <MessageVariableButton
@@ -653,28 +654,33 @@ export default function SurveysPage() {
                 </div>
 
                 {questions.map((question, questionIndex) => (
-                  <div key={questionIndex} className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
-                    <div className="flex items-center gap-2">
-                      <div className="w-9 h-9 rounded-lg bg-gray-100 text-gray-700 text-sm font-semibold flex items-center justify-center">
-                        {questionIndex + 1}
+                  <div key={questionIndex} className="bg-white border border-gray-200 rounded-lg p-4 sm:p-5 space-y-4">
+                    {/* モバイルは質問文とアイコン操作を 2 段に分ける (375px で入力欄が潰れるため) */}
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <div className="flex items-center gap-2">
+                        <div className="w-9 h-9 shrink-0 rounded-lg bg-gray-100 text-gray-700 text-sm font-semibold flex items-center justify-center">
+                          {questionIndex + 1}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <input
+                            value={question.label}
+                            onChange={(e) => updateQuestion(questionIndex, { label: e.target.value })}
+                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                            placeholder="例: 今1番目指している試験はどれですか？"
+                          />
+                        </div>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <input
-                          value={question.label}
-                          onChange={(e) => updateQuestion(questionIndex, { label: e.target.value })}
-                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                          placeholder="例: 今1番目指している試験はどれですか？"
-                        />
+                      <div className="flex items-center justify-end gap-2 sm:contents">
+                        <IconButton label="上へ" disabled={questionIndex === 0} onClick={() => moveQuestion(questionIndex, -1)}>
+                          <ArrowUpIcon />
+                        </IconButton>
+                        <IconButton label="下へ" disabled={questionIndex === questions.length - 1} onClick={() => moveQuestion(questionIndex, 1)}>
+                          <ArrowDownIcon />
+                        </IconButton>
+                        <IconButton label="削除" disabled={questions.length <= 1} onClick={() => removeQuestion(questionIndex)}>
+                          <TrashIcon />
+                        </IconButton>
                       </div>
-                      <IconButton label="上へ" disabled={questionIndex === 0} onClick={() => moveQuestion(questionIndex, -1)}>
-                        <ArrowUpIcon />
-                      </IconButton>
-                      <IconButton label="下へ" disabled={questionIndex === questions.length - 1} onClick={() => moveQuestion(questionIndex, 1)}>
-                        <ArrowDownIcon />
-                      </IconButton>
-                      <IconButton label="削除" disabled={questions.length <= 1} onClick={() => removeQuestion(questionIndex)}>
-                        <TrashIcon />
-                      </IconButton>
                     </div>
 
                     <div>
@@ -718,7 +724,7 @@ export default function SurveysPage() {
                 ))}
               </section>
 
-              <section className="bg-white border border-gray-200 rounded-lg p-5 space-y-4">
+              <section className="bg-white border border-gray-200 rounded-lg p-4 sm:p-5 space-y-4">
                 <h2 className="text-sm font-semibold text-gray-900">回答完了後</h2>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                   <div>

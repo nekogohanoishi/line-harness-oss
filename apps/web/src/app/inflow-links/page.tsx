@@ -316,7 +316,7 @@ export default function InflowLinksPage() {
         </div>
       )}
 
-      <div className="flex justify-between items-center mb-4">
+      <div className="flex justify-between items-center gap-3 mb-4">
         <span className="text-sm text-gray-500">
           {sortedRows.length} リンク
           {selectedAccountId && allRows.length !== sortedRows.length
@@ -325,7 +325,7 @@ export default function InflowLinksPage() {
         </span>
         <button
           onClick={() => setEditing('new')}
-          className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
+          className="shrink-0 px-3 py-1.5 min-h-[44px] rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
         >
           + 新規リンク
         </button>
@@ -383,7 +383,136 @@ export default function InflowLinksPage() {
             : 'リファラルリンクがありません。「+ 新規リンク」から作成してください。'}
         </div>
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
+        <>
+        {/* モバイル: 1 リンク = 1 カード (表は横に長すぎて 375px では読めない) */}
+        <ul className="sm:hidden divide-y divide-gray-100 bg-white rounded-lg border border-gray-200 overflow-hidden">
+          {sortedRows.map((r) => {
+            const pool = pools.find((p) => p.id === r.poolId)
+            const sc = scenarios.find((s) => s.id === r.scenarioId)
+            const tag = tags.find((t) => t.id === r.tagId)
+            const editTarget = r.registered ? routes.find((e) => e.id === r.entryRouteId) ?? null : null
+            const isExpanded = expandedRef === r.refCode
+            return (
+              <li key={r.refCode} className="px-4 py-3.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    {r.registered && r.entryRouteId ? (
+                      <Link
+                        href={`/inflow-links/detail?id=${r.entryRouteId}`}
+                        className="text-[15px] font-semibold text-blue-600 break-words"
+                      >
+                        {r.name}
+                      </Link>
+                    ) : (
+                      <span className="text-[15px] font-semibold text-gray-900 break-words">
+                        {r.name}
+                        <span
+                          className="ml-2 align-middle text-[10px] font-normal text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5"
+                          title="entry_routes に未登録 — X Harness など外部システムが発行した ref。流入実績のみ集計。"
+                        >
+                          未登録
+                        </span>
+                      </span>
+                    )}
+                    <p className="mt-0.5 font-mono text-xs text-blue-600 break-all">{r.refCode}</p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className="text-lg font-bold text-gray-900 leading-tight">{r.stats?.friendCount ?? 0}</p>
+                    <p className="text-[10px] text-gray-400">友だち</p>
+                  </div>
+                </div>
+
+                <dl className="mt-2 space-y-1 text-[13px]">
+                  <div className="flex items-baseline gap-3">
+                    <dt className="shrink-0 min-w-[5.5rem] text-gray-500">送り先 Pool</dt>
+                    <dd className="min-w-0 flex-1 text-gray-800 break-words">
+                      {pool ? pool.name : <span className="text-gray-400">未設定</span>}
+                    </dd>
+                  </div>
+                  <div className="flex items-baseline gap-3">
+                    <dt className="shrink-0 min-w-[5.5rem] text-gray-500">起動シナリオ</dt>
+                    <dd className="min-w-0 flex-1 text-gray-800 break-words">{sc?.name ?? '—'}</dd>
+                  </div>
+                  <div className="flex items-baseline gap-3">
+                    <dt className="shrink-0 min-w-[5.5rem] text-gray-500">自動付与タグ</dt>
+                    <dd className="min-w-0 flex-1">
+                      {tag ? (
+                        <span
+                          className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
+                          style={{ backgroundColor: `${tag.color}22`, color: tag.color }}
+                        >
+                          {tag.name}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </dd>
+                  </div>
+                  <div className="flex items-baseline gap-3">
+                    <dt className="shrink-0 min-w-[5.5rem] text-gray-500">モード / クリック</dt>
+                    <dd className="min-w-0 flex-1 text-gray-800">
+                      {r.registered ? (r.runAccountFriendAddScenarios ? '並走' : '上書き') : '—'} / {r.stats?.clickCount ?? 0}
+                    </dd>
+                  </div>
+                  <div className="flex items-baseline gap-3">
+                    <dt className="shrink-0 min-w-[5.5rem] text-gray-500">最新追加</dt>
+                    <dd className="min-w-0 flex-1 text-gray-800">{formatDate(r.stats?.latestAt ?? null)}</dd>
+                  </div>
+                </dl>
+
+                <div className="mt-2 flex items-center gap-2">
+                  <code className="min-w-0 flex-1 truncate rounded bg-gray-50 px-2 py-1 text-xs text-gray-700">
+                    {routeUrl(r.refCode)}
+                  </code>
+                  <button
+                    onClick={() => onCopy(r.refCode, r.refCode)}
+                    className="shrink-0 min-h-[44px] px-3 text-xs font-medium text-blue-600 hover:bg-blue-50 rounded-md"
+                  >
+                    {copiedId === r.refCode ? 'コピー済' : 'コピー'}
+                  </button>
+                </div>
+
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => toggleExpand(r.refCode)}
+                    aria-expanded={isExpanded}
+                    className="flex-1 min-h-[44px] rounded-md bg-gray-50 text-xs font-medium text-gray-600 hover:bg-gray-100"
+                  >
+                    {isExpanded ? '友だちを閉じる' : '友だちを見る'}
+                  </button>
+                  {editTarget ? (
+                    <button
+                      onClick={() => setEditing(editTarget)}
+                      className="flex-1 min-h-[44px] rounded-md bg-gray-50 text-xs font-medium text-gray-600 hover:bg-gray-100"
+                    >
+                      編集
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setEditing({ register: r.refCode })}
+                      className="flex-1 min-h-[44px] rounded-md bg-blue-50 text-xs font-medium text-blue-600 hover:bg-blue-100"
+                      title="未登録 ref を entry_routes に登録します。流入実績はそのまま引き継がれます。"
+                    >
+                      登録
+                    </button>
+                  )}
+                </div>
+
+                {isExpanded && (
+                  <div className="mt-3 rounded-lg bg-gray-50 p-3">
+                    <RefFriendsPanel
+                      refDetailLoading={refDetailLoading}
+                      friends={refDetail?.refCode === r.refCode ? refDetail.friends : null}
+                    />
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+
+        {/* デスクトップ: 従来どおりの表 */}
+        <div className="hidden sm:block bg-white rounded-lg border border-gray-200 overflow-x-auto">
           <table className="w-full min-w-[1080px]">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
@@ -539,6 +668,7 @@ export default function InflowLinksPage() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {editing && (
@@ -600,44 +730,55 @@ function FragmentRow({
       {isExpanded && (
         <tr>
           <td colSpan={11} className="px-6 py-4 bg-gray-50 border-t border-gray-100">
-            {refDetailLoading ? (
-              <p className="text-sm text-gray-400">読み込み中…</p>
-            ) : !friends ? (
-              <p className="text-sm text-gray-400">読み込めませんでした</p>
-            ) : friends.length === 0 ? (
-              <p className="text-sm text-gray-400">この ref から追加した友だちはまだいません</p>
-            ) : (
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase mb-3">
-                  この ref から追加した友だち ({friends.length}人)
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                  {friends.map((f) => (
-                    <Link
-                      key={f.id}
-                      href={`/chats?friend=${f.id}`}
-                      className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-100 hover:border-blue-300"
-                    >
-                      <span className="text-sm text-gray-800 font-medium truncate">
-                        {f.displayName}
-                      </span>
-                      <span className="text-xs text-gray-400 ml-2 shrink-0">
-                        {f.trackedAt
-                          ? new Date(f.trackedAt).toLocaleDateString('ja-JP', {
-                              year: 'numeric',
-                              month: '2-digit',
-                              day: '2-digit',
-                            })
-                          : '—'}
-                      </span>
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            )}
+            <RefFriendsPanel refDetailLoading={refDetailLoading} friends={friends} />
           </td>
         </tr>
       )}
     </Fragment>
+  )
+}
+
+/**
+ * ref から追加された友だち一覧。表 (デスクトップ) とカード (モバイル) の
+ * どちらの展開表示からも同じものを使う。
+ */
+function RefFriendsPanel({
+  refDetailLoading,
+  friends,
+}: {
+  refDetailLoading: boolean
+  friends: RefFriend[] | null
+}) {
+  if (refDetailLoading) return <p className="text-sm text-gray-400">読み込み中…</p>
+  if (!friends) return <p className="text-sm text-gray-400">読み込めませんでした</p>
+  if (friends.length === 0) {
+    return <p className="text-sm text-gray-400">この ref から追加した友だちはまだいません</p>
+  }
+  return (
+    <div>
+      <p className="text-xs font-semibold text-gray-500 uppercase mb-3">
+        この ref から追加した友だち ({friends.length}人)
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        {friends.map((f) => (
+          <Link
+            key={f.id}
+            href={`/chats?friend=${f.id}`}
+            className="flex min-h-[44px] items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-100 hover:border-blue-300"
+          >
+            <span className="text-sm text-gray-800 font-medium truncate">{f.displayName}</span>
+            <span className="text-xs text-gray-400 ml-2 shrink-0">
+              {f.trackedAt
+                ? new Date(f.trackedAt).toLocaleDateString('ja-JP', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                  })
+                : '—'}
+            </span>
+          </Link>
+        ))}
+      </div>
+    </div>
   )
 }
