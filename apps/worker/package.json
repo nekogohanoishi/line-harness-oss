@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "vite dev",
     "test": "pnpm --filter @line-crm/shared build && vitest run",
-    "build": "pnpm --filter @line-crm/shared build && vite build",
+    "build": "pnpm --filter @line-crm/shared build && vite build && pnpm run sync:admin",
+    "build:with-admin": "pnpm --filter web build && pnpm run build",
+    "sync:admin": "node scripts/sync-admin-assets.mjs",
     "preview": "vite preview",
-    "deploy": "pnpm --filter @line-crm/shared build && vite build && wrangler deploy",
+    "deploy": "pnpm run build:with-admin && wrangler deploy",
     "typecheck": "pnpm --filter @line-crm/shared build && tsc --noEmit"
   },
   "dependencies": {

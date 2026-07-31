@@ -9,9 +9,17 @@ workers_dev = true
 # ═══════════════════════════════════════════════════════════════
 account_id = "YOUR_DEV_ACCOUNT_ID"
 
+# 静的アセット。LIFF ページ (dist/client/*) に加えて、管理画面の
+# Next.js static export を dist/client/admin/ へ同期して同一オリジン配信する
+# (apps/worker/scripts/sync-admin-assets.mjs)。
+# html_handling = "auto-trailing-slash" により /admin/events/bookings が
+# admin/events/bookings.html へ解決されるので、SPA のディープリンクが 200 で返る。
+# not_found_handling = "none" は「アセットに無いパスは Worker へ渡す」既定動作。
 [assets]
 directory = "dist/client"
 binding = "ASSETS"
+html_handling = "auto-trailing-slash"
+not_found_handling = "none"
 
 [[d1_databases]]
 binding = "DB"
@@ -25,10 +33,15 @@ bucket_name = "line-harness-images"
 [triggers]
 crons = ["*/5 * * * *", "0 */6 * * *"]
 
+# ADMIN_ORIGIN は「管理画面のベースURL」。同一オリジン配信では Worker 自身の
+# URL + /admin を指す。CORS 判定では origin 部分だけを見るので、パスは
+# LINE 通知内のディープリンク生成にのみ効く。
+# 同一オリジンなので ADMIN_ALLOW_CROSS_SITE = "false" → Cookie は SameSite=Lax。
+# これで iOS Safari 等のサードパーティ Cookie ブロックの影響を受けない。
 [vars]
 WORKER_URL = "https://line-harness.nekogohanoishi.workers.dev"
-ADMIN_ORIGIN = "https://line-harness-admin-ee5e2a72.pages.dev"
-ADMIN_ALLOW_CROSS_SITE = "true"
+ADMIN_ORIGIN = "https://line-harness.nekogohanoishi.workers.dev/admin"
+ADMIN_ALLOW_CROSS_SITE = "false"
 
 # ═══════════════════════════════════════════════════════════════
 # 本番環境 (aiagent.mini@)
@@ -41,6 +54,8 @@ account_id = "YOUR_ACCOUNT_ID"
 [env.production.assets]
 directory = "dist/client"
 binding = "ASSETS"
+html_handling = "auto-trailing-slash"
+not_found_handling = "none"
 
 [[env.production.d1_databases]]
 binding = "DB"
@@ -56,5 +71,5 @@ crons = ["*/5 * * * *", "0 */6 * * *"]
 
 [env.production.vars]
 WORKER_URL = "https://line-harness.nekogohanoishi.workers.dev"
-ADMIN_ORIGIN = "https://line-harness-admin-ee5e2a72.pages.dev"
-ADMIN_ALLOW_CROSS_SITE = "true"
+ADMIN_ORIGIN = "https://line-harness.nekogohanoishi.workers.dev/admin"
+ADMIN_ALLOW_CROSS_SITE = "false"

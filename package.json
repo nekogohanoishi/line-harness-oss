@@ -6,7 +6,8 @@
   "scripts": {
     "dev:worker": "pnpm --filter worker dev",
     "dev:web": "pnpm --filter web dev",
-    "build": "pnpm -r build",
+    "_comment_build": "worker の build は apps/web/out を dist/client/admin へ同期するので、web より後に走らせる必要がある",
+    "build": "pnpm -r --filter=!worker build && pnpm --filter worker build",
     "deploy:worker": "pnpm --filter worker deploy",
     "deploy:web": "pnpm --filter web build",
     "db:migrate": "wrangler d1 execute line-crm --file=packages/db/schema.sql",

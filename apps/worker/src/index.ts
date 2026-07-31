@@ -66,7 +66,7 @@ import { accountSettings } from './routes/account-settings.js';
 import { setup } from './routes/setup.js';
 import { autoReplies } from './routes/auto-replies.js';
 import { adminAuth } from './routes/admin-auth.js';
-import { resolveCorsOrigin } from './middleware/admin-auth-config.js';
+import { ADMIN_BASE_PATH, resolveCorsOrigin } from './middleware/admin-auth-config.js';
 import booking from './routes/booking.js';
 import events from './routes/events.js';
 import webinar from './routes/webinar.js';
@@ -529,7 +529,23 @@ app.notFound(async (c) => {
     return c.json({ success: false, error: 'Not found' }, 404);
   }
   // Serve static assets (admin dashboard, LIFF pages)
-  return c.env.ASSETS.fetch(c.req.raw);
+  const res = await c.env.ASSETS.fetch(c.req.raw);
+
+  // 管理画面 (Next.js static export) は dist/client/admin/ 配下へ同期している。
+  // 実在ルートは各 .html として出力されるので、Cloudflare の assets ルータが
+  // html_handling = "auto-trailing-slash" で解決し、そもそもここへ来ない。
+  // ここへ来るのは未知の /admin パスなので、export された 404.html を返して
+  // 生の Worker 404 が出ないようにする（SPA としての体裁を保つ）。
+  if (res.status === 404 && (path === ADMIN_BASE_PATH || path.startsWith(`${ADMIN_BASE_PATH}/`))) {
+    const notFoundUrl = new URL(c.req.url);
+    notFoundUrl.pathname = `${ADMIN_BASE_PATH}/404.html`;
+    notFoundUrl.search = '';
+    const fallback = await c.env.ASSETS.fetch(new Request(notFoundUrl.toString(), { method: 'GET' }));
+    if (fallback.status === 200) {
+      return new Response(fallback.body, { status: 404, headers: fallback.headers });
+    }
+  }
+  return res;
 });
 
 // Scheduled handler for cron triggers — runs for all active LINE accounts
