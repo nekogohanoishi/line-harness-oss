@@ -19,6 +19,7 @@ import ScheduleInput, {
 import BulkPreviewModal from '@/components/scenarios/bulk-preview-modal'
 import ActionMenu from '@/components/scenarios/action-menu'
 import EditSheet from '@/components/scenarios/edit-sheet'
+import { Sheet, SheetButton } from '@/components/ui'
 
 type ScenarioWithSteps = Scenario & { steps: ScenarioStep[] }
 
@@ -1524,62 +1525,62 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
         onClose={() => setPreviewOpen(false)}
       />
 
-      {/* テスト受信者 未設定時の簡易登録モーダル */}
-      {recipientModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-5 space-y-3">
-            <h3 className="text-sm font-semibold text-gray-800">テスト受信者を選択</h3>
-            <p className="text-xs text-gray-500">
-              検索して友だちを選び、保存すると自動でテスト送信を再実行します。
-            </p>
-            <input
-              type="text"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-              placeholder="名前で検索..."
-              value={recipientQuery}
-              onChange={(e) => setRecipientQuery(e.target.value)}
-            />
-            <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
-              {recipientSearching ? (
-                <p className="p-3 text-xs text-gray-400">検索中...</p>
-              ) : recipientResults.length === 0 ? (
-                <p className="p-3 text-xs text-gray-400">該当する友だちがいません</p>
-              ) : (
-                recipientResults.map((f) => (
-                  <label key={f.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">
-                    <input
-                      type="checkbox"
-                      checked={recipientSelected.has(f.id)}
-                      onChange={() => toggleRecipientSelected(f.id)}
-                      className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
-                    />
-                    <span>{f.displayName || '(名前未設定)'}</span>
-                  </label>
-                ))
-              )}
-            </div>
-            <p className="text-xs text-gray-500">選択中: {recipientSelected.size}人</p>
-            {recipientError && <p className="text-xs text-red-600">{recipientError}</p>}
-            <div className="flex flex-col sm:flex-row gap-2 pt-1">
-              <button
-                onClick={handleSaveRecipients}
-                disabled={recipientSaving || recipientSelected.size === 0}
-                className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
-                style={{ backgroundColor: '#06C755' }}
-              >
-                {recipientSaving ? '保存中...' : '保存してテスト送信'}
-              </button>
-              <button
-                onClick={closeRecipientModal}
-                disabled={recipientSaving}
-                className="px-4 py-2 min-h-[44px] text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-              >
-                キャンセル
-              </button>
-            </div>
+      {/* テスト受信者 未設定時の簡易登録シート (モバイルはボトムシート) */}
+      <Sheet
+        open={recipientModalOpen}
+        onClose={closeRecipientModal}
+        busy={recipientSaving}
+        title="テスト受信者を選択"
+        description="検索して友だちを選び、保存すると自動でテスト送信を再実行します。"
+        footer={
+          <>
+            <SheetButton onClick={closeRecipientModal} disabled={recipientSaving}>
+              キャンセル
+            </SheetButton>
+            <SheetButton
+              variant="primary"
+              onClick={handleSaveRecipients}
+              disabled={recipientSelected.size === 0}
+              busy={recipientSaving}
+              busyLabel="保存中..."
+              className="!bg-[#06C755] hover:!bg-[#05b34c]"
+            >
+              保存してテスト送信
+            </SheetButton>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <input
+            type="text"
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 min-h-[44px] text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+            placeholder="名前で検索..."
+            value={recipientQuery}
+            onChange={(e) => setRecipientQuery(e.target.value)}
+          />
+          <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+            {recipientSearching ? (
+              <p className="p-3 text-xs text-gray-400">検索中...</p>
+            ) : recipientResults.length === 0 ? (
+              <p className="p-3 text-xs text-gray-400">該当する友だちがいません</p>
+            ) : (
+              recipientResults.map((f) => (
+                <label key={f.id} className="flex min-h-[44px] items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-gray-50">
+                  <input
+                    type="checkbox"
+                    checked={recipientSelected.has(f.id)}
+                    onChange={() => toggleRecipientSelected(f.id)}
+                    className="w-5 h-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                  />
+                  <span>{f.displayName || '(名前未設定)'}</span>
+                </label>
+              ))
+            )}
           </div>
+          <p className="text-xs text-gray-500">選択中: {recipientSelected.size}人</p>
+          {recipientError && <p className="text-xs text-red-600">{recipientError}</p>}
         </div>
-      )}
+      </Sheet>
     </div>
   )
 }

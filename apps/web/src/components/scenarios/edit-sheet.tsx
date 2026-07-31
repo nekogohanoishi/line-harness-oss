@@ -20,7 +20,12 @@ interface EditSheetProps {
  * - デスクトップ (>= md): 従来どおりページ内にインライン展開する (既存レイアウトを維持)。
  *
  * ブレークポイントの出し分けは CSS だけで行うため、SSR と初回描画がずれない。
- * 共通の `components/ui/sheet` が用意されたら、この実装をそのまま差し替えられる。
+ *
+ * 共通の `components/ui/sheet` を使わないのは、あちらが全画面幅でモーダル
+ * (sm 以上は max-w-lg の中央モーダル) になるため。ステップ編集フォームは
+ * Flex ビルダーの「編集 + プレビュー横並び」に md:max-w-3xl が必要で、
+ * デスクトップではページ内インラインのままにしたい。小さな確認ダイアログは
+ * 共通 Sheet を使うこと。
  */
 export default function EditSheet({ open, title, onClose, footer, children }: EditSheetProps) {
   // モバイルでシートを開いている間だけ背面のスクロールを止める。
