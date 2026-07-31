@@ -5,13 +5,17 @@ import Header from '@/components/layout/header'
 import { bookingApi, type BookingRequest } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 
+// 「全件」を先頭 & 初期表示にする。承認不要メニューの予約は最初から
+// confirmed で入るため、「未承認」を初期タブにすると新着予約が 1 件も
+// 表示されず「予約が入ったのに見えない」事故になる。
+// (events/bookings で同じ事故を起こした 4a0e558 と同じ理由)
 const STATUS_TABS: Array<{ key: string; label: string }> = [
+  { key: 'all', label: '全件' },
   { key: 'requested', label: '未承認' },
   { key: 'confirmed', label: '確定' },
   { key: 'rejected', label: '拒否' },
   { key: 'expired', label: '期限切れ' },
   { key: 'cancelled', label: 'キャンセル' },
-  { key: 'all', label: '全件' },
 ]
 
 const statusBadgeColor: Record<string, string> = {
@@ -55,7 +59,7 @@ function formatJpDateTime(iso: string): string {
 
 export default function BookingsPage() {
   const { selectedAccountId } = useAccount()
-  const [tab, setTab] = useState<string>('requested')
+  const [tab, setTab] = useState<string>('all')
   const [items, setItems] = useState<BookingRequest[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

@@ -1944,6 +1944,33 @@ describe('admin bookings management', () => {
     expect(body.items.map((x) => x.id)).toEqual(['b1']);
   });
 
+  // 管理画面の「全件」タブが status=all を送っても、実ステータスとして
+  // 絞り込んではいけない。絞り込むと 1 件も一致せず、予約があるのに
+  // 「該当する予約はありません」と表示される。
+  test('GET /:id/bookings treats status=all as no filter', async () => {
+    const state = {
+      events: [baseEvent({ id: 'e1', line_account_id: 'la1' })],
+      slots: [
+        { id: 's1', event_id: 'e1', starts_at: '2099-06-01T10:00:00Z', ends_at: '2099-06-01T12:00:00Z', capacity: null, is_active: 1, sort_order: 0, deleted_at: null },
+      ],
+      bookings: [
+        { id: 'b1', event_id: 'e1', slot_id: 's1', friend_id: 'f1', line_account_id: 'la1', status: 'requested' } as BookingRow & Record<string, unknown>,
+        { id: 'b2', event_id: 'e1', slot_id: 's1', friend_id: 'f1', line_account_id: 'la1', status: 'confirmed' } as BookingRow & Record<string, unknown>,
+        { id: 'b3', event_id: 'e1', slot_id: 's1', friend_id: 'f2', line_account_id: 'la1', status: 'expired' } as BookingRow & Record<string, unknown>,
+        { id: 'b4', event_id: 'e1', slot_id: 's1', friend_id: 'f2', line_account_id: 'la1', status: 'cancelled' } as BookingRow & Record<string, unknown>,
+      ],
+      friends: [
+        { id: 'f1', line_account_id: 'la1', line_user_id: 'U1' },
+        { id: 'f2', line_account_id: 'la1', line_user_id: 'U2' },
+      ],
+    };
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events/e1/bookings?account_id=la1&status=all');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: Array<{ id: string }> };
+    expect(body.items.map((x) => x.id).sort()).toEqual(['b1', 'b2', 'b3', 'b4']);
+  });
+
   test('POST decide confirm transitions to confirmed and creates reminders', async () => {
     const state = {
       events: [baseEvent({ id: 'e1', line_account_id: 'la1', reminder_day_before_enabled: 1, reminder_hours_before: 2 })],

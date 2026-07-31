@@ -1275,7 +1275,11 @@ events.get('/api/events/admin/events/:id/bookings', async (c) => {
   const slot_id = c.req.query('slot_id');
   const conditions = ['b.event_id = ?'];
   const params: unknown[] = [event_id];
-  if (status) {
+  // 'all' は管理画面の「全件」タブが表す擬似ステータスで、実際の
+  // event_bookings.status には存在しない。そのまま WHERE b.status = 'all'
+  // にすると 1 件も一致せず、予約があるのに一覧が空表示になる。
+  // /api/booking/admin/requests と同じく「絞り込みなし」として扱う。
+  if (status && status !== 'all') {
     conditions.push('b.status = ?');
     params.push(status);
   }
