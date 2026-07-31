@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Header from '@/components/layout/header'
@@ -133,9 +134,9 @@ export default function StaffShiftsPage() {
       ) : !id ? (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center text-sm text-gray-500">
           staff_id が指定されていません。
-          <a href="/booking/staff" className="ml-1 text-blue-600 underline">
+          <Link href="/booking/staff" className="ml-1 text-blue-600 underline">
             スタッフ一覧
-          </a>
+          </Link>
           から開き直してください。
         </div>
       ) : (

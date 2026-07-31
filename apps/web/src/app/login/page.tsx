@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { API_BASE } from '@/lib/api'
 
 type LoginResponse = {
   success?: boolean
@@ -24,13 +25,8 @@ export default function LoginPage() {
     setError('')
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL
-      if (!apiUrl) {
-        setError('NEXT_PUBLIC_API_URL is not set in build env')
-        setLoading(false)
-        return
-      }
-      const res = await fetch(`${apiUrl}/api/admin-auth/login`, {
+      // API_BASE は同一オリジン運用では空文字（相対パス）。
+      const res = await fetch(`${API_BASE}/api/admin-auth/login`, {
         method: 'POST',
         credentials: 'include',
         headers: { Authorization: `Bearer ${apiKey.trim()}` },

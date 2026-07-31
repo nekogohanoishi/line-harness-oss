@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import MessageVariableButton from '@/components/message-variable-button'
@@ -188,7 +189,7 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
               </select>
               {templates.length === 0 && (
                 <p className="text-[11px] text-amber-600 mt-1">
-                  テンプレートがありません。<a href="/templates" className="underline">/templates</a> で作成してください。
+                  テンプレートがありません。<Link href="/templates" className="underline">/templates</Link> で作成してください。
                 </p>
               )}
             </div>

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { api } from '@/lib/api'
+import { useWorkerOrigin } from '@/lib/use-worker-origin'
 import CcPromptButton from '@/components/cc-prompt-button'
 import { useAccount } from '@/contexts/account-context'
 
@@ -24,8 +25,6 @@ const ccPrompts = [
 具体的なステップ配信の構成を含めてください。`,
   },
 ]
-
-const WORKER_BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
 
 interface DashboardStats {
   friendCount: number | null
@@ -75,6 +74,7 @@ function StatCard({ title, value, loading, icon, href, accentColor = '#06C755' }
 
 export default function DashboardPage() {
   const { selectedAccountId, selectedAccount } = useAccount()
+  const workerOrigin = useWorkerOrigin()
   const [stats, setStats] = useState<DashboardStats>({
     friendCount: null,
     activeScenarioCount: null,
@@ -155,7 +155,7 @@ export default function DashboardPage() {
 
       {/* Demo banner */}
       <a
-        href={`${WORKER_BASE}/auth/line?ref=dashboard`}
+        href={`${workerOrigin}/auth/line?ref=dashboard`}
         target="_blank"
         rel="noopener noreferrer"
         className="block mb-6 p-4 rounded-xl border border-green-200 bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-100 hover:to-emerald-100 transition-colors"

@@ -4,12 +4,8 @@ import { useState, useEffect, useCallback } from 'react'
 import Header from '@/components/layout/header'
 
 import { fetchApi } from '@/lib/api'
+import { useWorkerOrigin } from '@/lib/use-worker-origin'
 import { useAccount } from '@/contexts/account-context'
-
-const WORKER_BASE = process.env.NEXT_PUBLIC_API_URL
-if (!WORKER_BASE) {
-  throw new Error('NEXT_PUBLIC_API_URL is not set. Build cannot proceed.')
-}
 
 interface RefRoute {
   refCode: string
@@ -40,6 +36,7 @@ interface RefDetailData {
 
 export default function AttributionPage() {
   const { selectedAccountId } = useAccount()
+  const workerOrigin = useWorkerOrigin()
   const [summary, setSummary] = useState<RefSummaryData | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedRef, setSelectedRef] = useState<string | null>(null)
@@ -86,7 +83,7 @@ export default function AttributionPage() {
   }
 
   const handleCopy = async (refCode: string) => {
-    const url = `${WORKER_BASE}/auth/line?ref=${encodeURIComponent(refCode)}`
+    const url = `${workerOrigin}/auth/line?ref=${encodeURIComponent(refCode)}`
     await navigator.clipboard.writeText(url)
     setCopiedCode(refCode)
     setTimeout(() => setCopiedCode(null), 2000)
@@ -150,7 +147,7 @@ export default function AttributionPage() {
             </thead>
             <tbody className="divide-y divide-gray-200">
               {summary.routes.map((route) => {
-                const authUrl = `${WORKER_BASE}/auth/line?ref=${encodeURIComponent(route.refCode)}`
+                const authUrl = `${workerOrigin}/auth/line?ref=${encodeURIComponent(route.refCode)}`
                 const isExpanded = selectedRef === route.refCode
                 return (
                   <>

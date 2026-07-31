@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { eventsApi, type EventDetail, type EventSlot } from '@/lib/api'
@@ -222,7 +223,7 @@ export default function EventForm({ accountId, eventId }: EventFormProps) {
     <div className="p-6 max-w-4xl mx-auto">
       {/* breadcrumb */}
       <div className="mb-4 flex items-center gap-2 text-sm">
-        <a href="/events" className="text-blue-600 hover:underline">イベント一覧</a>
+        <Link href="/events" className="text-blue-600 hover:underline">イベント一覧</Link>
         <span className="text-gray-400">/</span>
         <span className="text-gray-700">{eventId ? draft.name || 'イベント編集' : '新規イベント'}</span>
       </div>

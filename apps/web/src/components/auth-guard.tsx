@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
+import { API_BASE } from '@/lib/api'
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -18,9 +19,8 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     const checkSession = async () => {
       try {
         localStorage.removeItem('lh_api_key')
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL
-        if (!apiUrl) throw new Error('NEXT_PUBLIC_API_URL is not set')
-        const res = await fetch(`${apiUrl}/api/auth/session`, { credentials: 'include' })
+        // API_BASE は同一オリジン運用では空文字（相対パス）。
+        const res = await fetch(`${API_BASE}/api/auth/session`, { credentials: 'include' })
         if (!res.ok) throw new Error('unauthenticated')
         const data = await res.json()
         if (!data?.success || !data?.data) throw new Error('unauthenticated')

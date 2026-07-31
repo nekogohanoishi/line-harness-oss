@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
@@ -554,16 +555,16 @@ export default function TemplatesPage() {
                       <ul className="space-y-1.5 text-xs">
                         {drawerData.usedBy.autoReplies.map((ar) => (
                           <li key={`ar-${ar.id}`}>
-                            <a href="/auto-replies" className="text-blue-600 hover:underline">
+                            <Link href="/auto-replies" className="text-blue-600 hover:underline">
                               🔗 自動返信: {ar.keyword} <span className="text-gray-400">({ar.matchType})</span>
-                            </a>
+                            </Link>
                           </li>
                         ))}
                         {drawerData.usedBy.automations.map((au) => (
                           <li key={`au-${au.id}`}>
-                            <a href="/automations" className="text-blue-600 hover:underline">
+                            <Link href="/automations" className="text-blue-600 hover:underline">
                               🔗 オートメーション: {au.name} <span className="text-gray-400">({au.eventType})</span>
-                            </a>
+                            </Link>
                           </li>
                         ))}
                         {scenarioStepUsages.map((ss) => (

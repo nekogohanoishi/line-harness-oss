@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { api, fetchApi } from '@/lib/api'
+import { useWorkerOrigin } from '@/lib/use-worker-origin'
 import Header from '@/components/layout/header'
 import { useAccount } from '@/contexts/account-context'
 import type { EntryRoute, TrafficPool, Scenario, Tag } from '@line-crm/shared'
@@ -44,10 +45,9 @@ interface RefDetail {
   friends: RefFriend[]
 }
 
-const WORKER_BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
-
 export default function InflowLinksPage() {
   const { selectedAccountId, accounts } = useAccount()
+  const workerOrigin = useWorkerOrigin()
   const [routes, setRoutes] = useState<EntryRoute[]>([])
   const [pools, setPools] = useState<TrafficPool[]>([])
   const [scenarios, setScenarios] = useState<Scenario[]>([])
@@ -133,7 +133,7 @@ export default function InflowLinksPage() {
     setRefDetailLoading(false)
   }, [selectedAccountId])
 
-  const routeUrl = (refCode: string) => `${WORKER_BASE}/r/${encodeURIComponent(refCode)}`
+  const routeUrl = (refCode: string) => `${workerOrigin}/r/${encodeURIComponent(refCode)}`
 
   const onCopy = async (refCode: string, id: string) => {
     const url = routeUrl(refCode)

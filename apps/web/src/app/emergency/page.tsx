@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { api } from '@/lib/api'
+import { adminPath } from '@/lib/base-path'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 
@@ -92,7 +93,8 @@ export default function EmergencyPage() {
             )
           }
         } else if (id === 'switch-account') {
-          window.location.href = '/health'
+          // 生の location 遷移は basePath が自動で付かないので adminPath() を通す。
+          window.location.href = adminPath('/health')
           return
         }
         updateAction(id, { status: 'done' })

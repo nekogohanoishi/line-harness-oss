@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useWorkerOrigin } from '@/lib/use-worker-origin'
 
 interface Props {
   liffId: string | null
@@ -12,16 +13,11 @@ interface Props {
 
 // Worker base URL for webhook / OAuth / LIFF endpoint registration.
 // In production this is something like https://your-worker.your-subdomain.workers.dev.
-// We derive it from NEXT_PUBLIC_API_URL because the admin UI already requires
-// that env var (build fails without it — see apps/web/src/lib/api.ts).
-function workerBase(): string {
-  const url = process.env.NEXT_PUBLIC_API_URL
-  if (!url) return ''
-  return url.replace(/\/$/, '')
-}
-
+// 管理画面を Worker と同一オリジン (/admin) から配信する構成では
+// NEXT_PUBLIC_API_URL が空なので、useWorkerOrigin() が
+// window.location.origin から導出する。
 export default function AccountSetupUrls({ liffId, heading }: Props) {
-  const base = workerBase()
+  const base = useWorkerOrigin()
   const webhookUrl = base ? `${base}/webhook` : ''
   const callbackUrl = base ? `${base}/auth/callback` : ''
   // For multi-account, every LIFF endpoint URL must include `?liffId=` so the

@@ -6,6 +6,8 @@ import { usePathname } from 'next/navigation'
 import { useAccount } from '@/contexts/account-context'
 import type { AccountWithStats } from '@/contexts/account-context'
 import { countryFlag } from '@/lib/country-flag'
+import { API_BASE } from '@/lib/api'
+import { adminPath } from '@/lib/base-path'
 
 // ─── メニュー定義（ユーザー目線のカテゴリ） ───
 
@@ -313,13 +315,10 @@ export default function Sidebar() {
         <button
           onClick={async () => {
             try {
-              const apiUrl = process.env.NEXT_PUBLIC_API_URL
-              if (apiUrl) {
-                await fetch(`${apiUrl}/api/auth/logout`, {
-                  method: 'POST',
-                  credentials: 'include',
-                })
-              }
+              await fetch(`${API_BASE}/api/auth/logout`, {
+                method: 'POST',
+                credentials: 'include',
+              })
             } catch {
               // Local cleanup still logs the browser out if the network call fails.
             }
@@ -327,7 +326,8 @@ export default function Sidebar() {
             localStorage.removeItem('lh_csrf')
             localStorage.removeItem('lh_staff_name')
             localStorage.removeItem('lh_staff_role')
-            window.location.href = '/login'
+            // 生の location 遷移は basePath が自動で付かないので adminPath() を通す。
+            window.location.href = adminPath('/login')
           }}
           className="flex items-center gap-2 text-xs text-gray-400 hover:text-red-500 transition-colors"
         >

@@ -101,12 +101,36 @@ export type RegistrationSurveySettings = SurveySettings & {
   } | null
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL
-if (!API_URL) {
-  throw new Error(
-    'NEXT_PUBLIC_API_URL is not set. Build cannot proceed without a valid API URL. ' +
-    'Set it in .env.production (local) or GitHub Secrets (CI).'
-  )
+/**
+ * API のベースURL。
+ *
+ * 既定は空文字 = 相対パス。管理画面は Worker と同一オリジン (`<worker>/admin`)
+ * から配信されるので、`/api/...` へ相対で投げれば CORS もサードパーティ
+ * Cookie も不要になり、iOS Safari でもセッションが維持できる。
+ *
+ * 別オリジン運用（旧 Cloudflare Pages 構成、ローカルの `next dev` から
+ * リモート Worker を叩く場合など）との後方互換のため、絶対URLを
+ * NEXT_PUBLIC_API_URL で明示すれば従来どおり動く。その場合は Worker 側で
+ * ADMIN_ORIGIN の許可と ADMIN_ALLOW_CROSS_SITE=true が必要。
+ */
+const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? '').trim().replace(/\/+$/, '')
+
+/** fetch 用のベース。同一オリジン運用では空文字（相対パス）。 */
+export const API_BASE = API_URL
+
+/**
+ * Worker の絶対オリジン。Webhook URL / 友だち追加リンク / QR など、
+ * 「画面に表示してコピーさせる」「新しいタブで開く」用途で使う。
+ *
+ * 静的エクスポートのプリレンダー時は window が無いので API_BASE をそのまま
+ * 返し、ハイドレーション後に実オリジンへ差し替える（useWorkerOrigin）。
+ * 直接呼ぶとサーバ/クライアントで値が食い違うため、レンダリング中は
+ * useWorkerOrigin() を使うこと。
+ */
+export function resolveWorkerOrigin(): string {
+  if (API_BASE) return API_BASE
+  if (typeof window !== 'undefined') return window.location.origin
+  return ''
 }
 
 /**

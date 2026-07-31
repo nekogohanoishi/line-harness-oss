@@ -1,17 +1,21 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import AppShell from '@/components/app-shell'
+import { adminPath } from '@/lib/base-path'
 
+// metadata.icons は next/link と違い basePath が自動で付かないため、
+// public/ 配下のパスは adminPath() を通す。付け忘れると /admin 配信時に
+// favicon が Worker のルート (/favicon.ico) を見て 404 になる。
 export const metadata: Metadata = {
   title: 'L Harness',
   description: 'L Harness 管理画面',
   icons: {
     icon: [
-      { url: '/favicon.ico', sizes: 'any' },
-      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: adminPath('/favicon.ico'), sizes: 'any' },
+      { url: adminPath('/favicon.svg'), type: 'image/svg+xml' },
     ],
-    shortcut: ['/favicon.ico'],
-    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
+    shortcut: [adminPath('/favicon.ico')],
+    apple: [{ url: adminPath('/apple-touch-icon.png'), sizes: '180x180', type: 'image/png' }],
   },
 }
 
