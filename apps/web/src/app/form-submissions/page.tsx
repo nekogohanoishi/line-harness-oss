@@ -220,10 +220,10 @@ export default function FormSubmissionsPage() {
       {/* Submissions table */}
       {selectedForm && (
         <section>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-baseline gap-2">
-              <h2 className="text-base font-semibold text-gray-900">{selectedForm.name}</h2>
-              <span className="text-xs text-gray-400">
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="flex min-w-0 items-baseline gap-2">
+              <h2 className="min-w-0 truncate text-base font-semibold text-gray-900">{selectedForm.name}</h2>
+              <span className="flex-shrink-0 text-xs text-gray-400">
                 {subLoading ? '読み込み中...' : `${submissions.length}件`}
               </span>
             </div>
@@ -233,7 +233,7 @@ export default function FormSubmissionsPage() {
                 setSubmissions([])
                 setDetailSubmission(null)
               }}
-              className="text-xs text-gray-400 hover:text-gray-600"
+              className="-mr-2 flex min-h-11 flex-shrink-0 items-center px-2 text-xs text-gray-400 hover:text-gray-600 sm:min-h-0"
             >
               閉じる ✕
             </button>
@@ -245,7 +245,54 @@ export default function FormSubmissionsPage() {
             <div className="bg-white rounded-lg border border-gray-200 p-8 text-center text-gray-400 text-sm">回答がありません</div>
           ) : (
             <>
-              <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
+              {/* モバイル: 横スクロールの表ではなく1件1カードで縦に積む */}
+              <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white lg:hidden">
+                {paged.map((sub) => (
+                  <li key={sub.id}>
+                    <button
+                      type="button"
+                      onClick={() => setDetailSubmission(sub)}
+                      className="w-full px-4 py-3.5 text-left active:bg-gray-50"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="min-w-0 truncate text-sm font-medium text-gray-900">
+                          {sub.friendName || '不明'}
+                        </span>
+                        <span className="flex-shrink-0 text-[11px] text-gray-400">
+                          {new Date(sub.createdAt).toLocaleString('ja-JP', {
+                            month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+                          })}
+                        </span>
+                      </div>
+                      {fieldKeys.length > 0 && (
+                        <dl className="mt-2 space-y-1">
+                          {fieldKeys.slice(0, 3).map((key) => (
+                            <div key={key} className="flex gap-2 text-xs">
+                              <dt className="w-24 flex-shrink-0 truncate text-gray-400">{fieldLabels[key] || key}</dt>
+                              <dd className="min-w-0 flex-1 truncate text-gray-700">{formatValue(sub.data[key])}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      )}
+                      {fieldKeys.length > 3 && (
+                        <p className="mt-1.5 text-[11px] text-gray-400">他 {fieldKeys.length - 3} 項目</p>
+                      )}
+                    </button>
+                    {sub.friendId && (
+                      <div className="px-4 pb-3">
+                        <Link
+                          href={`/chats?friend=${encodeURIComponent(sub.friendId)}`}
+                          className="inline-flex min-h-9 items-center text-xs font-medium text-[#06C755] hover:underline"
+                        >
+                          チャットを開く
+                        </Link>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+
+              <div className="hidden bg-white rounded-lg border border-gray-200 overflow-x-auto lg:block">
                 <table className="w-full min-w-[700px]">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
@@ -301,23 +348,23 @@ export default function FormSubmissionsPage() {
               </div>
 
               {totalPages > 1 && (
-                <div className="flex items-center justify-between mt-4">
+                <div className="flex flex-col gap-2 mt-4 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-xs text-gray-400">
                     {(page - 1) * PAGE_SIZE + 1}〜{Math.min(page * PAGE_SIZE, submissions.length)} 件 / 全{submissions.length}件
                   </p>
-                  <div className="flex gap-2">
+                  <div className="flex items-center gap-2">
                     <button
                       onClick={() => setPage((p) => Math.max(1, p - 1))}
                       disabled={page === 1}
-                      className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 disabled:opacity-30 hover:bg-gray-50"
+                      className="min-h-[44px] flex-1 px-4 text-sm rounded-lg border border-gray-200 disabled:opacity-30 hover:bg-gray-50 sm:flex-none sm:min-h-0 sm:py-1.5"
                     >
                       前へ
                     </button>
-                    <span className="px-3 py-1.5 text-sm text-gray-500">{page} / {totalPages}</span>
+                    <span className="px-2 text-sm text-gray-500 whitespace-nowrap">{page} / {totalPages}</span>
                     <button
                       onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                       disabled={page === totalPages}
-                      className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 disabled:opacity-30 hover:bg-gray-50"
+                      className="min-h-[44px] flex-1 px-4 text-sm rounded-lg border border-gray-200 disabled:opacity-30 hover:bg-gray-50 sm:flex-none sm:min-h-0 sm:py-1.5"
                     >
                       次へ
                     </button>
@@ -329,20 +376,20 @@ export default function FormSubmissionsPage() {
         </section>
       )}
 
-      {/* Detail panel */}
+      {/* Detail panel — 狭幅ではボトムシート、sm 以上は従来どおり右からのドロワー */}
       {detailSubmission && (
-        <div className="fixed inset-0 z-40 flex justify-end">
+        <div className="fixed inset-0 z-40 flex items-end justify-center sm:items-stretch sm:justify-end">
           <div
             className="absolute inset-0 bg-black/30"
             onClick={() => setDetailSubmission(null)}
             aria-hidden
           />
-          <aside className="relative h-full w-full max-w-md bg-white shadow-xl overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-5 py-4 flex items-center justify-between">
+          <aside className="relative max-h-[85dvh] w-full overflow-y-auto rounded-t-2xl bg-white shadow-xl sm:h-full sm:max-h-none sm:max-w-md sm:rounded-none">
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-5 py-3 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-gray-900">回答詳細</h3>
               <button
                 onClick={() => setDetailSubmission(null)}
-                className="text-gray-400 hover:text-gray-600 text-lg leading-none"
+                className="-mr-2 flex h-11 w-11 items-center justify-center text-gray-400 hover:text-gray-600 text-xl leading-none"
                 aria-label="閉じる"
               >
                 ×

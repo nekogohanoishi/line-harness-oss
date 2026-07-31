@@ -183,12 +183,12 @@ export default function FriendEventsPage() {
               value={searchInput}
               onChange={(event) => changeSearchInput(event.target.value)}
               placeholder="友だち名を検索"
-              className="h-10 w-full rounded-md border border-gray-300 pl-9 pr-3 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100"
+              className="h-11 w-full rounded-md border border-gray-300 pl-9 pr-3 text-sm outline-none focus:border-green-500 focus:ring-2 focus:ring-green-100 sm:h-10"
             />
           </div>
           <button
             type="submit"
-            className="h-10 rounded-md bg-[#06C755] px-5 text-sm font-medium text-white hover:bg-[#05b34c] focus:outline-none focus:ring-2 focus:ring-green-300"
+            className="h-11 rounded-md bg-[#06C755] px-5 text-sm font-medium text-white hover:bg-[#05b34c] focus:outline-none focus:ring-2 focus:ring-green-300 sm:h-10"
           >
             検索
           </button>
@@ -204,7 +204,7 @@ export default function FriendEventsPage() {
                 role="tab"
                 aria-selected={active}
                 onClick={() => applyFilter(option.value)}
-                className={`h-10 shrink-0 border-b-2 px-4 text-sm font-medium transition-colors ${
+                className={`h-11 shrink-0 border-b-2 px-4 text-sm font-medium transition-colors sm:h-10 ${
                   active
                     ? 'border-green-500 text-green-700'
                     : 'border-transparent text-gray-500 hover:text-gray-800'
@@ -277,7 +277,7 @@ export default function FriendEventsPage() {
                       </div>
                       <Link
                         href={`/chats?friend=${encodeURIComponent(event.friendId)}`}
-                        className="mt-1 block truncate text-base font-medium text-blue-600 underline decoration-blue-300 underline-offset-2 hover:text-blue-800"
+                        className="mt-1 block truncate py-1 text-base font-medium text-blue-600 underline decoration-blue-300 underline-offset-2 hover:text-blue-800"
                       >
                         {event.displayName || '名前なし'}
                       </Link>
@@ -312,7 +312,7 @@ export default function FriendEventsPage() {
             disabled={page === 1}
             title="前のページ"
             aria-label="前のページ"
-            className="flex h-9 w-9 items-center justify-center rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex h-11 w-11 items-center justify-center rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 sm:h-9 sm:w-9"
           >
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m15 18-6-6 6-6" />
@@ -325,7 +325,7 @@ export default function FriendEventsPage() {
             disabled={!hasNextPage}
             title="次のページ"
             aria-label="次のページ"
-            className="flex h-9 w-9 items-center justify-center rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex h-11 w-11 items-center justify-center rounded-md border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 sm:h-9 sm:w-9"
           >
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m9 18 6-6-6-6" />
