@@ -3,6 +3,7 @@ import pc from "picocolors";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureAuth } from "../steps/auth.js";
+import { buildAdmin } from "../steps/deploy-admin.js";
 import { wrangler } from "../lib/wrangler.js";
 import { execa } from "execa";
 
@@ -181,10 +182,11 @@ export async function runUpdate(repoDir: string): Promise<void> {
     // 別オリジン (Cloudflare Pages) へのデプロイは廃止した。Worker とドメインが
     // 違うとセッション Cookie がサードパーティ Cookie 扱いになり、iOS Safari 等の
     // 既定設定でログインが維持できなかったのが理由。
-    const webDir = join(repoDir, "apps/web");
-    s.start("管理画面 再ビルド中...");
-    await execa("pnpm", ["run", "build"], { cwd: webDir });
-    s.stop("管理画面 再ビルド完了");
+    // buildAdmin() は apps/web/.env.production を「同一オリジン用」に書き直して
+    // からビルドする。旧構成からのアップデートでは NEXT_PUBLIC_API_URL に
+    // Worker の絶対URLが残っており、そのままだと管理画面が別オリジン宛に
+    // API を叩き続けてクロスサイトのままになる（Cookie が送られない）。
+    await buildAdmin({ repoDir });
 
     // Redeploy Worker.
     //
