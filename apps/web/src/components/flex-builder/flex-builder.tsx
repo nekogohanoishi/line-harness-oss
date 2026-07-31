@@ -41,6 +41,9 @@ const tabInactiveCls = 'text-gray-500 hover:text-gray-700'
  */
 export default function FlexBuilder({ value, onChange }: FlexBuilderProps) {
   const [tab, setTab] = useState<'simple' | 'json'>(() => (canUseSimpleMode(value) ? 'simple' : 'json'))
+  // モバイルでは編集とプレビューを横並びにできないため、タブで切り替える。
+  // md 以上ではこの state を無視して従来どおり左右に並べる。
+  const [mobilePane, setMobilePane] = useState<'edit' | 'preview'>('edit')
 
   const simpleModeAvailable = useMemo(() => canUseSimpleMode(value), [value])
 
@@ -111,22 +114,22 @@ export default function FlexBuilder({ value, onChange }: FlexBuilderProps) {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 w-fit">
+      <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 w-full sm:w-fit">
         <button
           type="button"
           onClick={handleSwitchToSimple}
           disabled={!simpleModeAvailable}
           title={simpleModeAvailable ? undefined : 'この内容は簡単モードでは表現できません'}
-          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${tab === 'simple' ? tabActiveCls : tabInactiveCls}`}
+          className={`flex-1 sm:flex-none px-3 py-2 min-h-[40px] text-xs font-medium rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${tab === 'simple' ? tabActiveCls : tabInactiveCls}`}
         >
           簡単モード
         </button>
         <button
           type="button"
           onClick={handleSwitchToJson}
-          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'json' ? tabActiveCls : tabInactiveCls}`}
+          className={`flex-1 sm:flex-none px-3 py-2 min-h-[40px] text-xs font-medium rounded-md transition-colors ${tab === 'json' ? tabActiveCls : tabInactiveCls}`}
         >
-          JSONモード（上級者向け）
+          JSONモード<span className="hidden sm:inline">（上級者向け）</span>
         </button>
       </div>
 
@@ -136,8 +139,28 @@ export default function FlexBuilder({ value, onChange }: FlexBuilderProps) {
         </p>
       )}
 
+      {/* モバイル専用: 編集 / プレビューの切替 */}
+      <div className="flex items-center gap-1 rounded-lg border border-gray-200 p-1 md:hidden">
+        <button
+          type="button"
+          onClick={() => setMobilePane('edit')}
+          aria-pressed={mobilePane === 'edit'}
+          className={`flex-1 min-h-[44px] rounded-md text-xs font-medium transition-colors ${mobilePane === 'edit' ? 'bg-green-50 text-green-700' : 'text-gray-500'}`}
+        >
+          編集
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobilePane('preview')}
+          aria-pressed={mobilePane === 'preview'}
+          className={`flex-1 min-h-[44px] rounded-md text-xs font-medium transition-colors ${mobilePane === 'preview' ? 'bg-green-50 text-green-700' : 'text-gray-500'}`}
+        >
+          プレビュー
+        </button>
+      </div>
+
       <div className="flex flex-col md:flex-row gap-4">
-        <div className="md:flex-1 min-w-0 space-y-3">
+        <div className={`md:flex-1 min-w-0 space-y-3 ${mobilePane === 'edit' ? '' : 'hidden md:block'}`}>
           {tab === 'simple' ? (
             <div className="space-y-3">
               {state.bubbles.map((bubble, i) => (
@@ -156,7 +179,7 @@ export default function FlexBuilder({ value, onChange }: FlexBuilderProps) {
                 type="button"
                 onClick={handleAddBubble}
                 disabled={state.bubbles.length >= FLEX_BUILDER_MAX_CAROUSEL_BUBBLES}
-                className="w-full text-xs font-medium text-green-700 border border-dashed border-green-300 rounded-lg py-2 hover:bg-green-50 disabled:opacity-40 disabled:hover:bg-transparent"
+                className="w-full min-h-[44px] text-xs font-medium text-green-700 border border-dashed border-green-300 rounded-lg py-2 hover:bg-green-50 disabled:opacity-40 disabled:hover:bg-transparent"
               >
                 + バブルを追加{state.bubbles.length === 1 ? '（カルーセルにする）' : ''}
               </button>
@@ -175,8 +198,8 @@ export default function FlexBuilder({ value, onChange }: FlexBuilderProps) {
           )}
         </div>
 
-        <div className="md:w-72 shrink-0 space-y-2">
-          <p className="text-xs font-medium text-gray-500">プレビュー</p>
+        <div className={`md:w-72 shrink-0 space-y-2 ${mobilePane === 'preview' ? '' : 'hidden md:block'}`}>
+          <p className="hidden md:block text-xs font-medium text-gray-500">プレビュー</p>
           <div className="rounded-lg border border-gray-200 bg-white p-3 overflow-x-auto">
             <FlexPreviewComponent content={previewContent} maxWidth={260} />
           </div>

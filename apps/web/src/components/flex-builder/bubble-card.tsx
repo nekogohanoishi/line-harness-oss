@@ -45,7 +45,7 @@ function ButtonRow({ button, index, canRemove, onChange, onRemove }: ButtonRowPr
           type="button"
           onClick={onRemove}
           disabled={!canRemove}
-          className="text-xs text-red-500 hover:text-red-700 disabled:opacity-30 disabled:hover:text-red-500"
+          className="-mr-2 inline-flex min-h-[44px] items-center rounded-md px-3 text-xs text-red-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-red-500"
         >
           削除
         </button>
@@ -64,7 +64,7 @@ function ButtonRow({ button, index, canRemove, onChange, onRemove }: ButtonRowPr
           onChange={(e) => onChange({ ...button, label: e.target.value })}
         />
       </div>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <div>
           <label className={labelCls}>アクション種別</label>
           <select
@@ -132,16 +132,16 @@ export default function BubbleCard({ bubble, index, total, onChange, onDuplicate
   }
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 space-y-3">
+    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 sm:p-4 space-y-3">
       {isCarousel && (
-        <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+        <div className="flex flex-col gap-2 border-b border-gray-200 pb-2 sm:flex-row sm:items-center sm:justify-between">
           <span className="text-xs font-semibold text-gray-700">バブル {index + 1} / {total}</span>
-          <div className="flex gap-1">
+          <div className="flex flex-wrap items-center gap-1">
             <button
               type="button"
               onClick={() => onMove('left')}
               disabled={index === 0}
-              className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-200 disabled:opacity-30"
+              className="inline-flex h-11 w-11 items-center justify-center rounded text-sm text-gray-500 hover:bg-gray-200 hover:text-gray-700 disabled:opacity-30 sm:h-8 sm:w-8"
               aria-label="左へ移動"
             >
               ←
@@ -150,7 +150,7 @@ export default function BubbleCard({ bubble, index, total, onChange, onDuplicate
               type="button"
               onClick={() => onMove('right')}
               disabled={index === total - 1}
-              className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-200 disabled:opacity-30"
+              className="inline-flex h-11 w-11 items-center justify-center rounded text-sm text-gray-500 hover:bg-gray-200 hover:text-gray-700 disabled:opacity-30 sm:h-8 sm:w-8"
               aria-label="右へ移動"
             >
               →
@@ -158,14 +158,14 @@ export default function BubbleCard({ bubble, index, total, onChange, onDuplicate
             <button
               type="button"
               onClick={onDuplicate}
-              className="text-xs text-gray-600 hover:text-gray-800 px-2 py-1 rounded hover:bg-gray-200"
+              className="inline-flex min-h-[44px] items-center rounded px-3 text-xs text-gray-600 hover:bg-gray-200 hover:text-gray-800 sm:min-h-0 sm:py-1"
             >
               複製
             </button>
             <button
               type="button"
               onClick={onRemove}
-              className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50"
+              className="inline-flex min-h-[44px] items-center rounded px-3 text-xs text-red-500 hover:bg-red-50 hover:text-red-700 sm:min-h-0 sm:py-1"
             >
               このバブルを削除
             </button>
@@ -173,8 +173,8 @@ export default function BubbleCard({ bubble, index, total, onChange, onDuplicate
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-2 items-end">
-        <div className="col-span-2">
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:items-end">
+        <div className="sm:col-span-2">
           <label className={labelCls}>ヘッダーテキスト（任意）</label>
           <input
             type="text"
@@ -248,7 +248,7 @@ export default function BubbleCard({ bubble, index, total, onChange, onDuplicate
             type="button"
             onClick={addButton}
             disabled={bubble.buttons.length >= FLEX_BUILDER_MAX_BUTTONS}
-            className="text-xs font-medium text-green-700 hover:text-green-800 disabled:opacity-30 disabled:hover:text-green-700"
+            className="-mr-2 inline-flex min-h-[44px] items-center rounded-md px-3 text-xs font-medium text-green-700 hover:bg-green-50 hover:text-green-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-green-700 sm:min-h-0 sm:py-1"
           >
             + ボタンを追加
           </button>

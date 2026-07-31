@@ -17,6 +17,8 @@ import ScheduleInput, {
   type ScheduleValue,
 } from '@/components/scenarios/schedule-input'
 import BulkPreviewModal from '@/components/scenarios/bulk-preview-modal'
+import ActionMenu from '@/components/scenarios/action-menu'
+import EditSheet from '@/components/scenarios/edit-sheet'
 
 type ScenarioWithSteps = Scenario & { steps: ScenarioStep[] }
 
@@ -149,6 +151,42 @@ function formatScheduleLabel(mode: DeliveryMode | undefined, step: ScenarioStep)
   }
   // absolute_time
   return `購読開始から${step.offsetDays ?? 0}日後の ${step.deliveryTime ?? '00:00'}`
+}
+
+/** Flex JSON から最初のテキストを拾う (折りたたみ見出しの本文冒頭に使う) */
+function firstFlexText(node: unknown): string {
+  if (!node || typeof node !== 'object') return ''
+  const obj = node as Record<string, unknown>
+  if (obj.type === 'text' && typeof obj.text === 'string' && obj.text.trim()) return obj.text.trim()
+  for (const key of ['header', 'hero', 'body', 'footer', 'contents']) {
+    const child = obj[key]
+    if (Array.isArray(child)) {
+      for (const item of child) {
+        const found = firstFlexText(item)
+        if (found) return found
+      }
+    } else if (child) {
+      const found = firstFlexText(child)
+      if (found) return found
+    }
+  }
+  return ''
+}
+
+/** 折りたたんだステップカードの見出しに出す本文の冒頭 */
+function buildStepSnippet(messageType: string, content: string): string {
+  const truncate = (text: string) => (text.length > 44 ? `${text.slice(0, 44)}…` : text)
+  if (messageType === 'flex') {
+    try {
+      const text = firstFlexText(JSON.parse(content))
+      return text ? truncate(text.replace(/\s+/g, ' ')) : 'Flex メッセージ'
+    } catch {
+      return 'Flex メッセージ'
+    }
+  }
+  if (messageType === 'image') return '画像メッセージ'
+  const oneLine = content.replace(/\s+/g, ' ').trim()
+  return oneLine ? truncate(oneLine) : '(本文なし)'
 }
 
 interface StepFormState {
@@ -325,6 +363,18 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
   const stepMessageRef = useRef<HTMLTextAreaElement | null>(null)
 
   const [previewOpen, setPreviewOpen] = useState(false)
+
+  // モバイルでのステップ折りたたみ状態。デスクトップ (>= md) は CSS で常に展開するため、
+  // この state が効くのは md 未満の幅だけ。
+  const [expandedStepIds, setExpandedStepIds] = useState<Set<string>>(new Set())
+  const toggleStepExpanded = (stepId: string) => {
+    setExpandedStepIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(stepId)) next.delete(stepId)
+      else next.add(stepId)
+      return next
+    })
+  }
 
   const [stats, setStats] = useState<ScenarioStats | null>(null)
   const [templates, setTemplates] = useState<TemplateOpt[]>([])
@@ -825,7 +875,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
 
       {/* Stats Header Bar */}
       {stats && stats.enrolledTotal > 0 && (
-        <div className="mb-4 bg-white rounded-lg border border-gray-200 p-3 flex items-center gap-4 text-sm flex-wrap">
+        <div className="mb-4 bg-white rounded-lg border border-gray-200 p-3 flex items-center gap-x-3 gap-y-1 text-sm flex-wrap">
           <span className="font-medium text-gray-700">📊 集計</span>
           <span>登録 <span className="font-semibold">{stats.enrolledTotal}</span> 人</span>
           <span className="text-gray-400">/</span>
@@ -842,7 +892,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
       )}
 
       {/* Scenario Info */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6 mb-6">
         {editing ? (
           <div className="space-y-4 max-w-lg">
             <div>
@@ -885,7 +935,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
               />
               <label htmlFor="editIsActive" className="text-sm text-gray-600">有効</label>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <button
                 onClick={handleSaveScenario}
                 disabled={saving}
@@ -912,9 +962,9 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
           </div>
         ) : (
           <div>
-            <div className="flex items-start justify-between gap-4 mb-3">
-              <h2 className="text-lg font-semibold text-gray-900">{scenario.name}</h2>
-              <div className="flex items-center gap-2">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-4 mb-3">
+              <h2 className="text-lg font-semibold text-gray-900 break-words">{scenario.name}</h2>
+              <div className="flex items-center gap-2 flex-wrap shrink-0">
                 <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${modeBadge.bg} ${modeBadge.text}`}>
                   {modeBadge.label}
                 </span>
@@ -927,7 +977,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                 </span>
                 <button
                   onClick={() => setEditing(true)}
-                  className="text-xs font-medium text-green-600 hover:text-green-700 px-3 py-1.5 rounded-md hover:bg-green-50 transition-colors"
+                  className="ml-auto sm:ml-0 text-xs font-medium text-green-600 hover:text-green-700 px-3 py-2 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded-md hover:bg-green-50 transition-colors"
                 >
                   基本情報を編集
                 </button>
@@ -936,7 +986,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
             {scenario.description && (
               <p className="text-sm text-gray-500 mb-3">{scenario.description}</p>
             )}
-            <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
+            <div className="flex items-center gap-x-4 gap-y-1 text-xs text-gray-500 flex-wrap">
               <span>トリガー: {triggerOptions.find(o => o.value === scenario.triggerType)?.label ?? scenario.triggerType}</span>
               <span>ステップ数: {scenario.steps.length}</span>
               <span>作成日: {new Date(scenario.createdAt).toLocaleDateString('ja-JP')}</span>
@@ -946,20 +996,20 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
       </div>
 
       {/* Steps */}
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <div className="flex items-center justify-between mb-4">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
           <h3 className="text-sm font-semibold text-gray-800">ステップ一覧</h3>
           <div className="flex gap-2">
             <button
               onClick={() => setPreviewOpen(true)}
               disabled={sortedSteps.length === 0}
-              className="px-3 py-1.5 min-h-[44px] text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-40"
+              className="flex-1 sm:flex-none px-3 py-1.5 min-h-[44px] text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors disabled:opacity-40"
             >
               一括プレビュー
             </button>
             <button
               onClick={openAddStep}
-              className="px-3 py-1.5 min-h-[44px] text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
+              className="flex-1 sm:flex-none px-3 py-1.5 min-h-[44px] text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
               style={{ backgroundColor: '#06C755' }}
             >
               + ステップ追加
@@ -967,13 +1017,34 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
           </div>
         </div>
 
-        {/* Step form */}
-        {showStepForm && (
-          <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-            <h4 className="text-sm font-medium text-gray-700 mb-3">
-              {editingStepId ? '本文・条件を編集' : '新しいステップを追加'}
-            </h4>
-            <div className={`space-y-3 ${stepForm.inputMode === 'direct' && stepForm.messageType === 'flex' ? 'max-w-3xl' : 'max-w-lg'}`}>
+        {/* Step form: モバイルはボトムシート / デスクトップは従来どおりインライン */}
+        <EditSheet
+          open={showStepForm}
+          title={editingStepId ? '本文・条件を編集' : '新しいステップを追加'}
+          onClose={() => { setShowStepForm(false); setEditingStepId(null); setStepError('') }}
+          footer={
+            <>
+              {stepError && <p className="mb-2 text-xs text-red-600">{stepError}</p>}
+              <div className="flex gap-2">
+                <button
+                  onClick={handleSaveStep}
+                  disabled={stepSaving}
+                  className="flex-1 md:flex-none px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
+                  style={{ backgroundColor: '#06C755' }}
+                >
+                  {stepSaving ? '保存中...' : editingStepId ? 'ステップを更新' : 'ステップを追加'}
+                </button>
+                <button
+                  onClick={() => { setShowStepForm(false); setEditingStepId(null); setStepError('') }}
+                  className="flex-1 md:flex-none px-4 py-2 min-h-[44px] text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                >
+                  キャンセル
+                </button>
+              </div>
+            </>
+          }
+        >
+            <div className={`space-y-3 ${stepForm.inputMode === 'direct' && stepForm.messageType === 'flex' ? 'md:max-w-3xl' : 'md:max-w-lg'}`}>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">ステップ順序</label>
                 <input
@@ -993,26 +1064,29 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
               {/* 入力モード切替: 直接入力 / テンプレート参照 */}
               <div className="space-y-2">
                 <label className="block text-xs font-medium text-gray-600">メッセージの指定方法</label>
-                <div className="flex gap-4 text-sm">
-                  <label className="flex items-center gap-2 cursor-pointer">
+                <div className="flex flex-col sm:flex-row sm:gap-4 text-sm">
+                  <label className="flex items-center gap-2 cursor-pointer min-h-[44px] sm:min-h-0">
                     <input
                       type="radio"
+                      className="w-4 h-4"
                       checked={stepForm.inputMode === 'direct'}
                       onChange={() => setStepForm({ ...stepForm, inputMode: 'direct', templateId: null, surveyId: null })}
                     />
                     <span>直接入力</span>
                   </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
+                  <label className="flex items-center gap-2 cursor-pointer min-h-[44px] sm:min-h-0">
                     <input
                       type="radio"
+                      className="w-4 h-4"
                       checked={stepForm.inputMode === 'template'}
                       onChange={() => setStepForm({ ...stepForm, inputMode: 'template', surveyId: null })}
                     />
                     <span>テンプレートを使う</span>
                   </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
+                  <label className="flex items-center gap-2 cursor-pointer min-h-[44px] sm:min-h-0">
                     <input
                       type="radio"
+                      className="w-4 h-4"
                       checked={stepForm.inputMode === 'survey'}
                       onChange={() => setStepForm({
                         ...stepForm,
@@ -1116,8 +1190,8 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                       </div>
                       <textarea
                         ref={stepMessageRef}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"
-                        rows={4}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-y min-h-[140px]"
+                        rows={5}
                         placeholder="メッセージ内容を入力..."
                         value={stepForm.messageContent}
                         onChange={(e) => setStepForm({ ...stepForm, messageContent: e.target.value })}
@@ -1248,27 +1322,8 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                 </div>
               </div>
 
-              {stepError && <p className="text-xs text-red-600">{stepError}</p>}
-
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSaveStep}
-                  disabled={stepSaving}
-                  className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity"
-                  style={{ backgroundColor: '#06C755' }}
-                >
-                  {stepSaving ? '保存中...' : editingStepId ? 'ステップを更新' : 'ステップを追加'}
-                </button>
-                <button
-                  onClick={() => { setShowStepForm(false); setEditingStepId(null); setStepError('') }}
-                  className="px-4 py-2 min-h-[44px] text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-                >
-                  キャンセル
-                </button>
-              </div>
             </div>
-          </div>
-        )}
+        </EditSheet>
 
         {/* Steps list */}
         {sortedSteps.length === 0 ? (
@@ -1277,14 +1332,25 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
           </div>
         ) : (
           <div className="space-y-3">
-            {sortedSteps.map((step, idx) => (
+            {sortedSteps.map((step, idx) => {
+              // テンプレ参照時は、表示も「現在のテンプレ内容」を見せる。
+              // (templates state には list で取得済みの最新内容が入っている)
+              const survey = getSurveyFromContent(step.messageContent, surveys)
+              const tpl = step.templateId ? templates.find((t) => t.id === step.templateId) : null
+              const displayType = survey ? 'flex' : tpl ? tpl.messageType : step.messageType
+              const displayContent = survey ? buildSurveyFlexContent(survey) : tpl ? tpl.messageContent : step.messageContent
+              const stat = stats?.steps.find((s) => s.stepOrder === step.stepOrder)
+              // モバイルのみ折りたたむ。デスクトップは md: クラスで常に展開する。
+              const isExpanded = expandedStepIds.has(step.id)
+
+              return (
               <div
                 key={step.id}
-                className="border border-gray-200 rounded-lg p-4 hover:border-gray-300 transition-colors"
+                className="border border-gray-200 rounded-lg p-3 sm:p-4 hover:border-gray-300 transition-colors"
               >
-                <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start justify-between gap-2 sm:gap-3">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-3 mb-2 flex-wrap">
+                    <div className="flex items-center gap-2 sm:gap-3 mb-2 flex-wrap">
                       <span
                         className="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold text-white shrink-0"
                         style={{ backgroundColor: '#06C755' }}
@@ -1299,7 +1365,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                       }`}>
                         {messageTypeOptions.find(o => o.value === step.messageType)?.label ?? step.messageType}
                       </span>
-                      {getSurveyFromContent(step.messageContent, surveys) && (
+                      {survey && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-50 text-green-700">
                           アンケート
                         </span>
@@ -1309,64 +1375,97 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                           条件: {formatConditionLabel(step.conditionType)}
                         </span>
                       )}
-                      {(() => {
-                        const stat = stats?.steps.find((s) => s.stepOrder === step.stepOrder)
-                        return stat ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-50 text-purple-700">
-                            📊 {stat.reachedCount}人到達 ({Math.round(stat.reachRate * 100)}%)
-                          </span>
-                        ) : null
-                      })()}
+                      {stat && (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-50 text-purple-700">
+                          📊 {stat.reachedCount}人到達 ({Math.round(stat.reachRate * 100)}%)
+                        </span>
+                      )}
                     </div>
-                    {(() => {
-                      // テンプレ参照時は、表示も「現在のテンプレ内容」を見せる。
-                      // (templates state には list で取得済みの最新内容が入っている)
-                      const survey = getSurveyFromContent(step.messageContent, surveys)
-                      const tpl = step.templateId ? templates.find((t) => t.id === step.templateId) : null
-                      const displayType = survey ? 'flex' : tpl ? tpl.messageType : step.messageType
-                      const displayContent = survey ? buildSurveyFlexContent(survey) : tpl ? tpl.messageContent : step.messageContent
-                      return (
-                        <div className="text-sm text-gray-700 bg-gray-50 rounded-md px-3 py-2">
-                          {displayType === 'text' ? (
-                            <p className="whitespace-pre-wrap break-words">{displayContent}</p>
-                          ) : displayType === 'flex' ? (
-                            <FlexPreview content={displayContent} />
-                          ) : displayType === 'image' ? (
-                            <ImagePreview content={displayContent} />
-                          ) : (
-                            <p className="whitespace-pre-wrap break-words">{displayContent}</p>
-                          )}
-                        </div>
-                      )
-                    })()}
-                    {step.templateId && (
-                      <p className="mt-2 text-xs text-amber-700">
-                        📋 テンプレ: {templates.find((t) => t.id === step.templateId)?.name ?? step.templateId}
+
+                    {/* 折りたたみ時の本文冒頭 (モバイルのみ) */}
+                    {!isExpanded && (
+                      <p className="md:hidden text-xs text-gray-500 truncate">
+                        {buildStepSnippet(displayType, displayContent)}
                       </p>
                     )}
-                    {(() => {
-                      const survey = getSurveyFromContent(step.messageContent, surveys)
-                      return survey ? (
-                        <p className="mt-2 text-xs text-green-700">
+
+                    {/* 詳細: モバイルは折りたたみ / デスクトップは常時表示 */}
+                    <div className={isExpanded ? 'block' : 'hidden md:block'}>
+                      <div className="text-sm text-gray-700 bg-gray-50 rounded-md px-3 py-2 overflow-x-auto">
+                        {displayType === 'flex' ? (
+                          <FlexPreview content={displayContent} />
+                        ) : displayType === 'image' ? (
+                          <ImagePreview content={displayContent} />
+                        ) : (
+                          <p className="whitespace-pre-wrap break-words">{displayContent}</p>
+                        )}
+                      </div>
+                      {step.templateId && (
+                        <p className="mt-2 text-xs text-amber-700 break-words">
+                          📋 テンプレ: {tpl?.name ?? step.templateId}
+                        </p>
+                      )}
+                      {survey && (
+                        <p className="mt-2 text-xs text-green-700 break-words">
                           アンケート: {survey.form.name}
                         </p>
-                      ) : null
-                    })()}
-                    {step.onReachTagId && (
-                      <p className="mt-1 text-xs text-green-700">
-                        🏷 到達タグ: {tags.find((t) => t.id === step.onReachTagId)?.name ?? step.onReachTagId}
-                      </p>
-                    )}
-                    {step.conditionType && step.conditionValue && (
-                      <p className="mt-1 text-xs text-amber-700">
-                        配信条件: {formatConditionLabel(step.conditionType)} / {formatConditionValue(step.conditionType, step.conditionValue, tags, trackedLinks)}
-                      </p>
-                    )}
+                      )}
+                      {step.onReachTagId && (
+                        <p className="mt-1 text-xs text-green-700 break-words">
+                          🏷 到達タグ: {tags.find((t) => t.id === step.onReachTagId)?.name ?? step.onReachTagId}
+                        </p>
+                      )}
+                      {step.conditionType && step.conditionValue && (
+                        <p className="mt-1 text-xs text-amber-700 break-words">
+                          配信条件: {formatConditionLabel(step.conditionType)} / {formatConditionValue(step.conditionType, step.conditionValue, tags, trackedLinks)}
+                        </p>
+                      )}
+                    </div>
+
                     {testSendMessages[step.id] && (
                       <p className="mt-1 text-xs text-blue-700">{testSendMessages[step.id]}</p>
                     )}
                   </div>
-                  <div className="flex flex-col items-stretch gap-1 shrink-0">
+
+                  {/* モバイル: 展開トグル + 操作をケバブメニューに集約 */}
+                  <div className="flex items-start shrink-0 md:hidden">
+                    <button
+                      type="button"
+                      onClick={() => toggleStepExpanded(step.id)}
+                      aria-expanded={isExpanded}
+                      aria-label={isExpanded ? '詳細を閉じる' : '詳細を開く'}
+                      className="inline-flex h-11 w-9 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+                    >
+                      <svg
+                        className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                        viewBox="0 0 20 20"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={2}
+                        aria-hidden="true"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 7.5l5 5 5-5" />
+                      </svg>
+                    </button>
+                    <ActionMenu
+                      label={`ステップ ${step.stepOrder} の操作`}
+                      items={[
+                        { label: '本文・条件を編集', tone: 'primary', onSelect: () => openEditStep(step) },
+                        {
+                          label: testSendingStepId === step.id ? '送信中...' : 'テスト送信',
+                          disabled: testSendingStepId === step.id,
+                          onSelect: () => handleTestSend(step.id),
+                        },
+                        { label: '複製', onSelect: () => handleDuplicateStep(step) },
+                        { label: '↑ 上へ移動', disabled: idx === 0, onSelect: () => handleMoveStep(step.id, 'up') },
+                        { label: '↓ 下へ移動', disabled: idx === sortedSteps.length - 1, onSelect: () => handleMoveStep(step.id, 'down') },
+                        { label: '削除', tone: 'danger', onSelect: () => handleDeleteStep(step.id) },
+                      ]}
+                    />
+                  </div>
+
+                  {/* デスクトップ: 従来どおりボタンを縦に並べる */}
+                  <div className="hidden md:flex flex-col items-stretch gap-1 shrink-0">
                     <div className="flex gap-1">
                       <button
                         onClick={() => handleMoveStep(step.id, 'up')}
@@ -1413,7 +1512,8 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                   </div>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>
@@ -1460,7 +1560,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
             </div>
             <p className="text-xs text-gray-500">選択中: {recipientSelected.size}人</p>
             {recipientError && <p className="text-xs text-red-600">{recipientError}</p>}
-            <div className="flex gap-2 pt-1">
+            <div className="flex flex-col sm:flex-row gap-2 pt-1">
               <button
                 onClick={handleSaveRecipients}
                 disabled={recipientSaving || recipientSelected.size === 0}

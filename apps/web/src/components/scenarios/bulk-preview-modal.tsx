@@ -52,14 +52,15 @@ export default function BulkPreviewModal({ open, scenarioId, onClose }: Props) {
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 max-h-[80vh] overflow-y-auto"
+        className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-4 sm:p-6 max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-gray-900">一括プレビュー</h2>
           <button
             onClick={onClose}
-            className="text-sm text-gray-500 hover:bg-gray-100 px-2 py-1 rounded"
+            aria-label="閉じる"
+            className="-mr-2 inline-flex h-11 w-11 items-center justify-center rounded text-sm text-gray-500 hover:bg-gray-100"
           >
             ✕
           </button>
@@ -71,7 +72,7 @@ export default function BulkPreviewModal({ open, scenarioId, onClose }: Props) {
           </label>
           <input
             type="datetime-local"
-            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+            className="w-full sm:w-auto border border-gray-300 rounded-lg px-3 py-2 min-h-[44px] text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
             value={startAt}
             onChange={(e) => setStartAt(e.target.value)}
           />
@@ -88,10 +89,10 @@ export default function BulkPreviewModal({ open, scenarioId, onClose }: Props) {
                 key={s.stepOrder}
                 className="border border-gray-200 rounded-lg p-3 group"
               >
-                <summary className="cursor-pointer text-sm flex items-center gap-2 list-none">
-                  <span className="font-mono text-gray-500 w-8">#{s.stepOrder}</span>
-                  <span className="text-gray-700 flex-1">{s.deliveryAtLabel}</span>
-                  <span className="text-xs text-blue-600">{s.messageType}</span>
+                <summary className="cursor-pointer text-sm flex items-center gap-2 list-none min-h-[44px] sm:min-h-0">
+                  <span className="font-mono text-gray-500 w-8 shrink-0">#{s.stepOrder}</span>
+                  <span className="text-gray-700 flex-1 min-w-0 break-words">{s.deliveryAtLabel}</span>
+                  <span className="text-xs text-blue-600 shrink-0">{s.messageType}</span>
                   <span className="text-gray-400 group-open:rotate-90 transition-transform">▶</span>
                 </summary>
                 <pre className="mt-2 text-xs text-gray-700 whitespace-pre-wrap break-words bg-gray-50 p-2 rounded max-h-48 overflow-y-auto">
@@ -107,7 +108,7 @@ export default function BulkPreviewModal({ open, scenarioId, onClose }: Props) {
         <div className="mt-6 flex justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+            className="px-4 py-2 min-h-[44px] text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
           >
             閉じる
           </button>

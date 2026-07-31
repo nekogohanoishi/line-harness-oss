@@ -107,7 +107,7 @@ export default function ScenarioModePicker({ open, onClose, onCreate }: Props) {
       onClick={handleClose}
     >
       <div
-        className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6"
+        className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-4 sm:p-6 max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {stage === 'pick' && (
@@ -145,7 +145,7 @@ export default function ScenarioModePicker({ open, onClose, onCreate }: Props) {
                   setMode('relative')
                   setStage('name')
                 }}
-                className="text-xs text-gray-400 hover:text-gray-600 underline"
+                className="min-h-[44px] px-2 text-xs text-gray-400 hover:text-gray-600 underline"
               >
                 既存方式（前ステップから N 分後）で作成
               </button>
@@ -153,7 +153,7 @@ export default function ScenarioModePicker({ open, onClose, onCreate }: Props) {
             <div className="mt-4 flex justify-end">
               <button
                 onClick={handleClose}
-                className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                className="px-4 py-2 min-h-[44px] text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
               >
                 キャンセル
               </button>
@@ -198,7 +198,7 @@ export default function ScenarioModePicker({ open, onClose, onCreate }: Props) {
                   {triggerOptions.map((opt) => (
                     <label
                       key={opt.value}
-                      className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                      className={`flex items-start gap-2 p-3 rounded-lg border cursor-pointer transition-colors ${
                         triggerType === opt.value
                           ? 'border-green-500 bg-green-50'
                           : 'border-gray-200 hover:border-gray-300'
@@ -251,14 +251,14 @@ export default function ScenarioModePicker({ open, onClose, onCreate }: Props) {
               <button
                 onClick={() => setStage('pick')}
                 disabled={submitting}
-                className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg disabled:opacity-50"
+                className="px-4 py-2 min-h-[44px] text-sm text-gray-600 hover:bg-gray-100 rounded-lg disabled:opacity-50"
               >
                 ← 戻る
               </button>
               <button
                 onClick={handleCreate}
                 disabled={submitting}
-                className="px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50"
+                className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg disabled:opacity-50"
                 style={{ backgroundColor: '#06C755' }}
               >
                 {submitting ? '作成中...' : '作成して編集へ'}
