@@ -267,6 +267,39 @@ export type FriendWithTags = Friend & {
   lastUnblockedAt: string | null
 }
 export type FriendDetail = FriendWithTags & { followEvents: FriendFollowEvent[] }
+export type FriendScenarioDelivery = {
+  id: string
+  friendId: string
+  scenarioId: string
+  scenarioName: string
+  status: 'active' | 'paused' | 'delivering'
+  currentStepOrder: number
+  startedAt: string
+  nextDeliveryAt: string | null
+  updatedAt: string
+  totalSteps: number
+  sentSteps: number
+}
+export type ScenarioParticipant = {
+  id: string
+  friendId: string
+  scenarioId: string
+  status: 'active' | 'paused' | 'delivering'
+  currentStepOrder: number
+  startedAt: string
+  nextDeliveryAt: string | null
+  updatedAt: string
+  displayName: string
+  pictureUrl: string | null
+  isFollowing: boolean
+  blockedAt: string | null
+  totalSteps: number
+  sentSteps: number
+}
+export type FriendDeliveryControl = {
+  scheduledMessagesPaused: boolean
+  scheduledMessagesPausedAt: string | null
+}
 /** Friend list items, optionally hydrated with chat status (when ?includeChatStatus=true) */
 export type FriendListItem = FriendWithTags & Partial<{
   latestIncomingMessage: { content: string; messageType: string; createdAt: string } | null
@@ -312,6 +345,27 @@ export const api = {
       fetchApi<ApiResponse<{ id: string | null; name: string | null; isDefault: boolean }>>(
         `/api/friends/${id}/rich-menu`,
       ),
+    deliveryControl: (id: string) =>
+      fetchApi<ApiResponse<FriendDeliveryControl>>(`/api/friends/${id}/delivery-control`),
+    updateDeliveryControl: (id: string, action: 'pause' | 'resume') =>
+      fetchApi<ApiResponse<FriendDeliveryControl>>(`/api/friends/${id}/delivery-control`, {
+        method: 'PATCH',
+        body: JSON.stringify({ action }),
+      }),
+    scenarios: (id: string) =>
+      fetchApi<ApiResponse<FriendScenarioDelivery[]>>(`/api/friends/${id}/scenarios`),
+    updateScenarioStatus: (
+      friendId: string,
+      enrollmentId: string,
+      action: 'pause' | 'resume',
+    ) =>
+      fetchApi<ApiResponse<FriendScenarioDelivery>>(
+        `/api/friends/${friendId}/scenarios/${enrollmentId}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ action }),
+        },
+      ),
   },
   friendEvents: {
     list: (params?: FriendEventListParams) => {
@@ -341,8 +395,8 @@ export const api = {
       }),
   },
   tags: {
-    list: () =>
-      fetchApi<ApiResponse<Tag[]>>('/api/tags'),
+    list: (options?: { withCounts?: boolean }) =>
+      fetchApi<ApiResponse<Tag[]>>(`/api/tags${options?.withCounts ? '?withCounts=1' : ''}`),
     create: (data: { name: string; color: string }) =>
       fetchApi<ApiResponse<Tag>>('/api/tags', {
         method: 'POST',
@@ -534,6 +588,27 @@ export const api = {
         paused: number
         steps: Array<{ stepOrder: number; reachedCount: number; reachRate: number }>
       }>>(`/api/scenarios/${id}/stats`),
+    participants: (
+      id: string,
+      params?: {
+        status?: ScenarioParticipant['status']
+        search?: string
+        offset?: number
+        limit?: number
+      },
+    ) => {
+      const query = new URLSearchParams()
+      if (params?.status) query.set('status', params.status)
+      if (params?.search) query.set('search', params.search)
+      if (params?.offset) query.set('offset', String(params.offset))
+      if (params?.limit) query.set('limit', String(params.limit))
+      const suffix = query.toString() ? `?${query.toString()}` : ''
+      return fetchApi<ApiResponse<{
+        items: ScenarioParticipant[]
+        total: number
+        counts: { active: number; paused: number; delivering: number }
+      }>>(`/api/scenarios/${id}/participants${suffix}`)
+    },
     testSendStep: (id: string, stepId: string, accountId?: string | null) =>
       fetchApi<{ success: boolean; sent?: number; error?: string }>(
         `/api/scenarios/${id}/steps/${stepId}/test-send`,
@@ -915,6 +990,7 @@ export const api = {
       description?: string | null
       conditions?: Record<string, unknown>
       priority?: number
+      lineAccountId?: string | null
     }) =>
       fetchApi<ApiResponse<Automation>>('/api/automations', {
         method: 'POST',
@@ -1605,6 +1681,8 @@ export interface BookingRequest {
   starts_at: string;
   ends_at: string;
   status: string;
+  requested_at: string;
+  admin_seen_at: string | null;
   customer_note: string | null;
   internal_note: string | null;
   price_at_booking: number;
@@ -1717,8 +1795,20 @@ export const bookingApi = {
       withAccount(`/api/booking/admin/requests/${id}`, accountId),
       { method: 'PATCH', body: JSON.stringify({ action }) },
     ),
+  markSeen: (accountId: string, id: string) =>
+    fetchApi<{ ok: true; admin_seen_at: string }>(
+      withAccount(`/api/booking/admin/requests/${id}/seen`, accountId),
+      { method: 'POST' },
+    ),
+  restoreRequest: (accountId: string, id: string) =>
+    fetchApi<{ ok: true; status: 'requested' }>(
+      withAccount(`/api/booking/admin/requests/${id}/restore`, accountId),
+      { method: 'POST' },
+    ),
   pendingCount: (accountId: string) =>
-    fetchApi<{ count: number }>(withAccount('/api/booking/admin/pending-count', accountId)),
+    fetchApi<{ count: number; unseenCount: number }>(
+      withAccount('/api/booking/admin/pending-count', accountId),
+    ),
 };
 
 // ============================================================
@@ -1880,6 +1970,8 @@ export interface EventBookingItem {
   friend_id: string;
   line_account_id: string;
   status: string;
+  event_name?: string;
+  admin_seen_at: string | null;
   customer_note: string | null;
   internal_note: string | null;
   requested_at: string;
@@ -1954,6 +2046,10 @@ export const eventsApi = {
       withAccount(`/api/events/admin/events/${eventId}/bookings${tail}`, accountId),
     );
   },
+  listAllBookings: (accountId: string, status: string = 'all') =>
+    fetchApi<{ items: EventBookingItem[] }>(
+      withAccount(`/api/events/admin/bookings?status=${encodeURIComponent(status)}`, accountId),
+    ),
   decideBooking: (
     accountId: string,
     eventId: string,
@@ -1980,9 +2076,19 @@ export const eventsApi = {
       withAccount(`/api/events/admin/events/${eventId}/bookings/${bookingId}`, accountId),
       { method: 'PUT', body: JSON.stringify(body) },
     ),
+  markBookingSeen: (accountId: string, eventId: string, bookingId: string) =>
+    fetchApi<{ ok: true; admin_seen_at: string }>(
+      withAccount(`/api/events/admin/events/${eventId}/bookings/${bookingId}/seen`, accountId),
+      { method: 'POST' },
+    ),
+  restoreBooking: (accountId: string, eventId: string, bookingId: string) =>
+    fetchApi<{ ok: true; status: 'requested' }>(
+      withAccount(`/api/events/admin/events/${eventId}/bookings/${bookingId}/restore`, accountId),
+      { method: 'POST' },
+    ),
 
   pendingCount: (accountId: string) =>
-    fetchApi<{ count: number }>(
+    fetchApi<{ count: number; unseenCount: number }>(
       withAccount('/api/events/admin/events/notifications/pending', accountId),
     ),
 };
