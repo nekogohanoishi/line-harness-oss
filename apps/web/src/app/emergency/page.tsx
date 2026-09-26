@@ -6,7 +6,7 @@ import { adminPath } from '@/lib/base-path'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 
-type ActionStatus = 'idle' | 'confirming' | 'executing' | 'done' | 'error'
+type ActionStatus = 'idle' | 'confirming' | 'executing' | 'done' | 'partial' | 'error'
 
 interface EmergencyAction {
   id: string
@@ -14,12 +14,13 @@ interface EmergencyAction {
   description: string
   status: ActionStatus
   errorMessage?: string
+  resultMessage?: string
 }
 
 const emergencyPrompts = [
   {
-    title: '緊急: 全配信を停止するプロンプト',
-    prompt: `LINE CRM の全配信を即時停止してください。
+    title: '緊急: 予約一斉配信・シナリオ・自動化を止めるプロンプト',
+    prompt: `LINE CRM の予約済み一斉配信・シナリオ・自動化を停止してください。自動返信や送信中の配信はこの操作の対象外です。
 1. broadcasts の status が scheduled のものを全て draft に変更
 2. scenarios の isActive を全て false に変更
 3. automations の isActive を全て false に変更
@@ -39,14 +40,14 @@ export default function EmergencyPage() {
   const [actions, setActions] = useState<EmergencyAction[]>([
     {
       id: 'stop-broadcasts',
-      label: '全配信停止',
-      description: 'スケジュール済みの一斉配信を全て下書きに戻します',
+      label: '予約済み一斉配信を停止',
+      description: '予約済みの一斉配信だけを下書きに戻します。シナリオ・自動返信・送信中の配信は対象外です。',
       status: 'idle',
     },
     {
       id: 'stop-scenarios',
       label: 'シナリオ一括停止',
-      description: '全てのアクティブなシナリオ配信を無効化します',
+      description: '有効なシナリオを無効化します。自動返信や予約済み一斉配信は対象外です。',
       status: 'idle',
     },
     {
@@ -67,8 +68,8 @@ export default function EmergencyPage() {
     const action = actions.find((a) => a.id === id)
     if (!action) return
 
-    if (action.status === 'idle' || action.status === 'done' || action.status === 'error') {
-      updateAction(id, { status: 'confirming', errorMessage: undefined })
+    if (action.status === 'idle' || action.status === 'done' || action.status === 'partial' || action.status === 'error') {
+      updateAction(id, { status: 'confirming', errorMessage: undefined, resultMessage: undefined })
       return
     }
 
@@ -78,28 +79,39 @@ export default function EmergencyPage() {
       try {
         if (id === 'stop-broadcasts') {
           const res = await api.broadcasts.list()
-          if (res.success) {
-            const scheduled = res.data.filter((b) => b.status === 'scheduled')
-            await Promise.allSettled(
-              scheduled.map((b) => api.broadcasts.update(b.id, { scheduledAt: null }))
-            )
-          }
+          if (!res.success) throw new Error('予約済み一斉配信の取得に失敗しました')
+          const scheduled = res.data.filter((b) => b.status === 'scheduled')
+          const results = await Promise.allSettled(
+            scheduled.map((b) => api.broadcasts.update(b.id, { scheduledAt: null }))
+          )
+          const stopped = results.filter((result) => result.status === 'fulfilled' && result.value.success).length
+          const failed = scheduled.length - stopped
+          updateAction(id, {
+            status: failed === 0 ? 'done' : stopped > 0 ? 'partial' : 'error',
+            resultMessage: `対象 ${scheduled.length}件・停止 ${stopped}件・失敗 ${failed}件`,
+            errorMessage: failed > 0 ? '停止できなかった配信があります。配信一覧で状態を確認してください。' : undefined,
+          })
         } else if (id === 'stop-scenarios') {
           const res = await api.scenarios.list()
-          if (res.success) {
-            const active = res.data.filter((s) => s.isActive)
-            await Promise.allSettled(
-              active.map((s) => api.scenarios.update(s.id, { isActive: false }))
-            )
-          }
+          if (!res.success) throw new Error('有効なシナリオの取得に失敗しました')
+          const active = res.data.filter((s) => s.isActive)
+          const results = await Promise.allSettled(
+            active.map((s) => api.scenarios.update(s.id, { isActive: false }))
+          )
+          const stopped = results.filter((result) => result.status === 'fulfilled' && result.value.success).length
+          const failed = active.length - stopped
+          updateAction(id, {
+            status: failed === 0 ? 'done' : stopped > 0 ? 'partial' : 'error',
+            resultMessage: `対象 ${active.length}件・停止 ${stopped}件・失敗 ${failed}件`,
+            errorMessage: failed > 0 ? '停止できなかったシナリオがあります。シナリオ一覧で状態を確認してください。' : undefined,
+          })
         } else if (id === 'switch-account') {
           // 生の location 遷移は basePath が自動で付かないので adminPath() を通す。
           window.location.href = adminPath('/health')
           return
         }
-        updateAction(id, { status: 'done' })
-      } catch {
-        updateAction(id, { status: 'error', errorMessage: '実行に失敗しました。再度お試しください。' })
+      } catch (error) {
+        updateAction(id, { status: 'error', errorMessage: error instanceof Error ? error.message : '実行に失敗しました。再度お試しください。' })
       }
     }
   }
@@ -125,6 +137,8 @@ export default function EmergencyPage() {
             実行中...
           </span>
         )
+      case 'partial':
+        return <span className="text-xs font-medium text-amber-700">一部失敗</span>
       case 'error':
         return (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
@@ -172,6 +186,9 @@ export default function EmergencyPage() {
             {action.errorMessage && (
               <p className="text-xs text-red-600 mb-3">{action.errorMessage}</p>
             )}
+            {action.resultMessage && (
+              <p className="text-xs text-gray-700 mb-3" role="status">{action.resultMessage}</p>
+            )}
 
             {action.status === 'confirming' ? (
               <div className="space-y-2">
@@ -204,9 +221,9 @@ export default function EmergencyPage() {
         ))}
       </div>
 
-      {/* Current status section */}
+      {/* This page's action results, not a live delivery status. */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-        <h2 className="text-sm font-semibold text-gray-800 mb-3">現在のステータス</h2>
+        <h2 className="text-sm font-semibold text-gray-800 mb-3">この画面での実行結果</h2>
         <div className="space-y-2">
           {actions.map((action) => (
             <div key={action.id} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
@@ -224,6 +241,7 @@ export default function EmergencyPage() {
                 {action.status === 'confirming' && '確認待ち'}
                 {action.status === 'executing' && '実行中'}
                 {action.status === 'done' && '実行済み'}
+                {action.status === 'partial' && '一部失敗'}
                 {action.status === 'error' && 'エラー'}
               </span>
             </div>
