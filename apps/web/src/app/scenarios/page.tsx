@@ -96,7 +96,7 @@ export default function ScenariosPage() {
       triggerType: input.triggerType,
       triggerTagId: input.triggerTagId,
       lineAccountId: selectedAccountId,
-      isActive: true,
+      isActive: false,
       deliveryMode: input.deliveryMode,
     })
     if (res.success) {
@@ -107,24 +107,27 @@ export default function ScenariosPage() {
   }
 
   const handleToggleActive = async (id: string, current: boolean, options?: { alsoDeactivateId?: string }) => {
-    try {
-      if (options?.alsoDeactivateId) {
-        await api.scenarios.update(options.alsoDeactivateId, { isActive: false })
-      }
-      await api.scenarios.update(id, { isActive: !current })
-      loadScenarios()
-    } catch {
-      setError('ステータスの変更に失敗しました')
+    let deactivatedExisting = false
+    if (options?.alsoDeactivateId) {
+      const deactivateRes = await api.scenarios.update(options.alsoDeactivateId, { isActive: false })
+      if (!deactivateRes.success) throw new Error(deactivateRes.error || '既存シナリオを停止できませんでした')
+      deactivatedExisting = true
     }
+
+    const updateRes = await api.scenarios.update(id, { isActive: !current })
+    if (!updateRes.success) {
+      if (deactivatedExisting && options?.alsoDeactivateId) {
+        await api.scenarios.update(options.alsoDeactivateId, { isActive: true }).catch(() => undefined)
+      }
+      throw new Error(updateRes.error || '状態を変更できませんでした')
+    }
+    await loadScenarios()
   }
 
   const handleDelete = async (id: string) => {
-    try {
-      await api.scenarios.delete(id)
-      loadScenarios()
-    } catch {
-      setError('削除に失敗しました')
-    }
+    const res = await api.scenarios.delete(id)
+    if (!res.success) throw new Error(res.error || '削除できませんでした')
+    await loadScenarios()
   }
 
   return (
@@ -155,9 +158,9 @@ export default function ScenariosPage() {
       />
 
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="divide-y divide-gray-100 overflow-hidden rounded-lg border border-gray-200 bg-white">
           {[...Array(3)].map((_, i) => (
-            <div key={i} className="bg-white rounded-lg border border-gray-200 p-5 animate-pulse space-y-3">
+            <div key={i} className="p-5 animate-pulse space-y-3">
               <div className="h-4 bg-gray-200 rounded w-3/4" />
               <div className="h-3 bg-gray-100 rounded w-full" />
               <div className="flex gap-4">

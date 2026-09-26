@@ -19,9 +19,12 @@ import ScheduleInput, {
 import BulkPreviewModal from '@/components/scenarios/bulk-preview-modal'
 import ActionMenu from '@/components/scenarios/action-menu'
 import EditSheet from '@/components/scenarios/edit-sheet'
-import { Sheet, SheetButton } from '@/components/ui'
+import ScenarioStatusSheet from '@/components/scenarios/scenario-status-sheet'
+import ScenarioParticipants from '@/components/scenarios/scenario-participants'
+import { ConfirmSheet, Sheet, SheetButton } from '@/components/ui'
 
 type ScenarioWithSteps = Scenario & { steps: ScenarioStep[] }
+type ScenarioWithCount = Scenario & { stepCount?: number }
 
 const triggerOptions: { value: ScenarioTriggerType; label: string }[] = [
   { value: 'friend_add', label: '友だち追加時' },
@@ -36,9 +39,9 @@ const messageTypeOptions: { value: MessageType; label: string }[] = [
 ]
 
 const modeBadgeStyle: Record<DeliveryMode, { bg: string; text: string; label: string }> = {
-  relative: { bg: 'bg-gray-100', text: 'text-gray-600', label: 'Legacy' },
-  elapsed: { bg: 'bg-blue-50', text: 'text-blue-700', label: '経過時間' },
-  absolute_time: { bg: 'bg-amber-50', text: 'text-amber-700', label: '時刻指定' },
+  relative: { bg: 'bg-gray-100', text: 'text-gray-600', label: '前のステップから待機' },
+  elapsed: { bg: 'bg-blue-50', text: 'text-blue-700', label: '開始からの経過時間' },
+  absolute_time: { bg: 'bg-amber-50', text: 'text-amber-700', label: '指定時刻' },
 }
 
 type StepConditionType =
@@ -143,7 +146,7 @@ function formatScheduleLabel(mode: DeliveryMode | undefined, step: ScenarioStep)
     const mins = step.offsetMinutes ?? 0
     const h = Math.floor(mins / 60)
     const r = mins % 60
-    if (days === 0 && mins === 0) return '即時 (購読開始)'
+    if (days === 0 && mins === 0) return '開始直後'
     const parts: string[] = []
     if (days > 0) parts.push(`${days}日`)
     if (h > 0) parts.push(`${h}時間`)
@@ -177,16 +180,17 @@ function firstFlexText(node: unknown): string {
 /** 折りたたんだステップカードの見出しに出す本文の冒頭 */
 function buildStepSnippet(messageType: string, content: string): string {
   const truncate = (text: string) => (text.length > 44 ? `${text.slice(0, 44)}…` : text)
+  const readable = (text: string) => text.replaceAll('{{name}}', '［友だちの表示名］')
   if (messageType === 'flex') {
     try {
       const text = firstFlexText(JSON.parse(content))
-      return text ? truncate(text.replace(/\s+/g, ' ')) : 'Flex メッセージ'
+      return text ? truncate(readable(text).replace(/\s+/g, ' ')) : 'Flexメッセージ'
     } catch {
-      return 'Flex メッセージ'
+      return 'Flexメッセージ'
     }
   }
   if (messageType === 'image') return '画像メッセージ'
-  const oneLine = content.replace(/\s+/g, ' ').trim()
+  const oneLine = readable(content).replace(/\s+/g, ' ').trim()
   return oneLine ? truncate(oneLine) : '(本文なし)'
 }
 
@@ -346,21 +350,33 @@ function ImagePreview({ content }: { content: string }) {
 
 export default function ScenarioDetailClient({ scenarioId }: { scenarioId: string }) {
   const id = scenarioId
-  const { selectedAccountId } = useAccount()
+  const { accounts, selectedAccountId } = useAccount()
 
   const [scenario, setScenario] = useState<ScenarioWithSteps | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   const [editing, setEditing] = useState(false)
-  const [editForm, setEditForm] = useState({ name: '', description: '', triggerType: 'friend_add' as ScenarioTriggerType, isActive: true })
+  const [editForm, setEditForm] = useState({
+    name: '',
+    description: '',
+    triggerType: 'friend_add' as ScenarioTriggerType,
+    triggerTagId: '',
+  })
   const [saving, setSaving] = useState(false)
+  const [statusSheetOpen, setStatusSheetOpen] = useState(false)
+  const [statusConflict, setStatusConflict] = useState<ScenarioWithCount | null>(null)
+  const [statusBusy, setStatusBusy] = useState(false)
+  const [statusError, setStatusError] = useState('')
 
   const [showStepForm, setShowStepForm] = useState(false)
   const [editingStepId, setEditingStepId] = useState<string | null>(null)
   const [stepForm, setStepForm] = useState<StepFormState>(() => emptyStepForm(1))
   const [stepSaving, setStepSaving] = useState(false)
   const [stepError, setStepError] = useState('')
+  const [deleteStepTarget, setDeleteStepTarget] = useState<ScenarioStep | null>(null)
+  const [stepActionBusy, setStepActionBusy] = useState(false)
+  const [deleteStepError, setDeleteStepError] = useState('')
   const stepMessageRef = useRef<HTMLTextAreaElement | null>(null)
 
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -386,6 +402,12 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
   // テスト送信: ステップごとの送信中フラグ / 結果メッセージ
   const [testSendingStepId, setTestSendingStepId] = useState<string | null>(null)
   const [testSendMessages, setTestSendMessages] = useState<Record<string, string>>({})
+  const [testConfirmStep, setTestConfirmStep] = useState<ScenarioStep | null>(null)
+  const [testConfirmRecipients, setTestConfirmRecipients] = useState<Array<{ id: string; displayName: string }>>([])
+  const [testConfirmAccountId, setTestConfirmAccountId] = useState<string | null>(null)
+  const [testConfirmPreview, setTestConfirmPreview] = useState<{ messageType: string; content: string } | null>(null)
+  const [testConfirmLoadingStepId, setTestConfirmLoadingStepId] = useState<string | null>(null)
+  const testConfirmRequestRef = useRef(0)
 
   // テスト受信者未設定時の簡易登録モーダル
   const [recipientModalOpen, setRecipientModalOpen] = useState(false)
@@ -396,6 +418,8 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
   const [recipientSaving, setRecipientSaving] = useState(false)
   const [recipientError, setRecipientError] = useState('')
   const pendingTestStepIdRef = useRef<string | null>(null)
+  const recipientSearchRequestRef = useRef(0)
+  const recipientSettingsRequestRef = useRef(0)
 
   const deliveryMode: DeliveryMode = (scenario?.deliveryMode ?? 'relative') as DeliveryMode
 
@@ -410,7 +434,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
           name: res.data.name,
           description: res.data.description ?? '',
           triggerType: res.data.triggerType,
-          isActive: res.data.isActive,
+          triggerTagId: res.data.triggerTagId ?? '',
         })
       } else {
         setError(res.error)
@@ -425,6 +449,15 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
   useEffect(() => {
     loadScenario()
   }, [loadScenario])
+
+  const refreshStats = useCallback(async () => {
+    try {
+      const res = await api.scenarios.stats(id)
+      if (res.success) setStats(res.data)
+    } catch {
+      // 参加者一覧の操作は完了しているため、集計の再読込失敗だけでは操作結果を戻さない。
+    }
+  }, [id])
 
   // 並列で stats / templates / tags / トラッキングリンクを取得（リグレッションを起こさないよう失敗は無視）
   useEffect(() => {
@@ -467,13 +500,27 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
 
   const handleSaveScenario = async () => {
     if (!editForm.name.trim()) return
+    if (
+      scenario?.isActive
+      && (
+        editForm.triggerType !== scenario.triggerType
+        || (editForm.triggerTagId || null) !== scenario.triggerTagId
+      )
+    ) {
+      setError('開始条件を変える場合は、先に配信を停止してください')
+      return
+    }
+    if (editForm.triggerType === 'tag_added' && !editForm.triggerTagId) {
+      setError('タグ付与時に開始する場合は、対象タグを選択してください')
+      return
+    }
     setSaving(true)
     try {
       const res = await api.scenarios.update(id, {
         name: editForm.name,
         description: editForm.description || null,
         triggerType: editForm.triggerType,
-        isActive: editForm.isActive,
+        triggerTagId: editForm.triggerType === 'tag_added' ? editForm.triggerTagId : null,
       })
       if (res.success) {
         setEditing(false)
@@ -485,6 +532,61 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
       setError('保存に失敗しました')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const requestStatusChange = async () => {
+    if (!scenario) return
+    setStatusError('')
+    setStatusConflict(null)
+    setStatusBusy(true)
+    try {
+      if (!scenario.isActive && scenario.triggerType === 'friend_add') {
+        const listRes = await api.scenarios.list(
+          scenario.lineAccountId ? { accountId: scenario.lineAccountId } : undefined,
+        )
+        if (!listRes.success) throw new Error(listRes.error || '現在のシナリオ状態を確認できませんでした')
+        setStatusConflict(listRes.data.find((candidate) => (
+          candidate.id !== scenario.id
+          && candidate.triggerType === 'friend_add'
+          && candidate.isActive
+        )) ?? null)
+      }
+      setStatusSheetOpen(true)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '現在のシナリオ状態を確認できませんでした')
+    } finally {
+      setStatusBusy(false)
+    }
+  }
+
+  const handleStatusChange = async (options?: { alsoDeactivateId?: string }) => {
+    if (!scenario) return
+    setStatusBusy(true)
+    setStatusError('')
+    let deactivatedExisting = false
+    try {
+      if (options?.alsoDeactivateId) {
+        const deactivateRes = await api.scenarios.update(options.alsoDeactivateId, { isActive: false })
+        if (!deactivateRes.success) throw new Error(deactivateRes.error || '既存シナリオを停止できませんでした')
+        deactivatedExisting = true
+      }
+
+      const updateRes = await api.scenarios.update(id, { isActive: !scenario.isActive })
+      if (!updateRes.success) {
+        if (deactivatedExisting && options?.alsoDeactivateId) {
+          await api.scenarios.update(options.alsoDeactivateId, { isActive: true }).catch(() => undefined)
+        }
+        throw new Error(updateRes.error || '状態を変更できませんでした')
+      }
+
+      setStatusSheetOpen(false)
+      setStatusConflict(null)
+      await loadScenario()
+    } catch (cause) {
+      setStatusError(cause instanceof Error ? cause.message : '状態を変更できませんでした')
+    } finally {
+      setStatusBusy(false)
     }
   }
 
@@ -648,13 +750,19 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
     }
   }
 
-  const handleDeleteStep = async (stepId: string) => {
-    if (!confirm('このステップを削除してもよいですか？')) return
+  const handleDeleteStep = async () => {
+    if (!deleteStepTarget) return
+    setStepActionBusy(true)
+    setDeleteStepError('')
     try {
-      await api.scenarios.deleteStep(id, stepId)
-      loadScenario()
-    } catch {
-      setError('ステップの削除に失敗しました')
+      const res = await api.scenarios.deleteStep(id, deleteStepTarget.id)
+      if (!res.success) throw new Error(res.error || 'ステップを削除できませんでした')
+      setDeleteStepTarget(null)
+      await loadScenario()
+    } catch (cause) {
+      setDeleteStepError(cause instanceof Error ? cause.message : 'ステップの削除に失敗しました')
+    } finally {
+      setStepActionBusy(false)
     }
   }
 
@@ -667,11 +775,12 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
     const a = sorted[idx]
     const b = sorted[swap]
     try {
-      await api.scenarios.reorderSteps(id, [
+      const res = await api.scenarios.reorderSteps(id, [
         { stepId: a.id, stepOrder: b.stepOrder },
         { stepId: b.id, stepOrder: a.stepOrder },
       ])
-      loadScenario()
+      if (!res.success) throw new Error(res.error || '並び替えに失敗しました')
+      await loadScenario()
       // 到達率バッジは stepOrder ベースでマッチングするので、並び替え後は stats も再取得
       reloadStats()
     } catch {
@@ -693,7 +802,8 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
     const toShift = sorted.filter((s) => s.stepOrder > step.stepOrder)
     try {
       if (toShift.length > 0) {
-        await api.scenarios.reorderSteps(id, toShift.map((s) => ({ stepId: s.id, stepOrder: s.stepOrder + 1 })))
+        const reorderRes = await api.scenarios.reorderSteps(id, toShift.map((s) => ({ stepId: s.id, stepOrder: s.stepOrder + 1 })))
+        if (!reorderRes.success) throw new Error(reorderRes.error || '複製位置を確保できませんでした')
       }
       const res = await api.scenarios.addStep(id, {
         stepOrder: step.stepOrder + 1,
@@ -716,11 +826,11 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
     }
   }
 
-  const handleTestSend = async (stepId: string) => {
+  const handleTestSend = async (stepId: string, fixedAccountId?: string | null) => {
     setTestSendingStepId(stepId)
     setTestSendMessages((prev) => ({ ...prev, [stepId]: '' }))
     try {
-      const accountId = scenario?.lineAccountId ?? selectedAccountId ?? undefined
+      const accountId = fixedAccountId ?? scenario?.lineAccountId ?? selectedAccountId ?? undefined
       const res = await api.scenarios.testSendStep(id, stepId, accountId)
       if (res.success) {
         setTestSendMessages((prev) => ({ ...prev, [stepId]: `${res.sent ?? 0}人に送信しました` }))
@@ -740,20 +850,76 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
     }
   }
 
+  const requestTestSend = async (step: ScenarioStep, fixedAccountId?: string) => {
+    const accountId = fixedAccountId ?? scenario?.lineAccountId ?? selectedAccountId ?? undefined
+    if (!accountId) {
+      setTestSendMessages((prev) => ({
+        ...prev,
+        [step.id]: '送信先のLINEアカウントを選択してください',
+      }))
+      return
+    }
+
+    setTestConfirmLoadingStepId(step.id)
+    const requestId = ++testConfirmRequestRef.current
+    try {
+      const recipientsRes = await api.accountSettings.getTestRecipients(accountId)
+      if (requestId !== testConfirmRequestRef.current) return
+      if (!recipientsRes.success) throw new Error('テスト受信者を確認できませんでした')
+      if (recipientsRes.data.length === 0) {
+        openRecipientModal(step.id, accountId)
+        return
+      }
+      const survey = getSurveyFromContent(step.messageContent, surveys)
+      const template = step.templateId ? templates.find((candidate) => candidate.id === step.templateId) : null
+      const previewMessageType = survey ? 'flex' : template ? template.messageType : step.messageType
+      const previewContent = survey
+        ? buildSurveyFlexContent(survey)
+        : template
+          ? template.messageContent
+          : step.messageContent
+      setTestConfirmRecipients(recipientsRes.data)
+      setTestConfirmAccountId(accountId)
+      setTestConfirmPreview({
+        messageType: previewMessageType,
+        content: previewContent.replaceAll('{{name}}', '［友だちの表示名］'),
+      })
+      setTestConfirmStep(step)
+    } catch (cause) {
+      setTestSendMessages((prev) => ({
+        ...prev,
+        [step.id]: cause instanceof Error ? cause.message : 'テスト受信者を確認できませんでした',
+      }))
+    } finally {
+      if (requestId === testConfirmRequestRef.current) setTestConfirmLoadingStepId(null)
+    }
+  }
+
   // ── テスト受信者 未設定時の簡易登録モーダル ──────────────────────────────
   const recipientAccountIdRef = useRef<string | undefined>(undefined)
 
   const searchFriendsForRecipientModal = useCallback(async (query: string) => {
+    const requestId = ++recipientSearchRequestRef.current
+    const accountId = recipientAccountIdRef.current
     setRecipientSearching(true)
     try {
-      const res = await api.friends.list({ search: query || undefined, limit: 20, includeTags: false })
-      if (res.success) {
+      const res = await api.friends.list({
+        search: query || undefined,
+        accountId,
+        limit: 20,
+        includeTags: false,
+      })
+      if (
+        requestId === recipientSearchRequestRef.current
+        && accountId === recipientAccountIdRef.current
+        && res.success
+      ) {
         setRecipientResults(res.data.items.map((f) => ({ id: f.id, displayName: f.displayName })))
       }
     } catch {
       // 検索失敗は無視 (一覧が更新されないだけ)
     } finally {
-      setRecipientSearching(false)
+      if (requestId === recipientSearchRequestRef.current) setRecipientSearching(false)
     }
   }, [])
 
@@ -769,8 +935,13 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
     setRecipientQuery('')
     setRecipientSelected(new Set())
     setRecipientModalOpen(true)
+    const settingsRequestId = ++recipientSettingsRequestRef.current
     api.accountSettings.getTestRecipients(accountId).then((res) => {
-      if (res.success) {
+      if (
+        settingsRequestId === recipientSettingsRequestRef.current
+        && accountId === recipientAccountIdRef.current
+        && res.success
+      ) {
         setRecipientSelected(new Set(res.data.map((f) => f.id)))
       }
     }).catch(() => {})
@@ -778,6 +949,8 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
   }
 
   function closeRecipientModal() {
+    recipientSearchRequestRef.current += 1
+    recipientSettingsRequestRef.current += 1
     setRecipientModalOpen(false)
     pendingTestStepIdRef.current = null
   }
@@ -804,9 +977,9 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
       }
       const stepId = pendingTestStepIdRef.current
       closeRecipientModal()
-      // 登録直後に、元々テスト送信しようとしていたステップへ自動で再送する
-      if (stepId) {
-        handleTestSend(stepId)
+      const step = scenario?.steps.find((candidate) => candidate.id === stepId)
+      if (step) {
+        await requestTestSend(step, accountId)
       }
     } catch {
       setRecipientError('保存に失敗しました')
@@ -853,6 +1026,10 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
 
   const sortedSteps = [...scenario.steps].sort((a, b) => a.stepOrder - b.stepOrder)
   const modeBadge = modeBadgeStyle[deliveryMode]
+  const testAccountId = testConfirmAccountId ?? scenario.lineAccountId ?? selectedAccountId
+  const testAccountName = accounts.find((account) => account.id === testAccountId)?.displayName
+    || accounts.find((account) => account.id === testAccountId)?.name
+    || '選択中のLINEアカウント'
 
   return (
     <div>
@@ -877,7 +1054,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
       {/* Stats Header Bar */}
       {stats && stats.enrolledTotal > 0 && (
         <div className="mb-4 bg-white rounded-lg border border-gray-200 p-3 flex items-center gap-x-3 gap-y-1 text-sm flex-wrap">
-          <span className="font-medium text-gray-700">📊 集計</span>
+          <span className="font-medium text-gray-700">配信状況</span>
           <span>登録 <span className="font-semibold">{stats.enrolledTotal}</span> 人</span>
           <span className="text-gray-400">/</span>
           <span>進行中 <span className="font-semibold text-blue-700">{stats.activeNow}</span></span>
@@ -889,6 +1066,9 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
               <span>一時停止 {stats.paused}</span>
             </>
           )}
+          <a href="#participants" className="ml-auto min-h-10 rounded-md px-3 py-2 font-medium text-green-700 hover:bg-green-50">
+            友だちを確認
+          </a>
         </div>
       )}
 
@@ -919,23 +1099,36 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
               <select
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
                 value={editForm.triggerType}
-                onChange={(e) => setEditForm({ ...editForm, triggerType: e.target.value as ScenarioTriggerType })}
+                disabled={scenario.isActive}
+                onChange={(e) => setEditForm({
+                  ...editForm,
+                  triggerType: e.target.value as ScenarioTriggerType,
+                  triggerTagId: e.target.value === 'tag_added' ? editForm.triggerTagId : '',
+                })}
               >
                 {triggerOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </select>
+              {scenario.isActive && <p className="mt-1 text-xs text-amber-700">開始条件を変える場合は、先に配信を停止してください。</p>}
             </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="editIsActive"
-                checked={editForm.isActive}
-                onChange={(e) => setEditForm({ ...editForm, isActive: e.target.checked })}
-                className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
-              />
-              <label htmlFor="editIsActive" className="text-sm text-gray-600">有効</label>
-            </div>
+            {editForm.triggerType === 'tag_added' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  開始に使うタグ <span className="text-red-500">*</span>
+                </label>
+                <select
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                  value={editForm.triggerTagId}
+                  disabled={scenario.isActive}
+                  onChange={(e) => setEditForm({ ...editForm, triggerTagId: e.target.value })}
+                >
+                  <option value="">選択してください</option>
+                  {tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}
+                </select>
+                {!editForm.triggerTagId && <p className="mt-1 text-xs text-red-600">対象タグを選択してください</p>}
+              </div>
+            )}
             <div className="flex flex-col sm:flex-row gap-2">
               <button
                 onClick={handleSaveScenario}
@@ -952,7 +1145,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                     name: scenario.name,
                     description: scenario.description ?? '',
                     triggerType: scenario.triggerType,
-                    isActive: scenario.isActive,
+                    triggerTagId: scenario.triggerTagId ?? '',
                   })
                 }}
                 className="px-4 py-2 min-h-[44px] text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
@@ -966,6 +1159,11 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-4 mb-3">
               <h2 className="text-lg font-semibold text-gray-900 break-words">{scenario.name}</h2>
               <div className="flex items-center gap-2 flex-wrap shrink-0">
+                {scenario.lineAccountId === null && (
+                  <span title="すべてのLINEアカウントに適用されます" className="inline-flex items-center rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800">
+                    全アカウント共通
+                  </span>
+                )}
                 <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${modeBadge.bg} ${modeBadge.text}`}>
                   {modeBadge.label}
                 </span>
@@ -974,7 +1172,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                     scenario.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
                   }`}
                 >
-                  {scenario.isActive ? '有効' : '無効'}
+                  {scenario.isActive ? '配信中' : '停止中'}
                 </span>
                 <button
                   onClick={() => setEditing(true)}
@@ -982,19 +1180,37 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                 >
                   基本情報を編集
                 </button>
+                <button
+                  onClick={() => void requestStatusChange()}
+                  disabled={statusBusy}
+                  className="min-h-[44px] rounded-lg border border-gray-300 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {statusBusy ? '確認中...' : scenario.isActive ? '配信を停止' : '配信を有効化'}
+                </button>
               </div>
             </div>
             {scenario.description && (
               <p className="text-sm text-gray-500 mb-3">{scenario.description}</p>
             )}
             <div className="flex items-center gap-x-4 gap-y-1 text-xs text-gray-500 flex-wrap">
-              <span>トリガー: {triggerOptions.find(o => o.value === scenario.triggerType)?.label ?? scenario.triggerType}</span>
+              <span>
+                開始条件: {triggerOptions.find(o => o.value === scenario.triggerType)?.label ?? '未設定'}
+                {scenario.triggerType === 'tag_added' && scenario.triggerTagId
+                  ? `（${tags.find((tag) => tag.id === scenario.triggerTagId)?.name ?? '削除されたタグ'}）`
+                  : ''}
+              </span>
               <span>ステップ数: {scenario.steps.length}</span>
               <span>作成日: {new Date(scenario.createdAt).toLocaleDateString('ja-JP')}</span>
             </div>
           </div>
         )}
       </div>
+
+      <ScenarioParticipants
+        scenarioId={scenario.id}
+        scenarioActive={scenario.isActive}
+        onChanged={() => void refreshStats()}
+      />
 
       {/* Steps */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6">
@@ -1340,6 +1556,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
               const tpl = step.templateId ? templates.find((t) => t.id === step.templateId) : null
               const displayType = survey ? 'flex' : tpl ? tpl.messageType : step.messageType
               const displayContent = survey ? buildSurveyFlexContent(survey) : tpl ? tpl.messageContent : step.messageContent
+              const readableDisplayContent = displayContent.replaceAll('{{name}}', '［友だちの表示名］')
               const stat = stats?.steps.find((s) => s.stepOrder === step.stepOrder)
               // モバイルのみ折りたたむ。デスクトップは md: クラスで常に展開する。
               const isExpanded = expandedStepIds.has(step.id)
@@ -1386,24 +1603,36 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                     {/* 折りたたみ時の本文冒頭 (モバイルのみ) */}
                     {!isExpanded && (
                       <p className="md:hidden text-xs text-gray-500 truncate">
-                        {buildStepSnippet(displayType, displayContent)}
+                        {buildStepSnippet(displayType, readableDisplayContent)}
                       </p>
+                    )}
+                    {!isExpanded && (step.onReachTagId || (step.conditionType && step.conditionValue)) && (
+                      <div className="mt-1 space-y-0.5 md:hidden">
+                        {step.onReachTagId && (
+                          <p className="truncate text-xs text-green-700">到達タグ: {tags.find((tag) => tag.id === step.onReachTagId)?.name ?? '削除されたタグ'}</p>
+                        )}
+                        {step.conditionType && step.conditionValue && (
+                          <p className="truncate text-xs text-amber-700">
+                            配信条件: {formatConditionLabel(step.conditionType)} / {formatConditionValue(step.conditionType, step.conditionValue, tags, trackedLinks)}
+                          </p>
+                        )}
+                      </div>
                     )}
 
                     {/* 詳細: モバイルは折りたたみ / デスクトップは常時表示 */}
                     <div className={isExpanded ? 'block' : 'hidden md:block'}>
                       <div className="text-sm text-gray-700 bg-gray-50 rounded-md px-3 py-2 overflow-x-auto">
                         {displayType === 'flex' ? (
-                          <FlexPreview content={displayContent} />
+                          <FlexPreview content={readableDisplayContent} />
                         ) : displayType === 'image' ? (
-                          <ImagePreview content={displayContent} />
+                          <ImagePreview content={readableDisplayContent} />
                         ) : (
-                          <p className="whitespace-pre-wrap break-words">{displayContent}</p>
+                          <p className="whitespace-pre-wrap break-words">{readableDisplayContent}</p>
                         )}
                       </div>
                       {step.templateId && (
                         <p className="mt-2 text-xs text-amber-700 break-words">
-                          📋 テンプレ: {tpl?.name ?? step.templateId}
+                          テンプレート: {tpl?.name ?? '参照先が見つかりません'}
                         </p>
                       )}
                       {survey && (
@@ -1413,7 +1642,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                       )}
                       {step.onReachTagId && (
                         <p className="mt-1 text-xs text-green-700 break-words">
-                          🏷 到達タグ: {tags.find((t) => t.id === step.onReachTagId)?.name ?? step.onReachTagId}
+                          到達タグ: {tags.find((t) => t.id === step.onReachTagId)?.name ?? '削除されたタグ'}
                         </p>
                       )}
                       {step.conditionType && step.conditionValue && (
@@ -1453,63 +1682,40 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
                       items={[
                         { label: '本文・条件を編集', tone: 'primary', onSelect: () => openEditStep(step) },
                         {
-                          label: testSendingStepId === step.id ? '送信中...' : 'テスト送信',
-                          disabled: testSendingStepId === step.id,
-                          onSelect: () => handleTestSend(step.id),
+                          label: testConfirmLoadingStepId === step.id ? '送信先を確認中...' : testSendingStepId === step.id ? '送信中...' : 'テスト送信',
+                          disabled: testConfirmLoadingStepId === step.id || testSendingStepId === step.id,
+                          onSelect: () => void requestTestSend(step),
                         },
                         { label: '複製', onSelect: () => handleDuplicateStep(step) },
                         { label: '↑ 上へ移動', disabled: idx === 0, onSelect: () => handleMoveStep(step.id, 'up') },
                         { label: '↓ 下へ移動', disabled: idx === sortedSteps.length - 1, onSelect: () => handleMoveStep(step.id, 'down') },
-                        { label: '削除', tone: 'danger', onSelect: () => handleDeleteStep(step.id) },
+                        { label: '削除', tone: 'danger', onSelect: () => { setDeleteStepError(''); setDeleteStepTarget(step) } },
                       ]}
                     />
                   </div>
 
-                  {/* デスクトップ: 従来どおりボタンを縦に並べる */}
-                  <div className="hidden md:flex flex-col items-stretch gap-1 shrink-0">
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => handleMoveStep(step.id, 'up')}
-                        disabled={idx === 0}
-                        className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100 transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
-                        aria-label="上へ"
-                      >
-                        ↑
-                      </button>
-                      <button
-                        onClick={() => handleMoveStep(step.id, 'down')}
-                        disabled={idx === sortedSteps.length - 1}
-                        className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100 transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
-                        aria-label="下へ"
-                      >
-                        ↓
-                      </button>
-                    </div>
-                    <button
-                      onClick={() => handleTestSend(step.id)}
-                      disabled={testSendingStepId === step.id}
-                      className="text-xs text-blue-600 hover:text-blue-700 px-2 py-1 rounded hover:bg-blue-50 transition-colors disabled:opacity-50"
-                    >
-                      {testSendingStepId === step.id ? '送信中...' : 'テスト送信'}
-                    </button>
-                    <button
-                      onClick={() => handleDuplicateStep(step)}
-                      className="text-xs text-gray-600 hover:text-gray-800 px-2 py-1 rounded hover:bg-gray-100 transition-colors"
-                    >
-                      複製
-                    </button>
+                  {/* デスクトップ: 編集だけを常時表示し、その他の操作はメニューへ集約 */}
+                  <div className="hidden md:flex items-start gap-1 shrink-0">
                     <button
                       onClick={() => openEditStep(step)}
-                      className="text-xs text-green-600 hover:text-green-700 px-2 py-1 rounded hover:bg-green-50 transition-colors"
+                      className="min-h-[44px] rounded-lg px-3 py-2 text-xs font-medium text-green-700 hover:bg-green-50 transition-colors"
                     >
-                      本文・条件を編集
+                      編集
                     </button>
-                    <button
-                      onClick={() => handleDeleteStep(step.id)}
-                      className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 transition-colors"
-                    >
-                      削除
-                    </button>
+                    <ActionMenu
+                      label={`ステップ ${step.stepOrder} のその他の操作`}
+                      items={[
+                        {
+                          label: testConfirmLoadingStepId === step.id ? '送信先を確認中...' : testSendingStepId === step.id ? '送信中...' : 'テスト送信',
+                          disabled: testConfirmLoadingStepId === step.id || testSendingStepId === step.id,
+                          onSelect: () => void requestTestSend(step),
+                        },
+                        { label: '複製', onSelect: () => void handleDuplicateStep(step) },
+                        { label: '上へ移動', disabled: idx === 0, onSelect: () => void handleMoveStep(step.id, 'up') },
+                        { label: '下へ移動', disabled: idx === sortedSteps.length - 1, onSelect: () => void handleMoveStep(step.id, 'down') },
+                        { label: '削除', tone: 'danger', onSelect: () => { setDeleteStepError(''); setDeleteStepTarget(step) } },
+                      ]}
+                    />
                   </div>
                 </div>
               </div>
@@ -1518,6 +1724,74 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
           </div>
         )}
       </div>
+
+      <ScenarioStatusSheet
+        open={statusSheetOpen}
+        scenario={{ ...scenario, stepCount: scenario.steps.length }}
+        conflict={statusConflict}
+        busy={statusBusy}
+        error={statusError}
+        onClose={() => {
+          if (!statusBusy) {
+            setStatusSheetOpen(false)
+            setStatusConflict(null)
+            setStatusError('')
+          }
+        }}
+        onConfirm={(options) => void handleStatusChange(options)}
+      />
+
+      <ConfirmSheet
+        open={Boolean(deleteStepTarget)}
+        title={deleteStepTarget ? `ステップ${deleteStepTarget.stepOrder}を削除しますか？` : 'ステップを削除しますか？'}
+        message="このステップは元に戻せません。後ろのステップは残ります。"
+        confirmLabel="削除する"
+        tone="danger"
+        busy={stepActionBusy}
+        error={deleteStepError}
+        onClose={() => {
+          if (!stepActionBusy) {
+            setDeleteStepTarget(null)
+            setDeleteStepError('')
+          }
+        }}
+        onConfirm={() => void handleDeleteStep()}
+      />
+
+      <ConfirmSheet
+        open={Boolean(testConfirmStep)}
+        title="この内容をテスト送信しますか？"
+        message={testConfirmStep ? (
+          <span>
+            送信先: {testAccountName}<br />
+            受信者: {testConfirmRecipients.length}人<br />
+            対象: ステップ{testConfirmStep.stepOrder}<br />
+            本文: {testConfirmPreview
+              ? buildStepSnippet(testConfirmPreview.messageType, testConfirmPreview.content)
+              : buildStepSnippet(testConfirmStep.messageType, testConfirmStep.messageContent)}
+          </span>
+        ) : undefined}
+        confirmLabel="テスト送信する"
+        busy={testConfirmStep ? testSendingStepId === testConfirmStep.id : false}
+        onClose={() => {
+          if (!testSendingStepId) {
+            setTestConfirmStep(null)
+            setTestConfirmRecipients([])
+            setTestConfirmAccountId(null)
+            setTestConfirmPreview(null)
+          }
+        }}
+        onConfirm={() => {
+          if (!testConfirmStep) return
+          const stepId = testConfirmStep.id
+          const accountId = testConfirmAccountId
+          setTestConfirmStep(null)
+          setTestConfirmRecipients([])
+          setTestConfirmAccountId(null)
+          setTestConfirmPreview(null)
+          void handleTestSend(stepId, accountId)
+        }}
+      />
 
       <BulkPreviewModal
         open={previewOpen}
@@ -1531,7 +1805,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
         onClose={closeRecipientModal}
         busy={recipientSaving}
         title="テスト受信者を選択"
-        description="検索して友だちを選び、保存すると自動でテスト送信を再実行します。"
+        description="検索して友だちを選びます。保存後に送信内容を確認できます。"
         footer={
           <>
             <SheetButton onClick={closeRecipientModal} disabled={recipientSaving}>
@@ -1545,7 +1819,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
               busyLabel="保存中..."
               className="!bg-[#06C755] hover:!bg-[#05b34c]"
             >
-              保存してテスト送信
+              保存して確認へ
             </SheetButton>
           </>
         }

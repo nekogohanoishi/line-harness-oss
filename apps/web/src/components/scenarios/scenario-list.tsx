@@ -2,7 +2,11 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import type { Scenario, DeliveryMode } from '@line-crm/shared'
+import ActionMenu from '@/components/scenarios/action-menu'
+import ScenarioStatusSheet from '@/components/scenarios/scenario-status-sheet'
+import { ConfirmSheet } from '@/components/ui'
 
 type ScenarioWithCount = Scenario & { stepCount?: number }
 
@@ -12,194 +16,175 @@ const triggerLabels: Record<string, string> = {
   manual: '手動',
 }
 
-const deliveryModeStyles: Record<DeliveryMode, { bg: string; text: string; label: string }> = {
-  relative: { bg: 'bg-gray-100', text: 'text-gray-600', label: 'Legacy' },
-  elapsed: { bg: 'bg-blue-50', text: 'text-blue-700', label: '経過時間' },
-  absolute_time: { bg: 'bg-amber-50', text: 'text-amber-700', label: '時刻指定' },
-}
-
-function ModeBadge({ mode }: { mode?: DeliveryMode }) {
-  const s = deliveryModeStyles[mode ?? 'relative']
-  return (
-    <span className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${s.bg} ${s.text}`}>
-      {s.label}
-    </span>
-  )
+const deliveryModeLabels: Record<DeliveryMode, string> = {
+  relative: '前のステップから待機',
+  elapsed: '開始からの経過時間',
+  absolute_time: '指定時刻',
 }
 
 interface ScenarioListProps {
   scenarios: ScenarioWithCount[]
-  onToggleActive: (id: string, current: boolean, options?: { alsoDeactivateId?: string }) => void
-  onDelete: (id: string) => void
+  onToggleActive: (id: string, current: boolean, options?: { alsoDeactivateId?: string }) => Promise<void>
+  onDelete: (id: string) => Promise<void>
   loading?: boolean
 }
 
 export default function ScenarioList({ scenarios, onToggleActive, onDelete, loading }: ScenarioListProps) {
-  // friend_add トリガーのシナリオを ON にしようとした時、既に別の friend_add シナリオが
-  // ON なら確認ダイアログを出す (新規友だちに二重で送信されてしまうのを防ぐため)。
-  const [conflict, setConflict] = useState<{ target: ScenarioWithCount; existing: ScenarioWithCount } | null>(null)
+  const router = useRouter()
+  const [statusTarget, setStatusTarget] = useState<ScenarioWithCount | null>(null)
+  const [statusConflict, setStatusConflict] = useState<ScenarioWithCount | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ScenarioWithCount | null>(null)
+  const [actionBusy, setActionBusy] = useState(false)
+  const [actionError, setActionError] = useState('')
 
   const requestToggleActive = (scenario: ScenarioWithCount) => {
-    if (
-      scenario.lineAccountId === null &&
-      !confirm(
-        `「${scenario.name}」は全アカウント共通のシナリオです。${scenario.isActive ? '無効化' : '有効化'}するとすべてのアカウントに影響します。続行しますか？`,
-      )
-    ) {
-      return
-    }
+    const conflict = !scenario.isActive && scenario.triggerType === 'friend_add'
+      ? scenarios.find((candidate) => (
+          candidate.id !== scenario.id
+          && candidate.triggerType === 'friend_add'
+          && candidate.isActive
+        )) ?? null
+      : null
+    setActionError('')
+    setStatusTarget(scenario)
+    setStatusConflict(conflict)
+  }
 
-    if (!scenario.isActive && scenario.triggerType === 'friend_add') {
-      const existing = scenarios.find(
-        (s) => s.id !== scenario.id && s.triggerType === 'friend_add' && s.isActive,
-      )
-      if (existing) {
-        setConflict({ target: scenario, existing })
-        return
-      }
+  const runToggleActive = async (options?: { alsoDeactivateId?: string }) => {
+    if (!statusTarget) return
+    setActionBusy(true)
+    setActionError('')
+    try {
+      await onToggleActive(statusTarget.id, statusTarget.isActive, options)
+      setStatusTarget(null)
+      setStatusConflict(null)
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : '状態を変更できませんでした')
+    } finally {
+      setActionBusy(false)
     }
+  }
 
-    onToggleActive(scenario.id, scenario.isActive)
+  const runDelete = async () => {
+    if (!deleteTarget) return
+    setActionBusy(true)
+    setActionError('')
+    try {
+      await onDelete(deleteTarget.id)
+      setDeleteTarget(null)
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : '削除できませんでした')
+    } finally {
+      setActionBusy(false)
+    }
   }
 
   if (scenarios.length === 0) {
     return (
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
-        <p className="text-gray-500">シナリオがありません。新しいシナリオを作成してください。</p>
+      <div className="border-y border-gray-200 bg-white px-5 py-12 text-center sm:rounded-lg sm:border">
+        <p className="text-sm font-medium text-gray-700">シナリオはまだありません</p>
+        <p className="mt-1 text-sm text-gray-500">右上の「新規シナリオ」から作成できます。</p>
       </div>
     )
   }
 
   return (
     <>
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-      {scenarios.map((scenario) => (
-        <div key={scenario.id} className="bg-white rounded-lg shadow-sm border border-gray-200 p-5 flex flex-col gap-3 hover:shadow-md transition-shadow">
-          {/* Header */}
-          <div className="flex items-start justify-between gap-2">
-            <Link
-              href={`/scenarios/detail?id=${scenario.id}`}
-              className="text-sm font-semibold text-gray-900 hover:text-green-600 transition-colors leading-tight"
-            >
-              {scenario.name}
-            </Link>
-            <div className="flex items-center gap-1.5">
-              {scenario.lineAccountId === null && (
-                <span
-                  className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200"
-                  title="全アカウントに適用されるシナリオです"
-                >
-                  全アカ共通
-                </span>
-              )}
-              <ModeBadge mode={scenario.deliveryMode} />
-              <span
-                className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                  scenario.isActive
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-gray-100 text-gray-500'
-                }`}
-              >
-                {scenario.isActive ? '有効' : '無効'}
-              </span>
-            </div>
-          </div>
-
-          {/* Description */}
-          {scenario.description && (
-            <p className="text-xs text-gray-500 line-clamp-2">{scenario.description}</p>
-          )}
-
-          {/* Metadata */}
-          <div className="flex items-center gap-4 text-xs text-gray-500">
-            <span className="flex items-center gap-1">
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-              <span>トリガー: {triggerLabels[scenario.triggerType] ?? scenario.triggerType}</span>
-            </span>
-            <span className="flex items-center gap-1">
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-              </svg>
-              <span>ステップ数: {scenario.stepCount ?? '-'}</span>
-            </span>
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
-            <Link
-              href={`/scenarios/detail?id=${scenario.id}`}
-              className="flex-1 text-center text-xs font-medium text-green-600 hover:text-green-700 py-1 min-h-[44px] flex items-center justify-center rounded-md hover:bg-green-50 transition-colors"
-            >
-              詳細・編集
-            </Link>
-            <button
-              onClick={() => requestToggleActive(scenario)}
-              disabled={loading}
-              className="flex-1 text-xs font-medium text-gray-600 hover:text-gray-900 py-1 min-h-[44px] flex items-center justify-center rounded-md hover:bg-gray-100 transition-colors disabled:opacity-40"
-            >
-              {scenario.isActive ? '無効にする' : '有効にする'}
-            </button>
-            <button
-              onClick={() => {
-                const message = scenario.lineAccountId === null
-                  ? `「${scenario.name}」は全アカウント共通のシナリオです。削除するとすべてのアカウントから消えます。本当に削除しますか？`
-                  : `「${scenario.name}」を削除してもよいですか？`
-                if (confirm(message)) {
-                  onDelete(scenario.id)
-                }
-              }}
-              disabled={loading}
-              className="flex-1 text-xs font-medium text-red-500 hover:text-red-700 py-1 min-h-[44px] flex items-center justify-center rounded-md hover:bg-red-50 transition-colors disabled:opacity-40"
-            >
-              削除
-            </button>
-          </div>
+      <div className="overflow-visible border-y border-gray-200 bg-white sm:rounded-lg sm:border">
+        <div className="hidden grid-cols-[110px_minmax(220px,1fr)_170px_120px_52px] items-center gap-4 border-b border-gray-200 bg-gray-50 px-5 py-3 text-xs font-medium text-gray-500 lg:grid">
+          <span>状態</span>
+          <span>シナリオ</span>
+          <span>開始条件</span>
+          <span>ステップ</span>
+          <span className="sr-only">操作</span>
         </div>
-      ))}
-    </div>
 
-    {/* friend_add シナリオの二重ON警告 */}
-    {conflict && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-        <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-5 space-y-4">
-          <h3 className="text-sm font-semibold text-gray-800">友だち追加時シナリオが重複します</h3>
-          <p className="text-sm text-gray-600">
-            「{conflict.existing.name}」も友だち追加時に発火します。両方ONだと新規友だちに両方送信されます。
-          </p>
-          <div className="flex flex-col gap-2">
-            <button
-              onClick={() => {
-                onToggleActive(conflict.target.id, conflict.target.isActive, { alsoDeactivateId: conflict.existing.id })
-                setConflict(null)
-              }}
-              className="px-4 py-2 min-h-[44px] text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
-              style={{ backgroundColor: '#06C755' }}
-            >
-              「{conflict.existing.name}」をOFFにして切り替える
-            </button>
-            <button
-              onClick={() => {
-                onToggleActive(conflict.target.id, conflict.target.isActive)
-                setConflict(null)
-              }}
-              className="px-4 py-2 min-h-[44px] text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-            >
-              両方ONにする
-            </button>
-            <button
-              onClick={() => setConflict(null)}
-              className="px-4 py-2 min-h-[44px] text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors"
-            >
-              キャンセル
-            </button>
-          </div>
+        <div className="divide-y divide-gray-100">
+          {scenarios.map((scenario) => {
+            const stepCount = scenario.stepCount ?? 0
+            const triggerLabel = triggerLabels[scenario.triggerType] ?? '未設定'
+            const modeLabel = deliveryModeLabels[scenario.deliveryMode ?? 'relative']
+            return (
+              <div
+                key={scenario.id}
+                className="group grid grid-cols-[minmax(0,1fr)_44px] gap-2 px-4 py-4 transition-colors hover:bg-gray-50 lg:grid-cols-[110px_minmax(220px,1fr)_170px_120px_52px] lg:items-center lg:gap-4 lg:px-5"
+              >
+                <div className="lg:col-start-1">
+                  <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${scenario.isActive ? 'bg-green-100 text-green-800' : 'border border-gray-300 bg-white text-gray-600'}`}>
+                    {scenario.isActive ? '配信中' : '停止中'}
+                  </span>
+                </div>
+
+                <Link href={`/scenarios/detail?id=${scenario.id}`} className="min-w-0 lg:col-start-2 lg:row-start-1">
+                  <span className="block truncate text-sm font-semibold text-gray-900 group-hover:text-green-700">{scenario.name}</span>
+                  {scenario.description && <span className="mt-1 block truncate text-xs text-gray-500">{scenario.description}</span>}
+                  <span className="mt-2 flex flex-wrap gap-1.5 lg:hidden">
+                    {scenario.lineAccountId === null && (
+                      <span title="すべてのLINEアカウントに適用されます" className="rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800">全アカウント共通</span>
+                    )}
+                    <span title="配信時間の数え方" className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{modeLabel}</span>
+                  </span>
+                </Link>
+
+                <Link href={`/scenarios/detail?id=${scenario.id}`} className="mt-3 min-w-0 text-sm text-gray-600 lg:col-start-3 lg:row-start-1 lg:mt-0">
+                  <span className="text-xs text-gray-400 lg:hidden">開始条件</span>
+                  <span className="block truncate">{triggerLabel}</span>
+                </Link>
+
+                <Link href={`/scenarios/detail?id=${scenario.id}`} className="mt-3 lg:col-start-4 lg:row-start-1 lg:mt-0">
+                  <span className="text-xs text-gray-400 lg:hidden">ステップ</span>
+                  {stepCount === 0 ? (
+                    <span className="block text-sm font-medium text-amber-700">0件・配信なし</span>
+                  ) : (
+                    <span className="block text-sm text-gray-600">{stepCount}件</span>
+                  )}
+                </Link>
+
+                <div className="col-start-2 row-span-3 row-start-1 self-start justify-self-end lg:col-start-5 lg:row-span-1 lg:row-start-1 lg:self-center">
+                  <ActionMenu
+                    label={`「${scenario.name}」の操作`}
+                    items={[
+                      { label: '詳細を開く', tone: 'primary', onSelect: () => router.push(`/scenarios/detail?id=${scenario.id}`) },
+                      { label: '進行中の友だちを確認', onSelect: () => router.push(`/scenarios/detail?id=${scenario.id}#participants`) },
+                      { label: scenario.isActive ? '配信を停止する' : '配信を有効にする', onSelect: () => requestToggleActive(scenario), disabled: loading || actionBusy },
+                      { label: '削除', tone: 'danger', onSelect: () => { setActionError(''); setDeleteTarget(scenario) }, disabled: loading || actionBusy },
+                    ]}
+                  />
+                </div>
+
+                <div className="hidden min-w-0 flex-wrap gap-1.5 lg:col-start-2 lg:row-start-2 lg:flex">
+                  {scenario.lineAccountId === null && (
+                    <span title="すべてのLINEアカウントに適用されます" className="rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800">全アカウント共通</span>
+                  )}
+                  <span title="配信時間の数え方" className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{modeLabel}</span>
+                </div>
+              </div>
+            )
+          })}
         </div>
       </div>
-    )}
+
+      <ScenarioStatusSheet
+        open={Boolean(statusTarget)}
+        scenario={statusTarget}
+        conflict={statusConflict}
+        busy={actionBusy}
+        error={actionError}
+        onClose={() => { if (!actionBusy) { setStatusTarget(null); setStatusConflict(null); setActionError('') } }}
+        onConfirm={(options) => void runToggleActive(options)}
+      />
+
+      <ConfirmSheet
+        open={Boolean(deleteTarget)}
+        title={deleteTarget ? `「${deleteTarget.name}」を削除しますか？` : 'シナリオを削除しますか？'}
+        message={deleteTarget?.lineAccountId === null ? '全アカウント共通のシナリオです。削除するとすべてのLINEアカウントから消え、元に戻せません。' : 'シナリオとすべてのステップが削除され、元に戻せません。'}
+        confirmLabel="削除する"
+        tone="danger"
+        busy={actionBusy}
+        error={actionError}
+        onClose={() => { if (!actionBusy) { setDeleteTarget(null); setActionError('') } }}
+        onConfirm={() => void runDelete()}
+      />
     </>
   )
 }
