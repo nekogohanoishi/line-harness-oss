@@ -609,7 +609,9 @@ CREATE TABLE IF NOT EXISTS account_health_logs (
   created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_health_logs_account ON account_health_logs (line_account_id);
+CREATE INDEX IF NOT EXISTS idx_health_logs_account_created_at
+  ON account_health_logs (line_account_id, created_at DESC);
+DROP INDEX IF EXISTS idx_health_logs_account;
 
 CREATE TABLE IF NOT EXISTS account_migrations (
   id               TEXT PRIMARY KEY,
