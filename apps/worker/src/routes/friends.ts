@@ -7,14 +7,21 @@ import {
   addTagToFriend,
   removeTagFromFriend,
   getFriendTags,
+  getFriendTagsByIds,
   getScenarios,
   enrollFriendInScenario,
   jstNow,
+  toJstString,
   recordManualChatMessage,
 } from '@line-crm/db';
 import type { Friend as DbFriend, Tag as DbTag } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
 import { buildMessage, expandVariables, resolveMetadata } from '../services/step-delivery.js';
+import {
+  DELIVERY_CONTROL_METADATA_KEY,
+  getDelayedAutoReplyControl,
+  setDelayedAutoReplyPaused,
+} from '../services/delayed-auto-reply.js';
 import type { Env } from '../index.js';
 
 const friends = new Hono<Env>();
@@ -29,6 +36,8 @@ const friends = new Hono<Env>();
  * chatStatus from the JOINed query.
  */
 function serializeFriend(row: DbFriend) {
+  const metadata = JSON.parse(row.metadata || '{}') as Record<string, unknown>;
+  delete metadata[DELIVERY_CONTROL_METADATA_KEY];
   return {
     id: row.id,
     lineUserId: row.line_user_id,
@@ -38,7 +47,7 @@ function serializeFriend(row: DbFriend) {
     isFollowing: Boolean(row.is_following),
     blockedAt: row.blocked_at,
     lastUnblockedAt: row.last_unblocked_at,
-    metadata: JSON.parse(row.metadata || '{}'),
+    metadata,
     refCode: (row as unknown as Record<string, unknown>).ref_code as string | null,
     userId: row.user_id,
     createdAt: row.created_at,
@@ -82,6 +91,36 @@ function serializeTag(row: DbTag) {
   };
 }
 
+type FriendScenarioRow = {
+  id: string;
+  friend_id: string;
+  scenario_id: string;
+  scenario_name: string;
+  status: 'active' | 'paused' | 'completed' | 'delivering';
+  current_step_order: number;
+  started_at: string;
+  next_delivery_at: string | null;
+  updated_at: string;
+  total_steps: number;
+  sent_steps: number;
+};
+
+function serializeFriendScenario(row: FriendScenarioRow) {
+  return {
+    id: row.id,
+    friendId: row.friend_id,
+    scenarioId: row.scenario_id,
+    scenarioName: row.scenario_name,
+    status: row.status,
+    currentStepOrder: row.current_step_order,
+    startedAt: row.started_at,
+    nextDeliveryAt: row.next_delivery_at,
+    updatedAt: row.updated_at,
+    totalSteps: Number(row.total_steps),
+    sentSteps: Number(row.sent_steps),
+  };
+}
+
 // GET /api/friends - list with pagination
 friends.get('/api/friends', async (c) => {
   try {
@@ -90,8 +129,7 @@ friends.get('/api/friends', async (c) => {
     const tagId = c.req.query('tagId');
     const lineAccountId = c.req.query('lineAccountId');
     const search = c.req.query('search');
-    // ?includeTags=false skips per-row tag enrichment (N+1 of getFriendTags
-    // → ~50 extra D1 reads on a wide list query). The list view needs tags
+    // ?includeTags=false skips tag enrichment. The list view needs tags
     // for filter chips, but autocomplete-style consumers (test-recipient
     // picker, broadcast recipient picker) only render id/displayName/picture
     // and pay the cost for nothing. Default true to keep the historical
@@ -246,17 +284,15 @@ friends.get('/api/friends', async (c) => {
     const listResult = await listStmt.bind(...listBinds).all<DbFriend>();
     const items = listResult.results;
 
-    // Fetch tags for each friend in parallel so the list response includes tags.
-    // Skipped when ?includeTags=false (autocomplete consumers don't render
-    // tags and would otherwise pay N D1 reads per keystroke).
-    let itemsWithTags = includeTags
-      ? await Promise.all(
-          items.map(async (friend) => {
-            const tags = await getFriendTags(db, friend.id);
-            return { ...serializeFriendListRow(friend, includeChatStatus), tags: tags.map(serializeTag) };
-          }),
-        )
-      : items.map((friend) => ({ ...serializeFriendListRow(friend, includeChatStatus), tags: [] }));
+    // Fetch tags for the selected page in batches. Autocomplete consumers can
+    // skip this query with ?includeTags=false.
+    const tagsByFriend = includeTags
+      ? await getFriendTagsByIds(db, items.map((friend) => friend.id))
+      : new Map<string, DbTag[]>();
+    let itemsWithTags = items.map((friend) => ({
+      ...serializeFriendListRow(friend, includeChatStatus),
+      tags: (tagsByFriend.get(friend.id) ?? []).map(serializeTag),
+    }));
 
     // Optional: hydrate chat status (latest in/out message, active scenario,
     // derived "handled" flag). Three batched queries instead of N×3 to keep
@@ -433,6 +469,209 @@ friends.get('/api/friends/:id', async (c) => {
     });
   } catch (err) {
     console.error('GET /api/friends/:id error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// GET /api/friends/:id/delivery-control - friend-level scheduled message control
+friends.get('/api/friends/:id/delivery-control', async (c) => {
+  try {
+    const friend = await getFriendById(c.env.DB, c.req.param('id'));
+    if (!friend) {
+      return c.json({ success: false, error: 'Friend not found' }, 404);
+    }
+
+    const control = getDelayedAutoReplyControl(friend.metadata);
+    return c.json({
+      success: true,
+      data: {
+        scheduledMessagesPaused: control.paused,
+        scheduledMessagesPausedAt: control.pausedAt,
+      },
+    });
+  } catch (err) {
+    console.error('GET /api/friends/:id/delivery-control error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// PATCH /api/friends/:id/delivery-control - pause/resume delayed auto replies
+friends.patch('/api/friends/:id/delivery-control', async (c) => {
+  try {
+    const friendId = c.req.param('id');
+    const body = await c.req.json<{ action?: 'pause' | 'resume' }>();
+    if (body.action !== 'pause' && body.action !== 'resume') {
+      return c.json({ success: false, error: 'action must be pause or resume' }, 400);
+    }
+
+    const friend = await getFriendById(c.env.DB, friendId);
+    if (!friend) {
+      return c.json({ success: false, error: 'Friend not found' }, 404);
+    }
+
+    const now = jstNow();
+    const paused = body.action === 'pause';
+    const metadata = setDelayedAutoReplyPaused(friend.metadata, paused, now);
+    await c.env.DB
+      .prepare('UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?')
+      .bind(metadata, now, friendId)
+      .run();
+
+    return c.json({
+      success: true,
+      data: {
+        scheduledMessagesPaused: paused,
+        scheduledMessagesPausedAt: paused ? now : null,
+      },
+    });
+  } catch (err) {
+    console.error('PATCH /api/friends/:id/delivery-control error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// GET /api/friends/:id/scenarios - list this friend's active/paused step deliveries
+friends.get('/api/friends/:id/scenarios', async (c) => {
+  try {
+    const friendId = c.req.param('id');
+    const friend = await getFriendById(c.env.DB, friendId);
+    if (!friend) {
+      return c.json({ success: false, error: 'Friend not found' }, 404);
+    }
+
+    const result = await c.env.DB
+      .prepare(
+        `SELECT fs.id, fs.friend_id, fs.scenario_id, s.name AS scenario_name,
+                fs.status, fs.current_step_order, fs.started_at,
+                fs.next_delivery_at, fs.updated_at,
+                (SELECT COUNT(*) FROM scenario_steps ss
+                  WHERE ss.scenario_id = fs.scenario_id) AS total_steps,
+                (SELECT COUNT(DISTINCT ml.scenario_step_id) FROM messages_log ml
+                  WHERE ml.friend_id = fs.friend_id
+                    AND ml.scenario_step_id IN (
+                      SELECT ss2.id FROM scenario_steps ss2
+                      WHERE ss2.scenario_id = fs.scenario_id
+                    )) AS sent_steps
+         FROM friend_scenarios fs
+         INNER JOIN scenarios s ON s.id = fs.scenario_id
+         WHERE fs.friend_id = ?
+           AND fs.status IN ('active', 'paused', 'delivering')
+         ORDER BY fs.started_at DESC`,
+      )
+      .bind(friendId)
+      .all<FriendScenarioRow>();
+
+    return c.json({
+      success: true,
+      data: result.results.map(serializeFriendScenario),
+    });
+  } catch (err) {
+    console.error('GET /api/friends/:id/scenarios error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// PATCH /api/friends/:friendId/scenarios/:enrollmentId - pause/resume one friend's delivery
+friends.patch('/api/friends/:friendId/scenarios/:enrollmentId', async (c) => {
+  try {
+    const friendId = c.req.param('friendId');
+    const enrollmentId = c.req.param('enrollmentId');
+    const body = await c.req.json<{ action?: 'pause' | 'resume' }>();
+    if (body.action !== 'pause' && body.action !== 'resume') {
+      return c.json({ success: false, error: 'action must be pause or resume' }, 400);
+    }
+
+    const db = c.env.DB;
+    const enrollment = await db
+      .prepare(
+        `SELECT fs.id, fs.friend_id, fs.scenario_id, s.name AS scenario_name,
+                fs.status, fs.current_step_order, fs.started_at,
+                fs.next_delivery_at, fs.updated_at,
+                (SELECT COUNT(*) FROM scenario_steps ss
+                  WHERE ss.scenario_id = fs.scenario_id) AS total_steps,
+                (SELECT COUNT(DISTINCT ml.scenario_step_id) FROM messages_log ml
+                  WHERE ml.friend_id = fs.friend_id
+                    AND ml.scenario_step_id IN (
+                      SELECT ss2.id FROM scenario_steps ss2
+                      WHERE ss2.scenario_id = fs.scenario_id
+                    )) AS sent_steps
+         FROM friend_scenarios fs
+         INNER JOIN scenarios s ON s.id = fs.scenario_id
+         WHERE fs.id = ? AND fs.friend_id = ?`,
+      )
+      .bind(enrollmentId, friendId)
+      .first<FriendScenarioRow>();
+
+    if (!enrollment) {
+      return c.json({ success: false, error: 'Friend scenario not found' }, 404);
+    }
+
+    const now = jstNow();
+    if (body.action === 'pause') {
+      if (enrollment.status === 'paused') {
+        return c.json({ success: true, data: serializeFriendScenario(enrollment) });
+      }
+      if (enrollment.status !== 'active') {
+        return c.json({ success: false, error: 'Scenario delivery is currently processing' }, 409);
+      }
+
+      const updated = await db
+        .prepare(
+          `UPDATE friend_scenarios SET status = 'paused', updated_at = ?
+           WHERE id = ? AND friend_id = ? AND status = 'active'`,
+        )
+        .bind(now, enrollmentId, friendId)
+        .run();
+      if ((updated.meta.changes ?? 0) === 0) {
+        return c.json({ success: false, error: 'Scenario status changed; reload and try again' }, 409);
+      }
+
+      return c.json({
+        success: true,
+        data: serializeFriendScenario({ ...enrollment, status: 'paused', updated_at: now }),
+      });
+    }
+
+    if (enrollment.status === 'active') {
+      return c.json({ success: true, data: serializeFriendScenario(enrollment) });
+    }
+    if (enrollment.status !== 'paused') {
+      return c.json({ success: false, error: 'Only paused scenario delivery can be resumed' }, 409);
+    }
+
+    // Preserve the wait time that remained when the operator paused delivery.
+    // This avoids sending an overdue step immediately after a long pause.
+    let nextDeliveryAt = enrollment.next_delivery_at;
+    if (nextDeliveryAt) {
+      const pausedAtMs = new Date(enrollment.updated_at).getTime();
+      const originalDeliveryMs = new Date(nextDeliveryAt).getTime();
+      const remainingMs = Math.max(0, originalDeliveryMs - pausedAtMs);
+      nextDeliveryAt = toJstString(new Date(new Date(now).getTime() + remainingMs));
+    }
+
+    const updated = await db
+      .prepare(
+        `UPDATE friend_scenarios
+         SET status = 'active', next_delivery_at = ?, updated_at = ?
+         WHERE id = ? AND friend_id = ? AND status = 'paused'`,
+      )
+      .bind(nextDeliveryAt, now, enrollmentId, friendId)
+      .run();
+    if ((updated.meta.changes ?? 0) === 0) {
+      return c.json({ success: false, error: 'Scenario status changed; reload and try again' }, 409);
+    }
+
+    return c.json({
+      success: true,
+      data: serializeFriendScenario({
+        ...enrollment,
+        status: 'active',
+        next_delivery_at: nextDeliveryAt,
+        updated_at: now,
+      }),
+    });
+  } catch (err) {
+    console.error('PATCH /api/friends/:friendId/scenarios/:enrollmentId error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });

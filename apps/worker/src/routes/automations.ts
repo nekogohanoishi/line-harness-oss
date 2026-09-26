@@ -19,7 +19,7 @@ automations.get('/api/automations', async (c) => {
     let items;
     if (lineAccountId) {
       const result = await c.env.DB
-        .prepare(`SELECT * FROM automations WHERE line_account_id = ? ORDER BY priority DESC, created_at DESC`)
+        .prepare(`SELECT * FROM automations WHERE line_account_id IS NULL OR line_account_id = ? ORDER BY priority DESC, created_at DESC`)
         .bind(lineAccountId)
         .all();
       items = result.results as unknown as Awaited<ReturnType<typeof getAutomations>>;

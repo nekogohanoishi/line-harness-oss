@@ -77,12 +77,18 @@ import { messageTemplates } from './routes/message-templates.js';
 import dedupPreview from './routes/dedup-preview.js';
 import { profileRefresh } from './routes/profile-refresh.js';
 import { richMenuGroups } from './routes/rich-menu-groups.js';
+import {
+  deliverDelayedAutoReply,
+  getDelayedAutoReplyWaitSeconds,
+  type DelayedAutoReplyPayload,
+} from './services/delayed-auto-reply.js';
 
 export type Env = {
   Bindings: {
     DB: D1Database;
     IMAGES: R2Bucket;
     ASSETS: Fetcher;
+    DELAYED_MESSAGES?: Queue<DelayedAutoReplyPayload>;
     LINE_CHANNEL_SECRET: string;
     LINE_CHANNEL_ACCESS_TOKEN: string;
     API_KEY: string;
@@ -687,8 +693,29 @@ async function scheduled(
   // `重複:` tag rows untouched until that replacement lands.
 }
 
+async function queue(
+  batch: MessageBatch<DelayedAutoReplyPayload>,
+  env: Env['Bindings'],
+): Promise<void> {
+  for (const queueMessage of batch.messages) {
+    try {
+      const waitSeconds = getDelayedAutoReplyWaitSeconds(queueMessage.body);
+      if (waitSeconds > 0) {
+        queueMessage.retry({ delaySeconds: waitSeconds });
+        continue;
+      }
+      await deliverDelayedAutoReply(env.DB, queueMessage.body, env.LINE_CHANNEL_ACCESS_TOKEN);
+      queueMessage.ack();
+    } catch (error) {
+      console.error('[delayed-auto-reply] delivery failed', error);
+      queueMessage.retry({ delaySeconds: 60 });
+    }
+  }
+}
+
 export default {
   fetch: app.fetch,
   scheduled,
+  queue,
 };
 // redeploy trigger

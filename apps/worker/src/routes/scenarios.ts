@@ -141,6 +141,44 @@ function serializeFriendScenario(row: DbFriendScenario) {
   };
 }
 
+type ScenarioParticipantStatus = 'active' | 'paused' | 'delivering';
+
+interface ScenarioParticipantRow {
+  id: string;
+  friend_id: string;
+  scenario_id: string;
+  status: ScenarioParticipantStatus;
+  current_step_order: number;
+  started_at: string;
+  next_delivery_at: string | null;
+  updated_at: string;
+  display_name: string | null;
+  picture_url: string | null;
+  is_following: number;
+  blocked_at: string | null;
+  total_steps: number;
+  sent_steps: number;
+}
+
+function serializeScenarioParticipant(row: ScenarioParticipantRow) {
+  return {
+    id: row.id,
+    friendId: row.friend_id,
+    scenarioId: row.scenario_id,
+    status: row.status,
+    currentStepOrder: row.current_step_order,
+    startedAt: row.started_at,
+    nextDeliveryAt: row.next_delivery_at,
+    updatedAt: row.updated_at,
+    displayName: row.display_name || '名前未取得',
+    pictureUrl: row.picture_url,
+    isFollowing: Boolean(row.is_following),
+    blockedAt: row.blocked_at,
+    totalSteps: Number(row.total_steps),
+    sentSteps: Number(row.sent_steps),
+  };
+}
+
 // GET /api/scenarios - list all
 scenarios.get('/api/scenarios', async (c) => {
   try {
@@ -820,6 +858,106 @@ scenarios.get('/api/scenarios/:id/stats', async (c) => {
     return c.json({ success: true, data: stats });
   } catch (err) {
     console.error('GET /api/scenarios/:id/stats error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// GET /api/scenarios/:id/participants - list active/paused deliveries for this scenario
+scenarios.get('/api/scenarios/:id/participants', async (c) => {
+  try {
+    const scenarioId = c.req.param('id');
+    const scenario = await c.env.DB
+      .prepare('SELECT id FROM scenarios WHERE id = ?')
+      .bind(scenarioId)
+      .first<{ id: string }>();
+    if (!scenario) {
+      return c.json({ success: false, error: 'Scenario not found' }, 404);
+    }
+
+    const requestedStatus = c.req.query('status');
+    const status: ScenarioParticipantStatus | null =
+      requestedStatus === 'active' || requestedStatus === 'paused' || requestedStatus === 'delivering'
+        ? requestedStatus
+        : null;
+    const search = (c.req.query('search') ?? '').trim();
+    const parsedLimit = Number(c.req.query('limit') ?? '30');
+    const parsedOffset = Number(c.req.query('offset') ?? '0');
+    const limit = Number.isFinite(parsedLimit) ? Math.min(100, Math.max(1, Math.floor(parsedLimit))) : 30;
+    const offset = Number.isFinite(parsedOffset) ? Math.max(0, Math.floor(parsedOffset)) : 0;
+
+    const searchClause = search ? ' AND f.display_name LIKE ?' : '';
+    const baseBinds: unknown[] = [scenarioId];
+    if (search) baseBinds.push(`%${search}%`);
+
+    const counts = await c.env.DB
+      .prepare(
+        `SELECT
+           COUNT(*) AS total,
+           SUM(CASE WHEN fs.status = 'active' THEN 1 ELSE 0 END) AS active_count,
+           SUM(CASE WHEN fs.status = 'paused' THEN 1 ELSE 0 END) AS paused_count,
+           SUM(CASE WHEN fs.status = 'delivering' THEN 1 ELSE 0 END) AS delivering_count
+         FROM friend_scenarios fs
+         INNER JOIN friends f ON f.id = fs.friend_id
+         WHERE fs.scenario_id = ?
+           AND fs.status IN ('active', 'paused', 'delivering')${searchClause}`,
+      )
+      .bind(...baseBinds)
+      .first<{
+        total: number;
+        active_count: number;
+        paused_count: number;
+        delivering_count: number;
+      }>();
+
+    const statusClause = status ? ' AND fs.status = ?' : '';
+    const listBinds: unknown[] = [...baseBinds];
+    if (status) listBinds.push(status);
+    listBinds.push(limit, offset);
+
+    const result = await c.env.DB
+      .prepare(
+        `SELECT fs.id, fs.friend_id, fs.scenario_id, fs.status,
+                fs.current_step_order, fs.started_at, fs.next_delivery_at, fs.updated_at,
+                f.display_name, f.picture_url, f.is_following, f.blocked_at,
+                (SELECT COUNT(*) FROM scenario_steps ss
+                  WHERE ss.scenario_id = fs.scenario_id) AS total_steps,
+                (SELECT COUNT(DISTINCT ml.scenario_step_id) FROM messages_log ml
+                  WHERE ml.friend_id = fs.friend_id
+                    AND ml.scenario_step_id IN (
+                      SELECT ss2.id FROM scenario_steps ss2
+                      WHERE ss2.scenario_id = fs.scenario_id
+                    )) AS sent_steps
+         FROM friend_scenarios fs
+         INNER JOIN friends f ON f.id = fs.friend_id
+         WHERE fs.scenario_id = ?
+           AND fs.status IN ('active', 'paused', 'delivering')${searchClause}${statusClause}
+         ORDER BY
+           CASE fs.status WHEN 'delivering' THEN 0 WHEN 'active' THEN 1 ELSE 2 END,
+           CASE WHEN fs.next_delivery_at IS NULL THEN 1 ELSE 0 END,
+           fs.next_delivery_at ASC,
+           fs.started_at DESC
+         LIMIT ? OFFSET ?`,
+      )
+      .bind(...listBinds)
+      .all<ScenarioParticipantRow>();
+
+    const statusCounts = {
+      active: Number(counts?.active_count ?? 0),
+      paused: Number(counts?.paused_count ?? 0),
+      delivering: Number(counts?.delivering_count ?? 0),
+    };
+    const filteredTotal = status ? statusCounts[status] : Number(counts?.total ?? 0);
+
+    return c.json({
+      success: true,
+      data: {
+        items: result.results.map(serializeScenarioParticipant),
+        total: filteredTotal,
+        counts: statusCounts,
+      },
+    });
+  } catch (err) {
+    console.error('GET /api/scenarios/:id/participants error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });

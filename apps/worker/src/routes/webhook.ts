@@ -44,6 +44,14 @@ import {
   resolveMetadata,
 } from '../services/step-delivery.js';
 import { applySurveyAnswerTags } from '../services/survey-answer-tags.js';
+import {
+  parseAutoReplyMessages,
+  resolveAutoReplySchedule,
+} from '../services/auto-reply-messages.js';
+import {
+  MAX_QUEUE_DELAY_SECONDS,
+  type DelayedAutoReplyPayload,
+} from '../services/delayed-auto-reply.js';
 import type { Env } from '../index.js';
 
 const webhook = new Hono<Env>();
@@ -579,7 +587,16 @@ webhook.post('/webhook', async (c) => {
   const processingPromise = (async () => {
     for (const event of body.events) {
       try {
-        await handleEvent(db, lineClient, event, channelAccessToken, matchedAccountId, c.env.WORKER_URL || new URL(c.req.url).origin, c.env.LIFF_URL);
+        await handleEvent(
+          db,
+          lineClient,
+          event,
+          channelAccessToken,
+          matchedAccountId,
+          c.env.WORKER_URL || new URL(c.req.url).origin,
+          c.env.LIFF_URL,
+          c.env.DELAYED_MESSAGES,
+        );
       } catch (err) {
         console.error('Error handling webhook event:', err);
       }
@@ -599,6 +616,7 @@ async function handleEvent(
   lineAccountId: string | null = null,
   workerUrl?: string,
   liffUrl?: string,
+  delayedMessages?: Queue<DelayedAutoReplyPayload>,
 ): Promise<void> {
   if (event.type === 'follow') {
     const userId =
@@ -946,21 +964,53 @@ async function handleEvent(
             response_type: rule.response_type,
             response_content: rule.response_content,
           });
-          const expandedContent = expandVariables(resolved.content, { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1], workerUrl);
-          const replyMsg = buildMessage(resolved.messageType, expandedContent);
-          await lineClient.replyMessage(event.replyToken, [replyMsg]);
+          const scheduleNow = new Date();
+          const replyPlans = parseAutoReplyMessages(resolved.messageType, resolved.content).map((message) => {
+            const expandedContent = expandVariables(
+              message.messageContent,
+              { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1],
+              workerUrl,
+            );
+            const schedule = resolveAutoReplySchedule(message, scheduleNow);
+            return {
+              ...schedule,
+              messageType: message.messageType,
+              messageContent: expandedContent,
+              message: buildMessage(message.messageType, expandedContent),
+            };
+          });
+          const immediatePlans = replyPlans.filter((plan) => plan.delaySeconds === 0);
+          const delayedPlans = replyPlans.filter((plan) => plan.delaySeconds > 0);
+          if (delayedPlans.length > 0 && !delayedMessages) {
+            throw new Error('DELAYED_MESSAGES queue binding is required for delayed auto-replies');
+          }
+          if (immediatePlans.length > 0) {
+            await lineClient.replyMessage(event.replyToken, immediatePlans.map((plan) => plan.message));
+          }
+          for (const plan of delayedPlans) {
+            await delayedMessages!.send({
+              deliveryId: crypto.randomUUID(),
+              friendId: friend.id,
+              lineAccountId,
+              messageType: plan.messageType,
+              messageContent: plan.messageContent,
+              deliverAt: plan.deliverAt,
+            }, { delaySeconds: Math.min(plan.delaySeconds, MAX_QUEUE_DELAY_SECONDS) });
+          }
 
           // 送信ログ — Rich Menu 経由の Flex 応答もチャット詳細に残るようにする。
           // テキスト auto_reply (line ~390) と同じパターン。
           const { messageToLogPayload: logPayload } = await import('../services/step-delivery.js');
-          const replyPayload = logPayload(replyMsg);
-          await db
-            .prepare(
-              `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, line_account_id, created_at)
-               VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, 'reply', 'auto_reply', ?, ?)`,
-            )
-            .bind(crypto.randomUUID(), friend.id, replyPayload.messageType, replyPayload.content, lineAccountId ?? null, jstNow())
-            .run();
+          for (const plan of immediatePlans) {
+            const replyPayload = logPayload(plan.message);
+            await db
+              .prepare(
+                `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, line_account_id, created_at)
+                 VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, 'reply', 'auto_reply', ?, ?)`,
+              )
+              .bind(crypto.randomUUID(), friend.id, replyPayload.messageType, replyPayload.content, lineAccountId ?? null, jstNow())
+              .run();
+          }
         } catch (err) {
           console.error('Failed to send postback reply', err);
         }
@@ -1131,24 +1181,55 @@ async function handleEvent(
             response_type: rule.response_type,
             response_content: rule.response_content,
           });
-          const expandedContent = expandVariables(resolved.content, { ...friend, metadata: resolvedMeta2 } as Parameters<typeof expandVariables>[1], workerUrl);
-          const replyMsg = buildMessage(resolved.messageType, expandedContent);
-          await lineClient.replyMessage(event.replyToken, [replyMsg]);
-          replyTokenConsumed = true;
+          const scheduleNow = new Date();
+          const replyPlans = parseAutoReplyMessages(resolved.messageType, resolved.content).map((message) => {
+            const expandedContent = expandVariables(
+              message.messageContent,
+              { ...friend, metadata: resolvedMeta2 } as Parameters<typeof expandVariables>[1],
+              workerUrl,
+            );
+            const schedule = resolveAutoReplySchedule(message, scheduleNow);
+            return {
+              ...schedule,
+              messageType: message.messageType,
+              messageContent: expandedContent,
+              message: buildMessage(message.messageType, expandedContent),
+            };
+          });
+          const immediatePlans = replyPlans.filter((plan) => plan.delaySeconds === 0);
+          const delayedPlans = replyPlans.filter((plan) => plan.delaySeconds > 0);
+          if (delayedPlans.length > 0 && !delayedMessages) {
+            throw new Error('DELAYED_MESSAGES queue binding is required for delayed auto-replies');
+          }
+          if (immediatePlans.length > 0) {
+            await lineClient.replyMessage(event.replyToken, immediatePlans.map((plan) => plan.message));
+            replyTokenConsumed = true;
+          }
+          for (const plan of delayedPlans) {
+            await delayedMessages!.send({
+              deliveryId: crypto.randomUUID(),
+              friendId: friend.id,
+              lineAccountId,
+              messageType: plan.messageType,
+              messageContent: plan.messageContent,
+              deliverAt: plan.deliverAt,
+            }, { delaySeconds: Math.min(plan.delaySeconds, MAX_QUEUE_DELAY_SECONDS) });
+          }
 
           // 送信ログ（replyMessage = 無料）— derive content from the built
           // reply message so any cleanEmptyNodes / parse-failure fallback is
           // reflected in the dashboard.
-          const outLogId = crypto.randomUUID();
           const { messageToLogPayload: logPayload2 } = await import('../services/step-delivery.js');
-          const wbAutoReplyPayload = logPayload2(replyMsg);
-          await db
-            .prepare(
-              `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, created_at)
-               VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, 'reply', 'auto_reply', ?)`,
-            )
-            .bind(outLogId, friend.id, wbAutoReplyPayload.messageType, wbAutoReplyPayload.content, jstNow())
-            .run();
+          for (const plan of immediatePlans) {
+            const wbAutoReplyPayload = logPayload2(plan.message);
+            await db
+              .prepare(
+                `INSERT INTO messages_log (id, friend_id, direction, message_type, content, broadcast_id, scenario_step_id, delivery_type, source, created_at)
+                 VALUES (?, ?, 'outgoing', ?, ?, NULL, NULL, 'reply', 'auto_reply', ?)`,
+              )
+              .bind(crypto.randomUUID(), friend.id, wbAutoReplyPayload.messageType, wbAutoReplyPayload.content, jstNow())
+              .run();
+          }
         } catch (err) {
           console.error('Failed to send auto-reply', err);
         }

@@ -25,10 +25,21 @@ not_found_handling = "none"
 binding = "DB"
 database_name = "line-harness"
 database_id = "YOUR_DEV_D1_DATABASE_ID"
+migrations_dir = "../../packages/db/migrations"
 
 [[r2_buckets]]
 binding = "IMAGES"
 bucket_name = "line-harness-images"
+
+[[queues.producers]]
+binding = "DELAYED_MESSAGES"
+queue = "line-harness-delayed-messages"
+
+[[queues.consumers]]
+queue = "line-harness-delayed-messages"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
 
 [triggers]
 crons = ["*/5 * * * *", "0 */6 * * *"]
@@ -61,10 +72,21 @@ not_found_handling = "none"
 binding = "DB"
 database_name = "line-crm"
 database_id = "YOUR_D1_DATABASE_ID"
+migrations_dir = "../../packages/db/migrations"
 
 [[env.production.r2_buckets]]
 binding = "IMAGES"
 bucket_name = "line-harness-images"
+
+[[env.production.queues.producers]]
+binding = "DELAYED_MESSAGES"
+queue = "line-harness-delayed-messages"
+
+[[env.production.queues.consumers]]
+queue = "line-harness-delayed-messages"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
 
 [env.production.triggers]
 crons = ["*/5 * * * *", "0 */6 * * *"]

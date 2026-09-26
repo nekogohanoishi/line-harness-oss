@@ -8,6 +8,7 @@ import {
 } from '@line-crm/db';
 import type { AutoReply as DbAutoReply } from '@line-crm/db';
 import type { Env } from '../index.js';
+import { validateAutoReplyResponse } from '../services/auto-reply-messages.js';
 
 const autoReplies = new Hono<Env>();
 
@@ -68,7 +69,7 @@ async function computeEffectiveAccounts(
     }
     // silent: 同 keyword の automation rule が同アカに存在すれば返信、無ければ silent only
     const automationAccs = automationsByKeyword.get(rule.keyword);
-    if (automationAccs?.has(acc.id)) {
+    if (automationAccs?.has(acc.id) || automationAccs?.has('*')) {
       return { accountId: acc.id, accountName: acc.name, status: 'reply', via: 'automation' };
     }
     return { accountId: acc.id, accountName: acc.name, status: 'silent', via: null };
@@ -77,13 +78,12 @@ async function computeEffectiveAccounts(
 
 async function buildAutomationKeywordIndex(db: D1Database): Promise<Map<string, Set<string>>> {
   // event_type='message_received' で keyword を持ち、send_message を含む automation を全件取って
-  // keyword -> set<account_id> のインデックス化。
+  // keyword -> set<account_id> のインデックス化。全アカウント共通ルールは * で表す。
   const res = await db
     .prepare(`SELECT line_account_id, conditions, actions FROM automations WHERE is_active = 1 AND event_type = 'message_received'`)
     .all<{ line_account_id: string | null; conditions: string; actions: string }>();
   const idx = new Map<string, Set<string>>();
   for (const r of res.results ?? []) {
-    if (!r.line_account_id) continue;  // global rules — skip; UI assumes per-account
     let keyword: string | null = null;
     try {
       const c = JSON.parse(r.conditions) as { keyword?: string; keyword_exact?: string };
@@ -98,7 +98,7 @@ async function buildAutomationKeywordIndex(db: D1Database): Promise<Map<string, 
     } catch { continue; }
     if (!hasSendMessage) continue;
     const set = idx.get(keyword) ?? new Set<string>();
-    set.add(r.line_account_id);
+    set.add(r.line_account_id ?? '*');
     idx.set(keyword, set);
   }
   return idx;
@@ -182,6 +182,14 @@ autoReplies.post('/api/auto-replies', async (c) => {
       }
     }
 
+    if (resolvedResponseType === 'sequence' && body.templateId) {
+      return c.json({ success: false, error: 'sequence responses cannot use templateId' }, 400);
+    }
+    const validationError = validateAutoReplyResponse(resolvedResponseType, resolvedResponseContent);
+    if (validationError) {
+      return c.json({ success: false, error: validationError }, 400);
+    }
+
     const item = await createAutoReply(c.env.DB, {
       keyword: body.keyword,
       matchType: body.matchType,
@@ -212,6 +220,11 @@ autoReplies.put('/api/auto-replies/:id', async (c) => {
       isActive?: boolean;
     }>();
 
+    const existing = await getAutoReplyById(c.env.DB, id);
+    if (!existing) {
+      return c.json({ success: false, error: 'Auto-reply not found' }, 404);
+    }
+
     const input: Record<string, unknown> = {};
     if (body.keyword !== undefined) input.keyword = body.keyword;
     if (body.matchType !== undefined) input.matchType = body.matchType;
@@ -230,6 +243,17 @@ autoReplies.put('/api/auto-replies/:id', async (c) => {
         input.responseContent = tpl.message_content;
         if (body.responseType === undefined) input.responseType = tpl.message_type;
       }
+    }
+
+    const nextResponseType = String(input.responseType ?? existing.response_type);
+    const nextResponseContent = String(input.responseContent ?? existing.response_content);
+    const nextTemplateId = 'templateId' in input ? input.templateId : existing.template_id;
+    if (nextResponseType === 'sequence' && nextTemplateId) {
+      return c.json({ success: false, error: 'sequence responses cannot use templateId' }, 400);
+    }
+    const validationError = validateAutoReplyResponse(nextResponseType, nextResponseContent);
+    if (validationError) {
+      return c.json({ success: false, error: validationError }, 400);
     }
 
     const updated = await updateAutoReply(c.env.DB, id, input as Parameters<typeof updateAutoReply>[2]);
