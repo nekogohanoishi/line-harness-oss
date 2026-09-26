@@ -86,22 +86,23 @@ function StatCard({ title, value, loading, icon, href, accentColor = '#06C755', 
  * 「対応不要」であることが一目で分かる控えめな表示に落とす。
  */
 function PendingBookingsCard({
-  eventPending,
-  slotPending,
+  eventSummary,
+  individualSummary,
   loading,
 }: {
-  eventPending: number | null
-  slotPending: number | null
+  eventSummary: { count: number; unseenCount: number } | null
+  individualSummary: { count: number; unseenCount: number } | null
   loading: boolean
 }) {
-  const total = (eventPending ?? 0) + (slotPending ?? 0)
-  const hasPending = total > 0
+  const unseenTotal = (eventSummary?.unseenCount ?? 0) + (individualSummary?.unseenCount ?? 0)
+  const pendingTotal = (eventSummary?.count ?? 0) + (individualSummary?.count ?? 0)
+  const hasAttention = unseenTotal > 0 || pendingTotal > 0
 
   if (loading) {
     return <div className="mb-4 h-[88px] rounded-xl border border-gray-200 bg-white animate-pulse" />
   }
 
-  if (!hasPending) {
+  if (!hasAttention) {
     return (
       <div className="mb-4 flex items-center gap-2.5 rounded-xl border border-gray-200 bg-white px-4 py-3">
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-50 text-green-600">
@@ -109,14 +110,14 @@ function PendingBookingsCard({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
           </svg>
         </span>
-        <p className="text-sm text-gray-600">承認待ちの予約はありません</p>
+        <p className="text-sm text-gray-600">未確認・承認待ちの予約はありません</p>
       </div>
     )
   }
 
   return (
     <Link
-      href={eventPending && eventPending > 0 ? '/events/bookings' : '/booking/bookings'}
+      href="/booking/bookings"
       className="mb-4 flex items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3.5 min-h-[68px] hover:bg-amber-100 active:bg-amber-100 transition-colors"
     >
       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-amber-400 text-white">
@@ -127,12 +128,18 @@ function PendingBookingsCard({
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-base font-bold text-amber-900">
-          承認待ちの予約 {total.toLocaleString('ja-JP')} 件
+          {unseenTotal > 0
+            ? `未確認の予約 ${unseenTotal.toLocaleString('ja-JP')} 件`
+            : `承認待ちの予約 ${pendingTotal.toLocaleString('ja-JP')} 件`}
         </p>
         <p className="text-xs text-amber-800/80 mt-0.5">
           {[
-            eventPending ? `イベント ${eventPending} 件` : null,
-            slotPending ? `個別予約 ${slotPending} 件` : null,
+            (unseenTotal > 0 ? eventSummary?.unseenCount : eventSummary?.count)
+              ? `イベント ${unseenTotal > 0 ? eventSummary?.unseenCount : eventSummary?.count} 件`
+              : null,
+            (unseenTotal > 0 ? individualSummary?.unseenCount : individualSummary?.count)
+              ? `個別予約 ${unseenTotal > 0 ? individualSummary?.unseenCount : individualSummary?.count} 件`
+              : null,
           ].filter(Boolean).join(' ・ ')}
         </p>
       </div>
@@ -158,15 +165,15 @@ export default function DashboardPage() {
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [eventPending, setEventPending] = useState<number | null>(null)
-  const [slotPending, setSlotPending] = useState<number | null>(null)
+  const [eventBookingSummary, setEventBookingSummary] = useState<{ count: number; unseenCount: number } | null>(null)
+  const [individualBookingSummary, setIndividualBookingSummary] = useState<{ count: number; unseenCount: number } | null>(null)
 
   // 承認待ち件数は他の指標と独立して取る。件数取得に失敗しても
   // ダッシュボード全体をエラーにしない (通知バッジ相当の情報のため)。
   useEffect(() => {
     if (!selectedAccountId) {
-      setEventPending(null)
-      setSlotPending(null)
+      setEventBookingSummary(null)
+      setIndividualBookingSummary(null)
       return
     }
     let cancelled = false
@@ -176,8 +183,8 @@ export default function DashboardPage() {
         bookingApi.pendingCount(selectedAccountId),
       ])
       if (cancelled) return
-      setEventPending(ev.status === 'fulfilled' ? ev.value.count : null)
-      setSlotPending(slot.status === 'fulfilled' ? slot.value.count : null)
+      setEventBookingSummary(ev.status === 'fulfilled' ? ev.value : null)
+      setIndividualBookingSummary(slot.status === 'fulfilled' ? slot.value : null)
     })()
     return () => { cancelled = true }
   }, [selectedAccountId])
@@ -236,6 +243,7 @@ export default function DashboardPage() {
     <div>
       <PageHeader
         title="ダッシュボード"
+        actions={<Link href="/deliveries" className="rounded-md border border-green-600 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-50">現在有効な配信を確認</Link>}
         description={
           selectedAccount
             ? `${selectedAccount.displayName || selectedAccount.name} の管理画面`
@@ -250,7 +258,11 @@ export default function DashboardPage() {
       )}
 
       {/* 最優先: 承認待ちの予約 (スマホで最初に目に入る位置) */}
-      <PendingBookingsCard eventPending={eventPending} slotPending={slotPending} loading={loading} />
+      <PendingBookingsCard
+        eventSummary={eventBookingSummary}
+        individualSummary={individualBookingSummary}
+        loading={loading}
+      />
 
       {/* 主要指標。モバイルは 1 列縦積み、重要な順に上から並ぶ。 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 mb-4 sm:mb-6">
@@ -280,7 +292,7 @@ export default function DashboardPage() {
           }
         />
         <StatCard
-          title="配信数 (合計)"
+          title="一斉配信の登録件数"
           value={stats.broadcastCount}
           loading={loading}
           href="/broadcasts"

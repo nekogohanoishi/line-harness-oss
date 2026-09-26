@@ -153,7 +153,7 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
               </p>
             </div>
           ) : (
-            <span className="text-xs text-gray-400">停止中</span>
+            <span className="text-xs text-gray-400">進行中のシナリオなし</span>
           )}
         </div>
 

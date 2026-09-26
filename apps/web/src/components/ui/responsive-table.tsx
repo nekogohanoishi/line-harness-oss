@@ -72,6 +72,8 @@ export interface ResponsiveTableProps<T> {
   actions?: (row: T, index: number) => React.ReactNode
   /** 行そのものをタップ可能にする。actions 内のタップは伝播しない。 */
   onRowClick?: (row: T, index: number) => void
+  /** クリック可能な行を読み上げるときの名前。 */
+  rowLabel?: (row: T, index: number) => string
   /** rows が空のときに表示する内容 (EmptyState など)。 */
   empty?: React.ReactNode
   /** 読み込み中に表示する内容。指定時は rows より優先。 */
@@ -94,6 +96,7 @@ export default function ResponsiveTable<T>({
   rowKey,
   actions,
   onRowClick,
+  rowLabel,
   empty,
   loading = false,
   loadingLabel = '読み込み中...',
@@ -130,6 +133,18 @@ export default function ResponsiveTable<T>({
   const bodyCols =
     primary.length > 0 ? secondary : secondary.filter((c) => c.key !== columns[0]?.key)
 
+  const handleRowKeyDown = (
+    event: React.KeyboardEvent<HTMLElement>,
+    row: T,
+    index: number,
+  ) => {
+    if (!onRowClick || event.target !== event.currentTarget) return
+    if (event.key !== 'Enter' && event.key !== ' ') return
+
+    event.preventDefault()
+    onRowClick(row, index)
+  }
+
   return (
     <div className={`${shell} ${className}`}>
       {/* ── デスクトップ: 通常の表 ── */}
@@ -153,6 +168,9 @@ export default function ResponsiveTable<T>({
               <tr
                 key={rowKey(row, i)}
                 onClick={onRowClick ? () => onRowClick(row, i) : undefined}
+                onKeyDown={onRowClick ? (event) => handleRowKeyDown(event, row, i) : undefined}
+                tabIndex={onRowClick ? 0 : undefined}
+                aria-label={onRowClick ? (rowLabel?.(row, i) ?? `項目 ${i + 1} を開く`) : undefined}
                 className={`border-t border-gray-100 ${onRowClick ? 'cursor-pointer hover:bg-gray-50' : 'hover:bg-gray-50'}`}
               >
                 {columns.map((c) => (
@@ -183,6 +201,9 @@ export default function ResponsiveTable<T>({
           <li
             key={rowKey(row, i)}
             onClick={onRowClick ? () => onRowClick(row, i) : undefined}
+            onKeyDown={onRowClick ? (event) => handleRowKeyDown(event, row, i) : undefined}
+            tabIndex={onRowClick ? 0 : undefined}
+            aria-label={onRowClick ? (rowLabel?.(row, i) ?? `項目 ${i + 1} を開く`) : undefined}
             className={`px-4 py-3.5 ${onRowClick ? 'active:bg-gray-50' : ''}`}
           >
             <div className="flex items-start justify-between gap-3">

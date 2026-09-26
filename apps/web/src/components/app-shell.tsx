@@ -7,6 +7,7 @@ import { AccountProvider } from '@/contexts/account-context'
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
+  const isChatPage = pathname === '/chats'
 
   if (pathname === '/login') {
     return <>{children}</>
@@ -24,9 +25,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               上書きすると余白が消える。 */}
           {/* min-w-0: これが無いと flex 子要素の min-width:auto により、
               幅の広い表が画面全体を押し広げてページごと横スクロールする。 */}
-          <main className="flex-1 min-w-0 overflow-auto lh-app-header-offset lh-safe-x lh-safe-pb">
+          <main className={`min-w-0 flex-1 lh-app-header-offset lh-safe-x lh-safe-pb ${
+            isChatPage ? 'flex h-[100dvh] flex-col overflow-hidden' : 'overflow-auto'
+          }`}>
             <UpdateBanner />
-            <div className="px-4 pt-4 pb-10 sm:px-6 lg:pt-8 lg:px-8 lg:pb-8">
+            <div className={isChatPage
+              ? 'flex min-h-0 flex-1 flex-col px-4 pt-4 sm:px-6 lg:px-8 lg:pt-8 lg:pb-8'
+              : 'px-4 pt-4 pb-10 sm:px-6 lg:pt-8 lg:px-8 lg:pb-8'}>
               {children}
             </div>
           </main>
