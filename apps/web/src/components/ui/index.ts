@@ -16,3 +16,6 @@ export type { PageHeaderProps, Breadcrumb } from './page-header'
 
 export { default as EmptyState } from './empty-state'
 export type { EmptyStateProps } from './empty-state'
+
+export { default as TechnicalDetails } from './technical-details'
+export type { TechnicalDetailsProps, TechnicalDetailItem } from './technical-details'

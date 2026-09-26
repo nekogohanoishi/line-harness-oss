@@ -4,6 +4,9 @@ import Link from 'next/link'
 import { useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import MessageVariableButton from '@/components/message-variable-button'
+import FlexContentEditor from './flex-content-editor'
+import SequenceEditor from './sequence-editor'
+import { defaultSequenceMessage, stringifySequenceDocument } from './auto-reply-editor-utils'
 
 export interface AutoReplyDraft {
   id?: string
@@ -23,11 +26,12 @@ interface Props {
   onSaved: () => void
 }
 
-type ResponseMode = 'silent' | 'template' | 'inline-text' | 'inline-flex' | 'inline-image'
+type ResponseMode = 'silent' | 'template' | 'inline-text' | 'inline-flex' | 'inline-image' | 'inline-sequence'
 
 function detectMode(d: AutoReplyDraft): ResponseMode {
   if (d.responseType === 'silent') return 'silent'
   if (d.templateId) return 'template'
+  if (d.responseType === 'sequence') return 'inline-sequence'
   if (d.responseType === 'flex') return 'inline-flex'
   if (d.responseType === 'image') return 'inline-image'
   return 'inline-text'
@@ -48,10 +52,49 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
   const textTemplates = templates.filter((t) => t.messageType === 'text')
   const imageTemplates = templates.filter((t) => t.messageType === 'image')
 
+  const handleModeChange = (nextMode: ResponseMode) => {
+    if (nextMode === mode) return
+    if (nextMode === 'inline-sequence') {
+      const first = defaultSequenceMessage('text')
+      if (mode === 'inline-text' && responseContent.trim()) first.messageContent = responseContent
+      setResponseContent(stringifySequenceDocument({ messages: [first] }))
+    } else if (nextMode === 'inline-flex') {
+      setResponseContent(JSON.stringify({
+        type: 'bubble',
+        size: 'mega',
+        body: {
+          type: 'box',
+          layout: 'vertical',
+          paddingAll: 'lg',
+          contents: [{
+            type: 'text',
+            text: mode === 'inline-text' ? responseContent : '',
+            size: 'md',
+            color: '#111827',
+            wrap: true,
+          }],
+        },
+      }))
+    } else if (nextMode === 'inline-image') {
+      setResponseContent(JSON.stringify({ originalContentUrl: '', previewImageUrl: '' }))
+    } else if (nextMode === 'inline-text' && mode !== 'inline-text') {
+      setResponseContent('')
+    }
+    setMode(nextMode)
+  }
+
+  const imageContent = (() => {
+    try {
+      return JSON.parse(responseContent) as { originalContentUrl?: string; previewImageUrl?: string }
+    } catch {
+      return {}
+    }
+  })()
+
   const handleSave = async () => {
     if (!keyword.trim()) { setError('keyword を入力してください'); return }
     if (mode === 'template' && !templateId) { setError('template を選んでください'); return }
-    if ((mode === 'inline-text' || mode === 'inline-flex' || mode === 'inline-image') && !responseContent.trim()) {
+    if ((mode === 'inline-text' || mode === 'inline-flex' || mode === 'inline-image' || mode === 'inline-sequence') && !responseContent.trim()) {
       setError('内容を入力してください'); return
     }
     setError('')
@@ -70,6 +113,7 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
         matchType,
         responseType:
           mode === 'silent' ? 'silent'
+          : mode === 'inline-sequence' ? 'sequence'
           : mode === 'inline-flex' ? 'flex'
           : mode === 'inline-image' ? 'image'
           : mode === 'template' ? 'text' /* placeholder, override below if template found */
@@ -106,49 +150,53 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
   return (
     // モバイルはボトムシート、sm 以上は従来どおり中央のダイアログ
     <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-      <div className="bg-white rounded-t-2xl sm:rounded-lg shadow-xl w-full sm:max-w-lg max-h-[92vh] sm:max-h-[90vh] flex flex-col">
+      <div className={`bg-white rounded-t-2xl sm:rounded-lg shadow-xl w-full max-h-[92vh] sm:max-h-[90vh] flex flex-col ${mode === 'inline-sequence' || mode === 'inline-flex' ? 'sm:max-w-6xl' : 'sm:max-w-lg'}`}>
         <div className="shrink-0 px-4 sm:px-5 py-4 border-b">
-          <h3 className="text-base font-semibold">{draft.id ? '自動返信ルール 編集' : '新規 自動返信ルール'}</h3>
+          <h3 className="text-base font-semibold">{draft.id ? '自動返信を編集' : '自動返信を作成'}</h3>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5 space-y-4">
           <div>
-            <label className="block text-xs text-gray-600 mb-1">keyword</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">受信する言葉</label>
             <input
               type="text"
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
               className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-              placeholder="例: コスト比較"
+              placeholder="例：解説速報を受け取る"
             />
+            <p className="mt-1 text-xs text-gray-500">友だちがこの言葉を送ると、自動返信が始まります。</p>
           </div>
           <div>
-            <label className="block text-xs text-gray-600 mb-1">マッチ方法</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">言葉の判定方法</label>
             <div className="flex gap-2">
               {(['exact', 'contains'] as const).map((mt) => (
                 <button
                   key={mt}
+                  type="button"
                   onClick={() => setMatchType(mt)}
                   className={`px-4 py-1.5 min-h-[44px] text-xs rounded-md ${matchType === mt ? 'text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                   style={matchType === mt ? { backgroundColor: '#06C755' } : undefined}
                 >
-                  {mt === 'exact' ? '完全一致' : '包含'}
+                  {mt === 'exact' ? '同じ言葉だけ' : '文章に含まれていれば反応'}
                 </button>
               ))}
             </div>
           </div>
           <div>
-            <label className="block text-xs text-gray-600 mb-1">応答方法</label>
+            <label className="block text-xs font-medium text-gray-600 mb-1">返信内容の作り方</label>
             <div className="flex flex-wrap gap-2">
               {([
-                { key: 'silent', label: 'silent (返信なし)' },
-                { key: 'template', label: 'テンプレートから' },
-                { key: 'inline-text', label: 'テキスト直書き' },
-                { key: 'inline-flex', label: 'Flex JSON 直書き' },
-                { key: 'inline-image', label: '画像 (image JSON)' },
+                { key: 'silent', label: '返信しない' },
+                { key: 'template', label: 'テンプレートを使う' },
+                { key: 'inline-text', label: 'テキスト' },
+                { key: 'inline-flex', label: 'ボタン付きメッセージ' },
+                { key: 'inline-image', label: '画像' },
+                { key: 'inline-sequence', label: '複数メッセージ' },
               ] as const).map(({ key, label }) => (
                 <button
                   key={key}
-                  onClick={() => setMode(key)}
+                  type="button"
+                  onClick={() => handleModeChange(key)}
                   className={`px-4 py-1.5 min-h-[44px] text-xs rounded-md ${mode === key ? 'text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                   style={mode === key ? { backgroundColor: '#06C755' } : undefined}
                 >
@@ -159,13 +207,13 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
           </div>
           {mode === 'template' && (
             <div>
-              <label className="block text-xs text-gray-600 mb-1">template</label>
+              <label className="block text-xs font-medium text-gray-600 mb-1">使用するテンプレート</label>
               <select
                 value={templateId ?? ''}
                 onChange={(e) => setTemplateId(e.target.value || null)}
                 className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
               >
-                <option value="">-- 選択 --</option>
+                <option value="">選択してください</option>
                 {flexTemplates.length > 0 && (
                   <optgroup label="Flex">
                     {flexTemplates.map((t) => (
@@ -195,37 +243,74 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
               )}
             </div>
           )}
-          {(mode === 'inline-text' || mode === 'inline-flex' || mode === 'inline-image') && (
+          {mode === 'inline-text' && (
             <div>
               <div className="mb-1 flex items-center justify-between gap-2">
-                <label className="block text-xs text-gray-600">
-                  {mode === 'inline-flex' ? 'Flex JSON' : mode === 'inline-image' ? 'Image JSON ({"originalContentUrl":"...","previewImageUrl":"..."})' : 'テキスト'}
-                </label>
-                {mode !== 'inline-image' && (
-                  <MessageVariableButton
-                    targetRef={responseContentRef}
-                    value={responseContent}
-                    onChange={setResponseContent}
-                  />
-                )}
+                <label className="block text-xs font-medium text-gray-600">送信する文章</label>
+                <MessageVariableButton
+                  targetRef={responseContentRef}
+                  value={responseContent}
+                  onChange={setResponseContent}
+                />
               </div>
               <textarea
                 ref={responseContentRef}
-                rows={mode === 'inline-flex' ? 8 : mode === 'inline-image' ? 5 : 5}
+                rows={7}
                 value={responseContent}
                 onChange={(e) => setResponseContent(e.target.value)}
-                className="w-full border border-gray-300 rounded-md px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y min-h-[140px]"
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm leading-6 focus:outline-none focus:ring-2 focus:ring-green-500 resize-y min-h-[160px]"
               />
             </div>
           )}
-          <label className="inline-flex min-h-[44px] items-center gap-2 cursor-pointer">
+          {mode === 'inline-flex' && (
+            <FlexContentEditor value={responseContent} onChange={setResponseContent} />
+          )}
+          {mode === 'inline-image' && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600">画像URL</label>
+                <input
+                  type="url"
+                  value={imageContent.originalContentUrl ?? ''}
+                  onChange={(event) => setResponseContent(JSON.stringify({
+                    ...imageContent,
+                    originalContentUrl: event.target.value,
+                  }))}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600">プレビュー画像URL</label>
+                <input
+                  type="url"
+                  value={imageContent.previewImageUrl ?? ''}
+                  onChange={(event) => setResponseContent(JSON.stringify({
+                    ...imageContent,
+                    previewImageUrl: event.target.value,
+                  }))}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </div>
+            </div>
+          )}
+          {mode === 'inline-sequence' && (
+            <SequenceEditor value={responseContent} onChange={setResponseContent} />
+          )}
+          <label className={`flex min-h-[52px] cursor-pointer items-center justify-between gap-3 rounded-md border px-3 py-2 ${isActive ? 'border-green-300 bg-green-50' : 'border-gray-200 bg-gray-50'}`}>
+            <span>
+              <span className={`block text-sm font-medium ${isActive ? 'text-green-800' : 'text-gray-700'}`}>
+                {isActive ? 'この自動返信は有効です' : 'この自動返信は停止中です'}
+              </span>
+              <span className="block text-xs text-gray-500">
+                {isActive ? '条件に一致すると自動で返信します。' : '保存しても自動返信は行われません。'}
+              </span>
+            </span>
             <input
               type="checkbox"
               checked={isActive}
               onChange={(e) => setIsActive(e.target.checked)}
               className="h-5 w-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
             />
-            <span className="text-xs text-gray-600">有効</span>
           </label>
           {error && <p className="text-xs text-red-600">{error}</p>}
         </div>

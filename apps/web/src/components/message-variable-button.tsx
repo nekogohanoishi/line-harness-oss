@@ -11,6 +11,7 @@ interface MessageVariableButtonProps {
   insertValue?: string
   label?: string
   disabled?: boolean
+  compact?: boolean
 }
 
 export default function MessageVariableButton({
@@ -20,6 +21,7 @@ export default function MessageVariableButton({
   insertValue = '{{name}}',
   label = 'LINE名を入れる',
   disabled = false,
+  compact = false,
 }: MessageVariableButtonProps) {
   const handleInsert = () => {
     const target = targetRef.current
@@ -45,7 +47,9 @@ export default function MessageVariableButton({
       type="button"
       onClick={handleInsert}
       disabled={disabled}
-      className="inline-flex min-h-[44px] sm:min-h-[32px] shrink-0 items-center justify-center rounded-md border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-50"
+      className={`inline-flex shrink-0 items-center justify-center rounded-md border border-green-200 bg-green-50 text-xs font-medium text-green-700 hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-50 ${
+        compact ? 'h-8 px-2.5' : 'min-h-[44px] px-3 py-1.5 sm:min-h-[32px]'
+      }`}
     >
       {label}
     </button>

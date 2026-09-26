@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import type { Tag } from '@line-crm/shared'
 import { api, eventsApi, type ApiBroadcast, type EventListItem } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
-import FlexPreviewComponent from '@/components/flex-preview'
+import TemplateMessageEditor, { validateTemplateMessage } from '@/components/templates/template-message-editor'
 import MultiAccountDedupSection from './multi-account-dedup-section'
 
 interface BroadcastFormProps {
@@ -60,10 +60,8 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
 
   const handleSave = async () => {
     if (!form.title.trim()) { setError('配信タイトルを入力してください'); return }
-    if (!form.messageContent.trim()) { setError('メッセージ内容を入力してください'); return }
-    if (form.messageType === 'flex') {
-      try { JSON.parse(form.messageContent) } catch { setError('FlexメッセージのJSONが無効です'); return }
-    }
+    const messageError = validateTemplateMessage(form.messageType, form.messageContent)
+    if (messageError) { setError(messageError); return }
     if (!form.sendNow && !form.scheduledAt) {
       setError('予約配信の場合は配信日時を指定してください')
       return
@@ -114,7 +112,7 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
     <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6 mb-6">
       <h2 className="text-sm font-semibold text-gray-800 mb-5">新規配信を作成</h2>
 
-      <div className="space-y-4 max-w-lg">
+      <div className="space-y-4 max-w-4xl">
         {/* Title */}
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">
@@ -154,47 +152,7 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-1">
             メッセージ内容 <span className="text-red-500">*</span>
-            {(form.messageType === 'flex' || form.messageType === 'image') && (
-              <span className="ml-1 text-gray-400">(JSON形式)</span>
-            )}
           </label>
-
-          {/* Image helper: URL inputs that auto-generate the required LINE image JSON */}
-          {form.messageType === 'image' && (() => {
-            let parsed: { originalContentUrl?: string; previewImageUrl?: string } = {}
-            try { parsed = JSON.parse(form.messageContent) } catch { /* not yet valid */ }
-            return (
-              <div className="space-y-2 mb-2">
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">元画像URL (originalContentUrl)</label>
-                  <input
-                    type="url"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                    placeholder="https://example.com/image.png"
-                    value={parsed.originalContentUrl ?? ''}
-                    onChange={(e) => {
-                      const orig = e.target.value
-                      const prev = parsed.previewImageUrl ?? orig
-                      setForm({ ...form, messageContent: JSON.stringify({ originalContentUrl: orig, previewImageUrl: prev }) })
-                    }}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">プレビュー画像URL (previewImageUrl)</label>
-                  <input
-                    type="url"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                    placeholder="https://example.com/preview.png (空欄で元画像と同じ)"
-                    value={parsed.previewImageUrl ?? ''}
-                    onChange={(e) => {
-                      const prev = e.target.value
-                      setForm({ ...form, messageContent: JSON.stringify({ originalContentUrl: parsed.originalContentUrl ?? '', previewImageUrl: prev }) })
-                    }}
-                  />
-                </div>
-              </div>
-            )
-          })()}
 
           {/* リンクするイベント: 選択で {{liff_id}} 入りテンプレ URL を本文末尾に挿入 */}
           {linkableEvents.length > 0 && form.messageType === 'text' && (
@@ -230,31 +188,11 @@ export default function BroadcastForm({ tags, onSuccess, onCancel }: BroadcastFo
               </p>
             </div>
           )}
-          <textarea
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 resize-y min-h-[140px]"
-            rows={form.messageType === 'flex' ? 8 : form.messageType === 'image' ? 3 : 5}
-            placeholder={
-              form.messageType === 'text'
-                ? '配信するメッセージを入力...'
-                : form.messageType === 'image'
-                ? '{"originalContentUrl":"...","previewImageUrl":"..."}'
-                : '{"type":"bubble","body":{...}}'
-            }
+          <TemplateMessageEditor
+            messageType={form.messageType}
             value={form.messageContent}
-            onChange={(e) => setForm({ ...form, messageContent: e.target.value })}
-            style={{ fontFamily: form.messageType !== 'text' ? 'monospace' : 'inherit' }}
+            onChange={(messageContent) => setForm((current) => ({ ...current, messageContent }))}
           />
-          {form.messageType === 'image' && (
-            <p className="text-xs text-gray-400 mt-1">上のURLフォームか、直接JSONを編集できます</p>
-          )}
-          {form.messageType === 'flex' && form.messageContent && (() => {
-            try { JSON.parse(form.messageContent); return true } catch { return false }
-          })() && (
-            <div className="mt-3">
-              <p className="text-xs font-medium text-gray-500 mb-2">プレビュー</p>
-              <FlexPreviewComponent content={form.messageContent} maxWidth={300} />
-            </div>
-          )}
         </div>
 
         {/* Target */}

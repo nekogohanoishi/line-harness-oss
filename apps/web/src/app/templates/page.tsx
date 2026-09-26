@@ -6,8 +6,8 @@ import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
 import FlexPreviewComponent from '@/components/flex-preview'
 import CcPromptButton from '@/components/cc-prompt-button'
-import MessageVariableButton from '@/components/message-variable-button'
-import { ResponsiveTable, EmptyState } from '@/components/ui'
+import TemplateMessageEditor, { validateTemplateMessage } from '@/components/templates/template-message-editor'
+import { ResponsiveTable, EmptyState, ConfirmSheet } from '@/components/ui'
 
 interface Template {
   id: string
@@ -40,7 +40,7 @@ const messageTypeLabels: Record<string, string> = {
   text: 'テキスト',
   image: '画像',
   flex: 'Flex',
-  carousel: 'Carousel',
+  carousel: 'カルーセル',
 }
 
 const typeBadgeColor: Record<string, string> = {
@@ -58,6 +58,53 @@ function formatDate(iso: string): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function firstMessageText(node: unknown): string {
+  if (!node || typeof node !== 'object') return ''
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = firstMessageText(child)
+      if (found) return found
+    }
+    return ''
+  }
+  const record = node as Record<string, unknown>
+  if (typeof record.text === 'string') return record.text
+  for (const child of Object.values(record)) {
+    const found = firstMessageText(child)
+    if (found) return found
+  }
+  return ''
+}
+
+function templateSummary(template: Template): string {
+  if (template.messageType === 'image') return '画像メッセージ'
+  if (template.messageType === 'flex' || template.messageType === 'carousel') {
+    try {
+      return firstMessageText(JSON.parse(template.messageContent)) || 'Flexメッセージ'
+    } catch {
+      return '内容を確認できません'
+    }
+  }
+  return template.messageContent
+}
+
+function templateDeleteErrorMessage(message: string): string {
+  if (message.includes('automation rule')) {
+    return 'このテンプレートはオートメーションで使用中のため削除できません。先に使用しているオートメーションから外してください。'
+  }
+  return message
+}
+
+const automationEventLabels: Record<string, string> = {
+  friend_added: '友だち追加時',
+  tag_change: 'タグ変更時',
+  score_threshold: 'スコア到達時',
+  message_received: 'メッセージ受信時',
+  webinar_registered: 'ウェビナー申込時',
+  webinar_attended: 'ウェビナー参加時',
+  webinar_cta_clicked: 'ウェビナー案内のクリック時',
 }
 
 const ccPrompts = [
@@ -80,6 +127,10 @@ export default function TemplatesPage() {
   const [form, setForm] = useState({ name: '', category: 'general', messageType: 'text', messageContent: '' })
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<Template | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
 
   // Drawer
   const [drawerId, setDrawerId] = useState<string | null>(null)
@@ -94,6 +145,7 @@ export default function TemplatesPage() {
   const [drawerError, setDrawerError] = useState<string | null>(null)
   const [editContent, setEditContent] = useState<string | null>(null)
   const [editName, setEditName] = useState<string | null>(null)
+  const [editError, setEditError] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
   const createContentRef = useRef<HTMLTextAreaElement | null>(null)
   const editContentRef = useRef<HTMLTextAreaElement | null>(null)
@@ -148,7 +200,7 @@ export default function TemplatesPage() {
   }, [drawerId])
 
   // reset edits when drawer changes
-  useEffect(() => { setEditContent(null); setEditName(null) }, [drawerId])
+  useEffect(() => { setEditContent(null); setEditName(null); setEditError('') }, [drawerId])
 
   const filteredTemplates = templates.filter((t) => {
     if (typeFilter === 'all') return true
@@ -158,14 +210,17 @@ export default function TemplatesPage() {
 
   const handleCreate = async () => {
     if (!form.name.trim()) { setFormError('テンプレート名を入力してください'); return }
-    if (!form.messageContent.trim()) { setFormError('メッセージ内容を入力してください'); return }
+    const contentError = validateTemplateMessage(form.messageType, form.messageContent)
+    if (contentError) { setFormError(contentError); return }
     setSaving(true)
     setFormError('')
+    setNotice('')
     try {
       const res = await api.templates.create(form)
       if (res.success) {
         setShowCreate(false)
         setForm({ name: '', category: 'general', messageType: 'text', messageContent: '' })
+        setNotice('テンプレートを作成しました。')
         load()
       } else {
         setFormError(res.error)
@@ -179,43 +234,58 @@ export default function TemplatesPage() {
 
   const handleSaveEdit = async () => {
     if (!drawerData) return
+    if (editContent !== null) {
+      const contentError = validateTemplateMessage(drawerData.messageType, editContent)
+      if (contentError) {
+        setEditError(contentError)
+        return
+      }
+    }
     if (editContent !== null && !editContent.trim()) {
-      setError('内容を空にはできません')
+      setEditError('内容を空にはできません')
       return
     }
     if (editName !== null && !editName.trim()) {
-      setError('名前を空にはできません')
+      setEditError('名前を空にはできません')
       return
     }
     setSavingEdit(true)
+    setEditError('')
+    setNotice('')
     try {
       const updates: Record<string, string> = {}
       if (editContent !== null) updates.messageContent = editContent
       if (editName !== null) updates.name = editName
-      await api.templates.update(drawerData.id, updates)
+      const updateRes = await api.templates.update(drawerData.id, updates)
+      if (!updateRes.success) throw new Error(updateRes.error)
       const r = await api.templates.get(drawerData.id)
       if (r.success && r.data) setDrawerData(r.data)
       setEditContent(null)
       setEditName(null)
+      setNotice('変更を保存しました。')
       load()
-    } catch {
-      setError('更新に失敗しました')
+    } catch (updateError) {
+      setEditError(updateError instanceof Error ? updateError.message : '更新に失敗しました')
     }
     setSavingEdit(false)
   }
 
-  const handleDelete = async (id: string, usageCount: number) => {
-    if (usageCount > 0) {
-      if (!confirm(`このテンプレートは ${usageCount} 箇所で使用されています。削除すると参照がクリアされます。続行しますか？`)) return
-    } else {
-      if (!confirm('このテンプレートを削除しますか？')) return
-    }
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+    setDeleteBusy(true)
+    setDeleteError('')
+    setNotice('')
     try {
-      await api.templates.delete(id)
-      if (drawerId === id) setDrawerId(null)
-      load()
-    } catch {
-      setError('削除に失敗しました')
+      const res = await api.templates.delete(deleteTarget.id)
+      if (!res.success) throw new Error(templateDeleteErrorMessage(res.error))
+      if (drawerId === deleteTarget.id) setDrawerId(null)
+      setDeleteTarget(null)
+      setNotice('テンプレートを削除しました。')
+      await load()
+    } catch (deleteRequestError) {
+      setDeleteError(deleteRequestError instanceof Error ? deleteRequestError.message : '削除に失敗しました')
+    } finally {
+      setDeleteBusy(false)
     }
   }
 
@@ -237,6 +307,11 @@ export default function TemplatesPage() {
       {error && (
         <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
           {error}
+        </div>
+      )}
+      {notice && (
+        <div className="mb-4 border-l-4 border-green-500 bg-green-50 px-4 py-3 text-sm text-green-800">
+          {notice}
         </div>
       )}
 
@@ -292,7 +367,7 @@ export default function TemplatesPage() {
               <select
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
                 value={form.messageType}
-                onChange={(e) => setForm({ ...form, messageType: e.target.value })}
+                onChange={(e) => setForm({ ...form, messageType: e.target.value, messageContent: '' })}
               >
                 <option value="text">テキスト</option>
                 <option value="flex">Flex</option>
@@ -300,23 +375,14 @@ export default function TemplatesPage() {
               </select>
             </div>
             <div>
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <label className="block text-xs font-medium text-gray-600">内容 / JSON <span className="text-red-500">*</span></label>
-                {form.messageType !== 'image' && (
-                  <MessageVariableButton
-                    targetRef={createContentRef}
-                    value={form.messageContent}
-                    onChange={(nextValue) => setForm({ ...form, messageContent: nextValue })}
-                  />
-                )}
+              <div className="mb-1 text-xs font-medium text-gray-600">
+                メッセージ内容 <span className="text-red-500">*</span>
               </div>
-              <textarea
-                ref={createContentRef}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y min-h-[140px]"
-                rows={form.messageType === 'flex' ? 10 : 5}
-                placeholder={form.messageType === 'flex' ? '{"type":"bubble","body":...}' : 'メッセージ内容'}
+              <TemplateMessageEditor
+                messageType={form.messageType}
                 value={form.messageContent}
-                onChange={(e) => setForm({ ...form, messageContent: e.target.value })}
+                onChange={(nextValue) => setForm({ ...form, messageContent: nextValue })}
+                textRef={createContentRef}
               />
             </div>
 
@@ -363,6 +429,7 @@ export default function TemplatesPage() {
           rowKey={(t) => t.id}
           className="shadow-sm"
           onRowClick={(t) => setDrawerId(t.id)}
+          rowLabel={(t) => `${t.name}を編集`}
           empty={<EmptyState size="sm" title="該当するテンプレートがありません" />}
           columns={[
             {
@@ -374,7 +441,7 @@ export default function TemplatesPage() {
                 <div className={drawerId === t.id ? 'border-l-2 border-green-500 pl-2 -ml-2' : ''}>
                   <p className="text-sm font-medium text-gray-900 break-words">{t.name}</p>
                   <p className="text-[11px] font-normal text-gray-400 mt-0.5 truncate max-w-md">
-                    {t.messageContent.slice(0, 60)}{t.messageContent.length > 60 ? '...' : ''}
+                    {templateSummary(t).slice(0, 60)}{templateSummary(t).length > 60 ? '...' : ''}
                   </p>
                 </div>
               ),
@@ -411,12 +478,23 @@ export default function TemplatesPage() {
             { key: 'updatedAt', label: '更新日', render: (t) => formatDate(t.updatedAt) },
           ]}
           actions={(t) => (
-            <button
-              onClick={() => handleDelete(t.id, t.usageCount)}
-              className="px-2.5 py-1 min-h-[44px] sm:min-h-0 text-xs font-medium text-red-500 bg-red-50 sm:bg-transparent hover:bg-red-50 rounded-md"
-            >
-              削除
-            </button>
+            <>
+              <button
+                onClick={() => setDrawerId(t.id)}
+                className="px-2.5 py-1 min-h-[44px] sm:min-h-0 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
+              >
+                編集
+              </button>
+              <button
+                onClick={() => {
+                  setDeleteTarget(t)
+                  setDeleteError('')
+                }}
+                className="px-2.5 py-1 min-h-[44px] sm:min-h-0 text-xs font-medium text-red-500 bg-red-50 sm:bg-transparent hover:bg-red-50 rounded-md"
+              >
+                削除
+              </button>
+            </>
           )}
         />
       )}
@@ -482,12 +560,12 @@ export default function TemplatesPage() {
                 <div>
                   <h4 className="text-[11px] font-medium text-gray-500 mb-1.5 uppercase tracking-wide">プレビュー</h4>
                   <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 overflow-x-auto">
-                    {drawerData.messageType === 'flex' ? (
+                    {(drawerData.messageType === 'flex' || drawerData.messageType === 'carousel') ? (
                       (() => {
                         try {
                           return <FlexPreviewComponent content={drawerData.messageContent} maxWidth={420} />
                         } catch {
-                          return <p className="text-xs text-red-500">Flex JSON parse 失敗</p>
+                          return <p className="text-xs text-red-500">プレビューを表示できません</p>
                         }
                       })()
                     ) : drawerData.messageType === 'image' ? (
@@ -496,7 +574,7 @@ export default function TemplatesPage() {
                           const parsed = JSON.parse(drawerData.messageContent)
                           return <img src={parsed.originalContentUrl || parsed.previewImageUrl} alt="" className="max-w-full rounded" />
                         } catch {
-                          return <pre className="text-xs whitespace-pre-wrap">{drawerData.messageContent}</pre>
+                          return <p className="text-xs text-red-500">プレビューを表示できません</p>
                         }
                       })()
                     ) : (
@@ -505,43 +583,40 @@ export default function TemplatesPage() {
                   </div>
                 </div>
 
-                {/* Edit JSON / content */}
+                {/* Edit content */}
                 <div>
-                  <div className="mb-1.5 flex items-center justify-between gap-2">
-                    <h4 className="text-[11px] font-medium text-gray-500 uppercase tracking-wide">内容 / JSON 編集</h4>
-                    {drawerData.messageType !== 'image' && (
-                      <MessageVariableButton
-                        targetRef={editContentRef}
-                        value={editContent ?? drawerData.messageContent}
-                        onChange={setEditContent}
-                      />
-                    )}
-                  </div>
-                  <textarea
-                    ref={editContentRef}
-                    rows={drawerData.messageType === 'flex' ? 12 : 4}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-green-500 resize-y"
+                  <h4 className="mb-1.5 text-[11px] font-medium text-gray-500">メッセージ内容</h4>
+                  <TemplateMessageEditor
+                    messageType={drawerData.messageType}
                     value={editContent ?? drawerData.messageContent}
-                    onChange={(e) => setEditContent(e.target.value)}
+                    onChange={setEditContent}
+                    textRef={editContentRef}
                   />
                 </div>
 
                 {(editContent !== null || editName !== null) && (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleSaveEdit}
-                      disabled={savingEdit}
-                      className="px-3 py-1.5 text-xs font-medium text-white rounded-md disabled:opacity-50"
-                      style={{ backgroundColor: '#06C755' }}
-                    >
-                      {savingEdit ? '保存中...' : '保存'}
-                    </button>
-                    <button
-                      onClick={() => { setEditContent(null); setEditName(null) }}
-                      className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md"
-                    >
-                      キャンセル
-                    </button>
+                  <div>
+                    {editError && (
+                      <p className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                        {editError}
+                      </p>
+                    )}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleSaveEdit}
+                        disabled={savingEdit}
+                        className="px-3 py-1.5 text-xs font-medium text-white rounded-md disabled:opacity-50"
+                        style={{ backgroundColor: '#06C755' }}
+                      >
+                        {savingEdit ? '保存中...' : '保存'}
+                      </button>
+                      <button
+                        onClick={() => { setEditContent(null); setEditName(null); setEditError('') }}
+                        className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md"
+                      >
+                        キャンセル
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -558,28 +633,28 @@ export default function TemplatesPage() {
                         {drawerData.usedBy.autoReplies.map((ar) => (
                           <li key={`ar-${ar.id}`}>
                             <Link href="/auto-replies" className="text-blue-600 hover:underline">
-                              🔗 自動返信: {ar.keyword} <span className="text-gray-400">({ar.matchType})</span>
+                              自動返信：{ar.keyword} <span className="text-gray-400">（{ar.matchType === 'exact' ? '完全一致' : '部分一致'}）</span>
                             </Link>
                           </li>
                         ))}
                         {drawerData.usedBy.automations.map((au) => (
                           <li key={`au-${au.id}`}>
                             <Link href="/automations" className="text-blue-600 hover:underline">
-                              🔗 オートメーション: {au.name} <span className="text-gray-400">({au.eventType})</span>
+                              オートメーション：{au.name} <span className="text-gray-400">（{automationEventLabels[au.eventType] ?? 'その他の条件'}）</span>
                             </Link>
                           </li>
                         ))}
                         {scenarioStepUsages.map((ss) => (
                           <li key={`ss-${ss.stepId}`}>
-                            <a href={`/scenarios/detail?id=${ss.scenarioId}`} className="text-blue-600 hover:underline">
-                              🎬 シナリオ: {ss.scenarioName} <span className="text-gray-400">#{ss.stepOrder}</span>
-                            </a>
+                            <Link href={`/scenarios/detail?id=${ss.scenarioId}`} className="text-blue-600 hover:underline">
+                              シナリオ：{ss.scenarioName} <span className="text-gray-400">（{ss.stepOrder}番目）</span>
+                            </Link>
                           </li>
                         ))}
                       </ul>
                       {scenarioStepUsages.length > 0 && (
                         <p className="mt-2 text-[10px] text-amber-700">
-                          ⚠ このテンプレートを修正すると、上記すべてに一斉反映されます
+                          このテンプレートを修正すると、上記すべてに反映されます
                         </p>
                       )}
                     </>
@@ -590,6 +665,24 @@ export default function TemplatesPage() {
           </div>
         </>
       )}
+
+      <ConfirmSheet
+        open={Boolean(deleteTarget)}
+        title="テンプレートを削除しますか？"
+        message={deleteTarget?.usageCount
+          ? `「${deleteTarget.name}」は${deleteTarget.usageCount}箇所で使用されています。自動返信やシナリオでは参照が外れますが、オートメーションで使用中の場合は削除できません。`
+          : `「${deleteTarget?.name ?? ''}」を削除します。この操作は元に戻せません。`}
+        confirmLabel="削除する"
+        tone="danger"
+        busy={deleteBusy}
+        error={deleteError}
+        onConfirm={handleDelete}
+        onClose={() => {
+          if (deleteBusy) return
+          setDeleteTarget(null)
+          setDeleteError('')
+        }}
+      />
 
       <CcPromptButton prompts={ccPrompts} />
     </div>

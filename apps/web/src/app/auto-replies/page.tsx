@@ -37,12 +37,12 @@ interface TemplateLite {
 
 const matchTypeLabel: Record<'exact' | 'contains', string> = { exact: '完全一致', contains: '包含' }
 
-/** 適用アカウントバッジの凡例 (モバイルは折りたたみ / デスクトップは常時表示で使い回す) */
+/** 適用アカウントバッジの凡例 */
 const legend = (
   <>
-    <p><span className="inline-flex items-center px-1.5 py-0.5 rounded bg-green-100 text-green-700">✓ アカ名</span> 返信あり (inline) / <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-green-100 text-green-700">✓ アカ名 ⚙</span> automation 経由</p>
-    <p><span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">⚠ アカ名</span> silent rule のみ — match するが返信しない (同 keyword の automation rule 未登録)</p>
-    <p><span className="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-50 text-gray-300 line-through">アカ名</span> 適用外 (line_account_id が別アカに固定)</p>
+    <p><span className="inline-flex items-center px-1.5 py-0.5 rounded bg-green-100 text-green-700">返信あり</span> このアカウントで自動返信します。</p>
+    <p><span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">返信なし</span> 言葉には反応しますが、メッセージを送りません。</p>
+    <p><span className="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-50 text-gray-400">対象外</span> 別のLINEアカウント用のルールです。</p>
   </>
 )
 
@@ -98,7 +98,7 @@ export default function AutoRepliesPage() {
               <span
                 key={ea.accountId}
                 className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-gray-50 text-gray-300 line-through"
-                title={`${label}: 適用外 (line_account_id 別アカ固定)`}
+                title={`${label}: このルールの対象外です`}
               >
                 {label}
               </span>
@@ -109,9 +109,9 @@ export default function AutoRepliesPage() {
               <span
                 key={ea.accountId}
                 className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-green-100 text-green-700 font-medium"
-                title={`${label}: 返信あり (${ea.via === 'automation' ? 'automation 経由' : 'inline'})`}
+                title={`${label}: 自動返信します`}
               >
-                ✓ {label}{ea.via === 'automation' && <span className="text-green-500">⚙</span>}
+                ✓ {label}
               </span>
             )
           }
@@ -120,7 +120,7 @@ export default function AutoRepliesPage() {
             <span
               key={ea.accountId}
               className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-amber-50 text-amber-700"
-              title={`${label}: silent (match するが返信なし — automation rule 未登録)`}
+              title={`${label}: 言葉には反応しますが返信しません`}
             >
               ⚠ {label}
             </span>
@@ -131,18 +131,19 @@ export default function AutoRepliesPage() {
   }
 
   const renderResponseCell = (r: AutoReply) => {
-    if (r.responseType === 'silent') return <span className="text-gray-400 text-xs">silent</span>
-    if (r.responseType === 'flex') return <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 text-[10px] font-medium">📋 flex</span>
-    if (r.responseType === 'image') return <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-medium">🖼️ image</span>
-    return <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 text-[10px] font-medium">📝 text</span>
+    if (r.responseType === 'silent') return <span className="text-gray-400 text-xs">返信なし</span>
+    if (r.responseType === 'sequence') return <span className="px-1.5 py-0.5 rounded bg-green-100 text-green-700 text-[10px] font-medium">複数メッセージ</span>
+    if (r.responseType === 'flex') return <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 text-[10px] font-medium">ボタン付き</span>
+    if (r.responseType === 'image') return <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[10px] font-medium">画像</span>
+    return <span className="px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 text-[10px] font-medium">テキスト</span>
   }
 
   const renderTemplateCell = (r: AutoReply) => {
-    if (!r.templateId) return <span className="text-[11px] text-gray-400 italic">(inline)</span>
+    if (!r.templateId) return <span className="text-[11px] text-gray-400">この画面で編集</span>
     const tpl = templateById.get(r.templateId)
     return (
       <Link href="/templates" className="text-blue-600 hover:underline text-xs">
-        🔗 {tpl?.name ?? `(未知 ${r.templateId.slice(0, 6)})`}
+        {tpl?.name ?? '参照先が見つかりません'}
       </Link>
     )
   }
@@ -180,22 +181,23 @@ export default function AutoRepliesPage() {
         }
       />
 
+      <div className="mb-4 flex flex-col gap-1 border-b border-gray-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-gray-600">友だちから受信した言葉に応じて、送る内容とタイミングを設定します。</p>
+        <p className="text-xs font-medium text-gray-500">有効 {items.filter((item) => item.isActive).length}件</p>
+      </div>
+
       {error && (
         <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
           {error}
         </div>
       )}
 
-      {/* 凡例。モバイルでは縦に長くなるため折りたたみ、sm 以上は従来どおり開いたまま表示する */}
-      <details className="mb-4 rounded-lg border border-blue-200 bg-blue-50 text-xs text-blue-800 sm:hidden">
+      <details className="mb-4 rounded-md border border-gray-200 bg-gray-50 text-xs text-gray-700">
         <summary className="flex min-h-[44px] cursor-pointer list-none items-center px-3 font-medium">
-          バッジの見かた
+          適用アカウントの見かた
         </summary>
         <div className="space-y-1 px-3 pb-3">{legend}</div>
       </details>
-      <div className="mb-4 hidden rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 sm:block">
-        <div className="space-y-1">{legend}</div>
-      </div>
 
       <ResponsiveTable
         rows={items}
@@ -206,7 +208,7 @@ export default function AutoRepliesPage() {
         columns={[
           {
             key: 'keyword',
-            label: 'keyword',
+            label: '受信する言葉',
             priority: 'primary',
             render: (r) => <span className="text-sm font-medium text-gray-900 break-words">{r.keyword}</span>,
           },
@@ -220,9 +222,9 @@ export default function AutoRepliesPage() {
               </span>
             ),
           },
-          { key: 'matchType', label: 'match', render: (r) => matchTypeLabel[r.matchType] },
-          { key: 'response', label: 'response', render: renderResponseCell },
-          { key: 'template', label: 'template', render: renderTemplateCell },
+          { key: 'matchType', label: '判定方法', render: (r) => matchTypeLabel[r.matchType] },
+          { key: 'response', label: '返信内容', render: renderResponseCell },
+          { key: 'template', label: '編集場所', render: renderTemplateCell },
           { key: 'effective', label: '適用アカウント', render: renderEffectiveCell },
         ]}
         actions={(r) => (
