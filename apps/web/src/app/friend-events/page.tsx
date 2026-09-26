@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import Header from '@/components/layout/header'
+import ManualRefreshButton from '@/components/ui/manual-refresh-button'
 import { useAccount } from '@/contexts/account-context'
 import { api, type FriendLifecycleEvent } from '@/lib/api'
 
@@ -139,8 +140,6 @@ export default function FriendEventsPage() {
 
   useEffect(() => {
     void loadEvents()
-    const id = window.setInterval(() => { void loadEvents(true) }, 30_000)
-    return () => window.clearInterval(id)
   }, [loadEvents])
 
   const applyFilter = (value: EventFilter) => {
@@ -164,7 +163,10 @@ export default function FriendEventsPage() {
 
   return (
     <div>
-      <Header title="友だち追加・ブロック" />
+      <Header
+        title="友だち追加・ブロック"
+        action={<ManualRefreshButton onClick={() => loadEvents()} loading={loading} />}
+      />
 
       <div className="mb-5 border border-gray-200 bg-white p-4 rounded-lg">
         <form onSubmit={submitSearch} className="flex flex-col gap-3 sm:flex-row">

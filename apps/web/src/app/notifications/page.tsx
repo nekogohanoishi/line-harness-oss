@@ -5,11 +5,11 @@ import Header from '@/components/layout/header'
 import InboxFilters from '@/components/inbox/inbox-filters'
 import InboxList from '@/components/inbox/inbox-list'
 import InboxSummaryBar from '@/components/inbox/inbox-summary-bar'
+import ManualRefreshButton from '@/components/ui/manual-refresh-button'
 import { api } from '@/lib/api'
 import type { InboxRowData } from '@/components/inbox/inbox-row'
 
 const PAGE_SIZE = 50
-const POLL_INTERVAL_MS = 30_000
 // 全件 fetch の上限。worker 側 MAX_PAGE_SIZE と一致させる。222 件規模で
 // 余裕を持って 1〜2 年の運用カバー。これを超えるとサマリーに警告を出す
 // (Codex Round 1 指摘: サイレント切り捨て防止)。
@@ -34,7 +34,7 @@ export default function InboxPage() {
   const [error, setError] = useState('')
   const [accountOptions, setAccountOptions] = useState<AccountOption[]>([])
 
-  // 重複 polling で古いレスポンスが新しいデータを上書きしないように世代管理
+  // 重複リクエストで古いレスポンスが新しいデータを上書きしないように世代管理
   // (Codex Round 1 指摘: race condition)。
   const requestSeqRef = useRef(0)
 
@@ -86,9 +86,7 @@ export default function InboxPage() {
   }, [])
 
   useEffect(() => {
-    loadAll()
-    const id = setInterval(loadAll, POLL_INTERVAL_MS)
-    return () => clearInterval(id)
+    void loadAll()
   }, [loadAll])
 
   // ── client-side filter ──
@@ -138,6 +136,7 @@ export default function InboxPage() {
       <Header
         title="未対応インボックス"
         description="人間が返事してない LINE 会話の triage。auto_reply は人間の返事に数えない。"
+        action={<ManualRefreshButton onClick={loadAll} loading={loading} />}
       />
 
       <InboxSummaryBar

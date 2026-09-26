@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import Header from '@/components/layout/header'
+import ManualRefreshButton from '@/components/ui/manual-refresh-button'
 
 import { fetchApi } from '@/lib/api'
 import { useWorkerOrigin } from '@/lib/use-worker-origin'
@@ -57,11 +58,7 @@ export default function AttributionPage() {
   }, [selectedAccountId])
 
   useEffect(() => {
-    loadSummary()
-    // Refresh when tab becomes visible
-    const handleVisibility = () => { if (document.visibilityState === 'visible') loadSummary() }
-    document.addEventListener('visibilitychange', handleVisibility)
-    return () => document.removeEventListener('visibilitychange', handleVisibility)
+    void loadSummary()
   }, [loadSummary])
 
   const handleRowClick = async (refCode: string) => {
@@ -98,6 +95,7 @@ export default function AttributionPage() {
     <div>
       <Header
         title="流入経路分析"
+        action={<ManualRefreshButton onClick={loadSummary} loading={loading} />}
         description="ref コード別の友だち獲得・クリック実績"
       />
 

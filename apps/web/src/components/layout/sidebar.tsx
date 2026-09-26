@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAccount } from '@/contexts/account-context'
@@ -24,11 +24,13 @@ const menuSections = [
   {
     label: '配信',
     items: [
+      { href: '/deliveries', label: '現在有効な配信', icon: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zm10-3a3 3 0 100 6 3 3 0 000-6z' },
       { href: '/friend-add-settings', label: '友だち追加時設定', icon: 'M12 6v6m0 0v6m0-6h6m-6 0H6' },
       { href: '/surveys', label: 'アンケート', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
       { href: '/scenarios', label: 'シナリオ配信', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01' },
       { href: '/broadcasts', label: '一斉配信', icon: 'M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z' },
       { href: '/templates', label: 'テンプレート', icon: 'M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z' },
+      { href: '/tags', label: 'タグ管理', icon: 'M7 7h.01M3 11l8.586-8.586A2 2 0 0113 2h5a2 2 0 012 2v5a2 2 0 01-.586 1.414L10.828 19a2 2 0 01-2.828 0l-5-5a2 2 0 010-2.828V11z' },
       { href: '/rich-menus', label: 'リッチメニュー', icon: 'M4 4h6v6H4V4zm0 10h6v6H4v-6zm10-10h6v6h-6V4zm0 10h6v6h-6v-6z' },
       { href: '/reminders', label: 'リマインダ', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
     ],
@@ -90,6 +92,7 @@ const ROUTE_LABELS: Array<{ href: string; label: string }> = menuSections
     { href: '/inflow-links', label: 'リファラルリンク' },
     { href: '/form-submissions', label: 'フォーム回答' },
     { href: '/templates', label: 'テンプレート' },
+    { href: '/tags', label: 'タグ管理' },
     { href: '/settings', label: '設定' },
   ])
   .sort((a, b) => b.href.length - a.href.length)
@@ -220,6 +223,20 @@ function NavIcon({ d }: { d: string }) {
   )
 }
 
+function RefreshIcon({ refreshing }: { refreshing: boolean }) {
+  return (
+    <svg
+      className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`}
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 11a8.1 8.1 0 00-15.5-2M4 4v5h5m-5 4a8.1 8.1 0 0015.5 2M20 20v-5h-5" />
+    </svg>
+  )
+}
+
 export default function Sidebar() {
   const pathname = usePathname()
   const { selectedAccountId, selectedAccount } = useAccount()
@@ -236,36 +253,41 @@ export default function Sidebar() {
   const [unansweredCount, setUnansweredCount] = useState<number>(0)
   const [chatUnreadCount, setChatUnreadCount] = useState<number>(0)
   const [friendEventUnreadCount, setFriendEventUnreadCount] = useState<number>(0)
-  useEffect(() => {
-    let cancelled = false
-    const fetchCounts = async () => {
-      try {
-        const { api } = await import('@/lib/api')
-        const [unanswered, chats, friendEvents] = await Promise.all([
-          api.inbox.unanswered.count(),
-          api.chats.unreadCount({ accountId: selectedAccountId || undefined }),
-          api.friendEvents.unreadCount(selectedAccountId || undefined),
-        ])
-        if (cancelled) return
-        if (unanswered.success) setUnansweredCount(unanswered.data.total)
-        if (chats.success) setChatUnreadCount(chats.data.count)
-        if (friendEvents.success) setFriendEventUnreadCount(friendEvents.data.count)
-      } catch {
-        // Navigation remains usable when a background count request fails.
-      }
-    }
-    const handleRefresh = () => { void fetchCounts() }
-    void fetchCounts()
-    const id = window.setInterval(fetchCounts, 30_000)
-    window.addEventListener('lh:notification-counts-changed', handleRefresh)
-    document.addEventListener('visibilitychange', handleRefresh)
-    return () => {
-      cancelled = true
-      window.clearInterval(id)
-      window.removeEventListener('lh:notification-counts-changed', handleRefresh)
-      document.removeEventListener('visibilitychange', handleRefresh)
+  const [countsRefreshing, setCountsRefreshing] = useState(false)
+  const countsRequestId = useRef(0)
+
+  const refreshNotificationCounts = useCallback(async () => {
+    const requestId = ++countsRequestId.current
+    setCountsRefreshing(true)
+    try {
+      const { api } = await import('@/lib/api')
+      const [unanswered, chats, friendEvents] = await Promise.all([
+        api.inbox.unanswered.count(),
+        api.chats.unreadCount({ accountId: selectedAccountId || undefined }),
+        api.friendEvents.unreadCount(selectedAccountId || undefined),
+      ])
+      if (requestId !== countsRequestId.current) return
+      if (unanswered.success) setUnansweredCount(unanswered.data.total)
+      if (chats.success) setChatUnreadCount(chats.data.count)
+      if (friendEvents.success) setFriendEventUnreadCount(friendEvents.data.count)
+    } catch {
+      // Navigation remains usable when a count request fails.
+    } finally {
+      if (requestId === countsRequestId.current) setCountsRefreshing(false)
     }
   }, [selectedAccountId])
+
+  useEffect(() => {
+    void refreshNotificationCounts()
+  }, [refreshNotificationCounts])
+
+  useEffect(() => {
+    const handleRefresh = () => { void refreshNotificationCounts() }
+    window.addEventListener('lh:notification-counts-changed', handleRefresh)
+    return () => {
+      window.removeEventListener('lh:notification-counts-changed', handleRefresh)
+    }
+  }, [refreshNotificationCounts])
 
   const totalBadgeCount = unansweredCount + chatUnreadCount + friendEventUnreadCount
 
@@ -285,10 +307,20 @@ export default function Sidebar() {
           <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm" style={{ backgroundColor: '#06C755' }}>
             H
           </div>
-          <div>
+          <div className="min-w-0 flex-1">
             <p className="text-sm font-bold text-gray-900 leading-tight">L Harness</p>
             <p className="text-xs text-gray-400">管理画面</p>
           </div>
+          <button
+            type="button"
+            onClick={() => { void refreshNotificationCounts() }}
+            disabled={countsRefreshing}
+            className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:cursor-wait disabled:opacity-50 lg:flex"
+            aria-label="通知件数を更新"
+            title="通知件数を更新"
+          >
+            <RefreshIcon refreshing={countsRefreshing} />
+          </button>
         </div>
       </div>
 
@@ -432,6 +464,17 @@ export default function Sidebar() {
             </p>
           )}
         </div>
+
+        <button
+          type="button"
+          onClick={() => { void refreshNotificationCounts() }}
+          disabled={countsRefreshing}
+          className="flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-gray-500 transition-colors hover:bg-gray-100 active:bg-gray-200 disabled:cursor-wait disabled:opacity-50"
+          aria-label="通知件数を更新"
+          title="通知件数を更新"
+        >
+          <RefreshIcon refreshing={countsRefreshing} />
+        </button>
 
         <div className="shrink-0 w-8 h-8 mr-1 rounded-lg flex items-center justify-center text-white font-bold text-xs" style={{ backgroundColor: '#06C755' }}>
           H
