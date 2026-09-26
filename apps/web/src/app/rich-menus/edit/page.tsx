@@ -7,6 +7,7 @@ import Header from '@/components/layout/header'
 import { api } from '@/lib/api'
 import { CanvasEditor, type Area } from '@/components/rich-menus/canvas-editor'
 import { AreaProperties } from '@/components/rich-menus/area-properties'
+import { ConfirmSheet } from '@/components/ui'
 
 type Page = {
   id: string
@@ -31,6 +32,12 @@ type Group = {
   publishingAt: string | null
   pages: Page[]
 }
+
+type Confirmation =
+  | { kind: 'publish' }
+  | { kind: 'unpublish' }
+  | { kind: 'delete-group' }
+  | { kind: 'delete-page'; pageId: string; pageName: string }
 
 const SIZE_LABEL: Record<Group['size'], string> = {
   large: '2500×1686',
@@ -59,7 +66,7 @@ function RichMenuEditPageInner() {
   if (!groupId) {
     return (
       <main className="p-6 max-w-7xl mx-auto">
-        <p className="text-sm text-red-600">id クエリパラメータが必要です</p>
+        <p className="text-sm text-red-600">編集するリッチメニューを指定できませんでした。</p>
         <Link href="/rich-menus" className="text-sm text-blue-600 hover:underline mt-2 inline-block">
           ← 一覧に戻る
         </Link>
@@ -96,6 +103,11 @@ function Editor({
   const [unpublishing, setUnpublishing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [imageVersion, setImageVersion] = useState(0)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [previewNotice, setPreviewNotice] = useState<string | null>(null)
+  const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
+  const [confirmationError, setConfirmationError] = useState('')
+  const [deleteName, setDeleteName] = useState('')
 
   const fileInput = useRef<HTMLInputElement>(null)
 
@@ -180,9 +192,9 @@ function Editor({
     setSelectedAreaId(null)
   }
 
-  function removePage(pageId: string) {
+  function requestRemovePage(pageId: string) {
     if (pages.length <= 1) {
-      alert('最低 1 ページは必要です。')
+      setError('リッチメニューには最低1ページ必要です。')
       return
     }
     // 削除しようとしているページが他 page の richmenuswitch から参照されてないか確認。
@@ -197,12 +209,15 @@ function Editor({
         ),
       )
     if (referrers.length > 0) {
-      alert(
-        `このページは ${referrers.map((p) => `「${p.name}」`).join(', ')} のタブ切替アクションから参照されています。先に各 area の遷移先を変更してから削除してください。`,
-      )
+      setError(`このページは${referrers.map((p) => `「${p.name}」`).join('、')}から移動先として使われています。先に各ボタンの移動先を変更してください。`)
       return
     }
-    if (!confirm('このページを削除しますか？')) return
+    const target = pages.find((page) => page.id === pageId)
+    setConfirmation({ kind: 'delete-page', pageId, pageName: target?.name ?? 'このページ' })
+    setConfirmationError('')
+  }
+
+  function removePage(pageId: string) {
     const remaining = pages
       .filter((p) => p.id !== pageId)
       .map((p, i) => ({ ...p, orderIndex: i }))
@@ -211,6 +226,7 @@ function Editor({
       setActivePageId(remaining[0]?.id ?? null)
     }
     setSelectedAreaId(null)
+    setNotice('ページを削除しました。変更を反映するには下書きを保存してください。')
   }
 
   async function persistDraft(): Promise<void> {
@@ -240,9 +256,11 @@ function Editor({
   async function handleSave() {
     setSaving(true)
     setError(null)
+    setNotice(null)
     try {
       await persistDraft()
       await reload()
+      setNotice('下書きを保存しました。')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -251,48 +269,40 @@ function Editor({
   }
 
   async function handlePublish() {
-    if (!confirm(
-      'このリッチメニューを LINE 公式アカウントに登録します。\n\n' +
-        '※ この操作だけでは友だちのトーク画面にはまだ表示されません。\n' +
-        '友だちに見せるには、登録後に一覧画面の「友だちに表示」を実行してください。\n\n' +
-        '続行しますか？',
-    )) return
     setPublishing(true)
     setError(null)
+    setConfirmationError('')
+    setNotice(null)
     try {
       await persistDraft()
       const res = await api.richMenuGroups.publish(groupId)
       if (!res.success) throw new Error(res.error ?? 'LINE 登録失敗')
-      alert('LINE への登録が完了しました。\n\n友だちに表示するには、一覧画面の「友だちに表示」を実行してください。')
       await reload()
+      setConfirmation(null)
+      setNotice('LINEへの登録が完了しました。友だちに表示する場合は、一覧画面の「友だちに表示」を実行してください。')
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setConfirmationError(e instanceof Error ? e.message : String(e))
     } finally {
       setPublishing(false)
     }
   }
 
   async function handleUnpublish() {
-    if (!confirm(
-      'このリッチメニューを LINE から取り下げます。\n\n' +
-        '・LINE 公式アカウント上のメニュー登録 (alias / richmenu) をすべて削除\n' +
-        '・現在このメニューを見ている友だちのトーク画面からも消えます\n\n' +
-        '取り下げ後はもう一度「LINE に登録」すれば再公開できます。\n\n続行しますか？',
-    )) return
     setUnpublishing(true)
     setError(null)
+    setConfirmationError('')
+    setNotice(null)
     try {
       const res = await api.richMenuGroups.unpublish(groupId)
       if (!res.success) throw new Error(res.error ?? '取り下げ失敗')
       const warnings = res.data?.warnings ?? []
-      if (warnings.length > 0) {
-        alert(`取り下げ完了 (一部 warnings あり):\n\n${warnings.join('\n')}`)
-      } else {
-        alert('LINE 上のメニュー登録を取り下げました。')
-      }
       await reload()
+      setConfirmation(null)
+      setNotice(warnings.length > 0
+        ? 'LINEから取り下げました。ただし、一部の解除状況を確認できなかったため、LINE公式アカウント側の表示も確認してください。'
+        : 'LINE上のメニュー登録を取り下げました。')
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setConfirmationError(e instanceof Error ? e.message : String(e))
     } finally {
       setUnpublishing(false)
     }
@@ -301,37 +311,35 @@ function Editor({
   async function handleDelete() {
     if (!group) return
     if (group.status === 'published') {
-      alert(
-        'このリッチメニューは LINE に登録中です。\n\n' +
-          '先に「LINE から取り下げ」を実行してから削除してください。',
-      )
+      setError('このリッチメニューはLINEに登録中です。先に「LINEから取り下げ」を実行してください。')
+      setConfirmation(null)
       return
     }
-    // 二重確認: メニュー名を入力してもらう
-    const typed = prompt(
-      `この操作は元に戻せません。\n\n削除を確定するには、リッチメニュー名「${group.name}」を入力してください。`,
-    )
-    if (typed === null) return
-    if (typed !== group.name) {
-      alert('入力が一致しませんでした。削除をキャンセルしました。')
+    if (deleteName !== group.name) {
+      setConfirmationError(`確認のため「${group.name}」と入力してください。`)
       return
     }
+    setBusy(true)
+    setConfirmationError('')
     try {
       const res = await api.richMenuGroups.delete(groupId)
       if (!res.success) throw new Error(res.error ?? '削除失敗')
       router.push('/rich-menus')
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e))
+      setConfirmationError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
     }
   }
 
   async function handleImageUpload(pageId: string, file: File) {
     if (pageId.startsWith('tmp-')) {
-      alert('まず Save Draft でページを保存してから画像を upload してください。')
+      setError('先に「下書き保存」を実行してから画像を選択してください。')
       return
     }
     setBusy(true)
     setError(null)
+    setNotice(null)
     try {
       const res = await api.richMenuGroups.uploadImage(groupId, pageId, file)
       updatePage(pageId, {
@@ -339,11 +347,30 @@ function Editor({
         imageContentType: res.data.imageContentType,
       })
       setImageVersion((v) => v + 1)
+      setNotice('画像を更新しました。')
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e))
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
     }
+  }
+
+  async function handleConfirmation() {
+    if (!confirmation) return
+    if (confirmation.kind === 'publish') {
+      await handlePublish()
+      return
+    }
+    if (confirmation.kind === 'unpublish') {
+      await handleUnpublish()
+      return
+    }
+    if (confirmation.kind === 'delete-group') {
+      await handleDelete()
+      return
+    }
+    removePage(confirmation.pageId)
+    setConfirmation(null)
   }
 
   if (loading) {
@@ -398,7 +425,10 @@ function Editor({
               {saving ? '保存中...' : '下書き保存'}
             </button>
             <button
-              onClick={handlePublish}
+              onClick={() => {
+                setConfirmation({ kind: 'publish' })
+                setConfirmationError('')
+              }}
               disabled={saving || publishing || unpublishing || busy}
               className="px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity hover:opacity-90"
               style={{ backgroundColor: '#06C755' }}
@@ -423,6 +453,16 @@ function Editor({
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 text-sm p-3 rounded mb-4">
           {error}
+        </div>
+      )}
+      {notice && (
+        <div className="mb-4 border-l-4 border-green-500 bg-green-50 px-4 py-3 text-sm text-green-800">
+          {notice}
+        </div>
+      )}
+      {previewNotice && (
+        <div className="mb-4 border-l-4 border-blue-500 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          {previewNotice}
         </div>
       )}
 
@@ -459,9 +499,9 @@ function Editor({
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-6">
         {/* 中央: キャンバス */}
-        <section>
+        <section className="min-w-0">
           {activePage ? (
             <CanvasEditor
               areas={activePage.areas}
@@ -473,6 +513,7 @@ function Editor({
               onUpdateArea={(id, patch) => updateArea(activePage.id, id, patch)}
               onDeleteArea={(id) => deleteArea(activePage.id, id)}
               preview={preview}
+              onLimitReached={() => setError('1ページに設定できるボタンは20個までです。')}
               onPreviewAction={(area) => {
                 if (area.actionType === 'uri') {
                   const uri = (area.actionData as { uri?: string }).uri
@@ -484,7 +525,12 @@ function Editor({
                     setSelectedAreaId(null)
                   }
                 } else {
-                  alert(`action: ${area.actionType}\n${JSON.stringify(area.actionData)}`)
+                  const data = area.actionData as { text?: string; displayText?: string }
+                  setPreviewNotice(area.actionType === 'message'
+                    ? `このボタンを押すと「${data.text || '未設定'}」というメッセージが送信されます。`
+                    : data.displayText
+                      ? `このボタンを押すと、トーク画面に「${data.displayText}」と表示されます。`
+                      : 'このボタンを押すと、表示を変えずに設定された処理を実行します。')
                 }
               }}
             />
@@ -505,7 +551,7 @@ function Editor({
                 onChange={(e) => setName(e.target.value)}
                 className="mt-1 block w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
               />
-              <p className="mt-1 text-[11px] text-gray-500">管理画面でだけ使う名前 (友だちには見えない)</p>
+              <p className="mt-1 text-[11px] text-gray-500">管理画面でだけ使う名前です。友だちには表示されません。</p>
             </label>
             <label className="block">
               <span className="text-xs font-medium text-gray-600">トーク画面下の文言</span>
@@ -515,7 +561,7 @@ function Editor({
                 maxLength={14}
                 className="mt-1 block w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
               />
-              <p className="mt-1 text-[11px] text-gray-500">14 文字以内 (友だちのトーク画面でメニューを開く前に表示)</p>
+              <p className="mt-1 text-[11px] text-gray-500">14文字以内。友だちのトーク画面で、メニューを開く前に表示されます。</p>
             </label>
           </section>
 
@@ -567,8 +613,8 @@ function Editor({
                   </p>
                 )}
               </div>
-              <p className="text-[11px] text-gray-400 pt-3 border-t border-gray-100">
-                中央のキャンバスでドラッグして tap 領域 (areas) を追加・編集できます。
+              <p className="text-[11px] text-gray-500 pt-3 border-t border-gray-100">
+                中央の画像上をドラッグすると、ボタンとして反応する範囲を追加できます。
               </p>
             </section>
           )}
@@ -590,23 +636,26 @@ function Editor({
       </div>
 
       {/* ─────────── 危険な操作 (画面最下部に分離) ─────────── */}
-      <section className="mt-10 bg-red-50 border border-red-200 rounded-lg shadow-sm p-5">
+      <section className="mt-10 border-t border-red-200 pt-5">
         <h2 className="text-sm font-semibold text-red-700 mb-1">危険な操作</h2>
         <p className="text-xs text-red-600 mb-4">
           以下の操作は元に戻せません。誤操作を避けるため、別セクションにまとめています。
         </p>
-        <div className="space-y-3">
+        <div className="divide-y divide-red-100">
           {group.status === 'published' && (
-            <div className="flex items-start justify-between gap-4 bg-white border border-red-200 rounded-lg p-4">
+            <div className="flex flex-col items-start justify-between gap-3 py-4 sm:flex-row sm:gap-4">
               <div className="flex-1">
                 <div className="text-sm font-medium text-gray-900">LINE から取り下げ</div>
                 <div className="text-xs text-gray-600 mt-0.5">
-                  LINE 公式アカウント上のメニュー登録 (alias / richmenu / 全員のデフォルト設定) を解除します。
-                  友だちのトーク画面からメニューが消えます。下書きに戻すので、再登録すれば復旧できます。
+                  LINE公式アカウントへの登録と友だちへの表示設定を解除します。
+                  トーク画面からメニューが消えますが、下書きは残るため再登録できます。
                 </div>
               </div>
               <button
-                onClick={handleUnpublish}
+                onClick={() => {
+                  setConfirmation({ kind: 'unpublish' })
+                  setConfirmationError('')
+                }}
                 disabled={saving || publishing || unpublishing || busy}
                 className="shrink-0 px-3 py-2 text-sm font-medium border border-red-300 text-red-700 bg-white rounded-lg hover:bg-red-50 disabled:opacity-50 transition-colors"
               >
@@ -615,7 +664,7 @@ function Editor({
             </div>
           )}
           {activePage && pages.length > 1 && (
-            <div className="flex items-start justify-between gap-4 bg-white border border-red-200 rounded-lg p-4">
+            <div className="flex flex-col items-start justify-between gap-3 py-4 sm:flex-row sm:gap-4">
               <div className="flex-1">
                 <div className="text-sm font-medium text-gray-900">
                   ページ「{activePage.name}」を削除
@@ -625,26 +674,30 @@ function Editor({
                 </div>
               </div>
               <button
-                onClick={() => removePage(activePage.id)}
+                onClick={() => requestRemovePage(activePage.id)}
                 className="shrink-0 px-3 py-2 text-sm font-medium border border-red-300 text-red-700 bg-white rounded-lg hover:bg-red-50 transition-colors"
               >
                 ページ削除
               </button>
             </div>
           )}
-          <div className="flex items-start justify-between gap-4 bg-white border border-red-300 rounded-lg p-4">
+          <div className="flex flex-col items-start justify-between gap-3 py-4 sm:flex-row sm:gap-4">
             <div className="flex-1">
               <div className="text-sm font-medium text-gray-900">
                 このリッチメニュー全体を削除
               </div>
               <div className="text-xs text-gray-600 mt-0.5">
                 {group.status === 'published'
-                  ? '⚠ 先に「LINE から取り下げ」を実行してください。LINE 上のメニューが残ったままだと友だちに表示され続けます。'
-                  : '管理画面と DB から完全に削除します。元には戻せません。'}
+                  ? '先に「LINEから取り下げ」を実行してください。取り下げるまでは友だちに表示され続けます。'
+                  : 'このリッチメニューを完全に削除します。元には戻せません。'}
               </div>
             </div>
             <button
-              onClick={handleDelete}
+              onClick={() => {
+                setDeleteName('')
+                setConfirmationError('')
+                setConfirmation({ kind: 'delete-group' })
+              }}
               className="shrink-0 px-3 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
               style={{ backgroundColor: '#dc2626' }}
             >
@@ -653,6 +706,50 @@ function Editor({
           </div>
         </div>
       </section>
+
+      <ConfirmSheet
+        open={Boolean(confirmation)}
+        title={confirmation?.kind === 'publish'
+          ? 'LINEに登録しますか？'
+          : confirmation?.kind === 'unpublish'
+            ? 'LINEから取り下げますか？'
+            : confirmation?.kind === 'delete-page'
+              ? `「${confirmation.pageName}」を削除しますか？`
+              : 'リッチメニューを削除しますか？'}
+        message={confirmation?.kind === 'publish'
+          ? '最新の下書きを保存してLINEに登録します。この時点ではまだ友だちには表示されません。登録後、一覧画面から表示対象を設定してください。'
+          : confirmation?.kind === 'unpublish'
+            ? '現在このメニューを表示している友だちのトーク画面からも消えます。下書きは残るため、あとから再登録できます。'
+            : confirmation?.kind === 'delete-page'
+              ? 'このページと、ページ内に設定したボタン範囲を削除します。下書きを保存するまでは確定しません。'
+              : '管理画面から完全に削除します。この操作は元に戻せません。'}
+        confirmLabel={confirmation?.kind === 'publish'
+          ? 'LINEに登録する'
+          : confirmation?.kind === 'unpublish'
+            ? '取り下げる'
+            : '削除する'}
+        tone={confirmation?.kind === 'publish' ? 'default' : 'danger'}
+        busy={publishing || unpublishing || busy}
+        error={confirmationError}
+        onConfirm={handleConfirmation}
+        onClose={() => {
+          if (publishing || unpublishing || busy) return
+          setConfirmation(null)
+          setConfirmationError('')
+          setDeleteName('')
+        }}
+      >
+        {confirmation?.kind === 'delete-group' && (
+          <label className="block">
+            <span className="text-xs font-medium text-gray-600">確認のため「{group.name}」と入力してください</span>
+            <input
+              value={deleteName}
+              onChange={(event) => setDeleteName(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
+          </label>
+        )}
+      </ConfirmSheet>
     </main>
   )
 }

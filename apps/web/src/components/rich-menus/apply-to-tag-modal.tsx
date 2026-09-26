@@ -19,7 +19,7 @@ type Mode =
 export function ApplyToTagModal({ groupId, groupName, onClose }: Props) {
   const [tags, setTags] = useState<Tag[]>([])
   const [mode, setMode] = useState<Mode>({ kind: 'all-followers' })
-  const [phase, setPhase] = useState<'config' | 'running' | 'done' | 'error'>(
+  const [phase, setPhase] = useState<'config' | 'confirm' | 'running' | 'done' | 'error'>(
     'config',
   )
   const [error, setError] = useState<string | null>(null)
@@ -41,19 +41,15 @@ export function ApplyToTagModal({ groupId, groupName, onClose }: Props) {
       })
   }, [])
 
-  async function apply() {
-    // 「全員のデフォルト」は影響範囲が大きいので強い確認。
+  function requestApply() {
     if (mode.kind === 'set-default') {
-      if (
-        !confirm(
-          'このリッチメニューを「LINE 公式アカウントの全員のデフォルト」に設定します。\n\n' +
-            '・新規友だちも含め、特別な設定をしていない全員に表示されます\n' +
-            '・同アカウント内で他のメニューがデフォルトに設定されていた場合、そちらは解除されます\n\n' +
-            '続行しますか？',
-        )
-      )
-        return
+      setPhase('confirm')
+      return
     }
+    void apply()
+  }
+
+  async function apply() {
     setPhase('running')
     setError(null)
     try {
@@ -89,7 +85,7 @@ export function ApplyToTagModal({ groupId, groupName, onClose }: Props) {
                   checked={mode.kind === 'all-followers'}
                   onChange={() => setMode({ kind: 'all-followers' })}
                   label="このアカウントの全員に適用"
-                  description="現時点で friend 状態の友だち全員に LINE のメニューを link します。新規友だちには適用されません。"
+                  description="現在登録されている友だち全員に表示します。今後追加される友だちには自動では表示されません。"
                 />
                 <RadioOption
                   checked={mode.kind === 'tag'}
@@ -139,7 +135,7 @@ export function ApplyToTagModal({ groupId, groupName, onClose }: Props) {
                   キャンセル
                 </button>
                 <button
-                  onClick={apply}
+                  onClick={requestApply}
                   disabled={mode.kind === 'tag' && !mode.tagId}
                   className="px-4 py-2 text-sm font-medium text-white rounded-lg disabled:opacity-50 transition-opacity hover:opacity-90"
                   style={{ backgroundColor: '#06C755' }}
@@ -150,12 +146,35 @@ export function ApplyToTagModal({ groupId, groupName, onClose }: Props) {
             </>
           )}
 
+          {phase === 'confirm' && (
+            <>
+              <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                <p className="font-medium">全員の標準メニューに設定しますか？</p>
+                <p className="mt-2 text-xs leading-5">
+                  新規友だちを含む全員に自動で表示されます。別のメニューが標準に設定されている場合は、このメニューへ切り替わります。
+                </p>
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setPhase('config')}
+                  className="px-4 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  戻る
+                </button>
+                <button
+                  onClick={() => void apply()}
+                  className="px-4 py-2 text-sm font-medium text-white rounded-lg bg-amber-600 hover:bg-amber-700 transition-colors"
+                >
+                  全員に設定する
+                </button>
+              </div>
+            </>
+          )}
+
           {phase === 'running' && (
             <div className="text-center py-10 text-sm text-gray-500">
               <div className="mb-2">適用中...</div>
-              <div className="text-xs text-gray-400">
-                LINE Messaging API に送信しています
-              </div>
+              <div className="text-xs text-gray-400">LINEへ表示設定を反映しています</div>
             </div>
           )}
 
@@ -165,7 +184,7 @@ export function ApplyToTagModal({ groupId, groupName, onClose }: Props) {
                 <div className="font-medium mb-1">✓ 完了しました</div>
                 <div className="text-xs">
                   {result.message ??
-                    `${result.total} 名の友だちに適用しました (${result.chunks} chunk)`}
+                    `${result.total}名の友だちに適用しました`}
                 </div>
               </div>
               <div className="flex justify-end">

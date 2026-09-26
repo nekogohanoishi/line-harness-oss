@@ -50,6 +50,7 @@ type Props = {
   onDeleteArea: (id: string) => void
   preview?: boolean
   onPreviewAction?: (area: Area) => void
+  onLimitReached?: () => void
 }
 
 function snap(value: number, others: number[]): number {
@@ -82,6 +83,7 @@ export function CanvasEditor({
   onDeleteArea,
   preview = false,
   onPreviewAction,
+  onLimitReached,
 }: Props) {
   const canvasRef = useRef<HTMLDivElement>(null)
   const dims = SIZE_DIMS[size]
@@ -198,7 +200,7 @@ export function CanvasEditor({
           // LINE の上限 (1 page あたり area 20 個) を事前にブロック。
           // 上限を超えて追加させると Save Draft / Publish が 400 になる。
           if (areas.length >= 20) {
-            alert('1 ページあたり areas は最大 20 個までです (LINE 仕様)。')
+            onLimitReached?.()
           } else {
             onAddArea({
               id: typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -280,8 +282,8 @@ export function CanvasEditor({
   }, [drag])
 
   return (
-    <div className="space-y-2 select-none">
-      <div className="flex items-center gap-2 text-sm">
+    <div className="min-w-0 space-y-2 select-none">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="text-gray-500 text-xs">ズーム</span>
         {[0.25, 0.3, 0.5, 0.75, 1].map((s) => (
           <button
@@ -299,14 +301,9 @@ export function CanvasEditor({
         <span className="ml-3 text-xs text-gray-400">
           {dims.width}×{dims.height}
         </span>
-        {!preview && (
-          <span className="ml-auto text-xs text-gray-400">
-            空白でドラッグ → 新規矩形 / 矩形クリックで選択 / 矢印キーで微調整 / Delete で削除
-          </span>
-        )}
       </div>
       <div
-        className="overflow-auto border border-gray-300 bg-gray-100"
+        className="w-full max-w-full overflow-auto border border-gray-300 bg-gray-100"
         style={{ maxHeight: '70vh' }}
       >
         <div

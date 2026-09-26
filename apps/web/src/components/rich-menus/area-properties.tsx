@@ -61,23 +61,26 @@ export function AreaProperties({ area, pages, onUpdate, onDelete }: Props) {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <NumField label="x" value={area.boundsX} onChange={(v) => onUpdate({ boundsX: v })} />
-        <NumField label="y" value={area.boundsY} onChange={(v) => onUpdate({ boundsY: v })} />
-        <NumField
-          label="幅"
-          value={area.boundsWidth}
-          onChange={(v) => onUpdate({ boundsWidth: v })}
-        />
-        <NumField
-          label="高さ"
-          value={area.boundsHeight}
-          onChange={(v) => onUpdate({ boundsHeight: v })}
-        />
-      </div>
+      <details className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+        <summary className="cursor-pointer text-xs font-medium text-gray-600">位置とサイズを数値で調整</summary>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <NumField label="左からの位置" value={area.boundsX} onChange={(v) => onUpdate({ boundsX: v })} />
+          <NumField label="上からの位置" value={area.boundsY} onChange={(v) => onUpdate({ boundsY: v })} />
+          <NumField
+            label="幅"
+            value={area.boundsWidth}
+            onChange={(v) => onUpdate({ boundsWidth: v })}
+          />
+          <NumField
+            label="高さ"
+            value={area.boundsHeight}
+            onChange={(v) => onUpdate({ boundsHeight: v })}
+          />
+        </div>
+      </details>
 
       <label className="block">
-        <span className="text-xs text-gray-500">アクション</span>
+        <span className="text-xs text-gray-500">押したときの動作</span>
         <select
           value={area.actionType}
           onChange={(e) => {
@@ -86,10 +89,10 @@ export function AreaProperties({ area, pages, onUpdate, onDelete }: Props) {
           }}
           className="mt-0.5 block w-full border border-gray-300 rounded px-2 py-1 text-sm"
         >
-          <option value="uri">URL を開く (uri)</option>
-          <option value="message">テキスト送信 (message)</option>
-          <option value="postback">postback</option>
-          <option value="richmenuswitch">タブ切替 (richmenuswitch)</option>
+          <option value="uri">Webページを開く</option>
+          <option value="message">メッセージを送信する</option>
+          <option value="richmenuswitch">別のページへ切り替える</option>
+          <option value="postback">画面表示なしで処理を実行する</option>
         </select>
       </label>
 
@@ -104,7 +107,7 @@ export function AreaProperties({ area, pages, onUpdate, onDelete }: Props) {
             className="mt-0.5 block w-full border border-gray-300 rounded px-2 py-1 text-sm"
           />
           <p className="mt-1 text-[11px] text-gray-500">
-            LINE 配信用 URL は tracked link (短縮 URL) 経由を推奨。
+            クリック数を計測する場合は、計測リンクを指定してください。
           </p>
         </label>
       )}
@@ -123,7 +126,7 @@ export function AreaProperties({ area, pages, onUpdate, onDelete }: Props) {
       {area.actionType === 'postback' && (
         <>
           <label className="block">
-            <span className="text-xs text-gray-500">postback data</span>
+            <span className="text-xs text-gray-500">実行する処理のデータ</span>
             <input
               value={(data.data as string) ?? ''}
               onChange={(e) => onUpdate({ actionData: { ...data, data: e.target.value } })}
@@ -131,7 +134,7 @@ export function AreaProperties({ area, pages, onUpdate, onDelete }: Props) {
             />
           </label>
           <label className="block">
-            <span className="text-xs text-gray-500">displayText (任意)</span>
+            <span className="text-xs text-gray-500">トーク画面に表示する文言（任意）</span>
             <input
               value={(data.displayText as string) ?? ''}
               onChange={(e) =>

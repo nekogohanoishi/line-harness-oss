@@ -6,7 +6,7 @@ import Header from '@/components/layout/header'
 import { useAccount } from '@/contexts/account-context'
 import { api } from '@/lib/api'
 import { ApplyToTagModal } from '@/components/rich-menus/apply-to-tag-modal'
-import { ResponsiveTable, EmptyState } from '@/components/ui'
+import { ResponsiveTable, EmptyState, TechnicalDetails, ConfirmSheet } from '@/components/ui'
 
 type RichMenuGroupListItem = {
   id: string
@@ -47,6 +47,11 @@ type LineMenu = {
   } | null
 }
 
+type OperationTarget =
+  | { kind: 'delete-group'; group: RichMenuGroupListItem }
+  | { kind: 'delete-external'; menu: LineMenu }
+  | { kind: 'import'; menu: LineMenu }
+
 export default function RichMenusListPage() {
   const { selectedAccount } = useAccount()
   const [groups, setGroups] = useState<RichMenuGroupListItem[]>([])
@@ -58,6 +63,10 @@ export default function RichMenusListPage() {
   const [externalError, setExternalError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [applyTo, setApplyTo] = useState<RichMenuGroupListItem | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [operationTarget, setOperationTarget] = useState<OperationTarget | null>(null)
+  const [operationBusy, setOperationBusy] = useState(false)
+  const [operationError, setOperationError] = useState('')
 
   const reload = useCallback(async () => {
     if (!selectedAccount?.id) return
@@ -103,58 +112,52 @@ export default function RichMenusListPage() {
     reload()
   }, [reload])
 
-  async function handleDelete(group: RichMenuGroupListItem) {
+  function handleDelete(group: RichMenuGroupListItem) {
     if (group.status === 'published') {
-      alert(
-        `「${group.name}」は LINE に登録されています。\n\n` +
-          '編集画面の「危険な操作」から「LINE から取り下げ」を実行してから、改めて削除してください。',
-      )
+      setError(`「${group.name}」はLINEに登録されています。編集画面で「LINEから取り下げ」を実行してから削除してください。`)
       return
     }
-    if (!confirm(`「${group.name}」を削除します。元には戻せません。`)) return
-    try {
-      const res = await api.richMenuGroups.delete(group.id)
-      if (!res.success) throw new Error(res.error ?? '削除失敗')
-      await reload()
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e))
-    }
+    setOperationTarget({ kind: 'delete-group', group })
+    setOperationError('')
   }
 
-  async function handleDeleteExternal(menu: LineMenu) {
+  function handleDeleteExternal(menu: LineMenu) {
     if (!selectedAccount?.id) return
-    if (
-      !confirm(
-        `LINE 上のリッチメニュー「${menu.name}」(richMenuId: ${menu.richMenuId.slice(0, 14)}...) を削除します。\n\n` +
-          'この管理画面外で作成されたメニューを LINE 公式アカウントから消します。元に戻せません。\n\n続行しますか？',
-      )
-    )
-      return
-    try {
-      const res = await api.richMenuGroups.deleteExternal(menu.richMenuId, selectedAccount.id)
-      if (!res.success) throw new Error(res.error ?? '削除失敗')
-      await reload()
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e))
-    }
+    setOperationTarget({ kind: 'delete-external', menu })
+    setOperationError('')
   }
 
-  async function handleImport(menu: LineMenu) {
+  function handleImport(menu: LineMenu) {
     if (!selectedAccount?.id) return
-    if (
-      !confirm(
-        `「${menu.name}」を管理画面に取り込みます。\n\n` +
-          '取り込み後は「管理画面で作成・編集するメニュー」セクションに表示され、編集や友だちへの再適用が可能になります。\n\n続行しますか？',
-      )
-    )
-      return
+    setOperationTarget({ kind: 'import', menu })
+    setOperationError('')
+  }
+
+  async function executeOperation() {
+    if (!operationTarget || !selectedAccount?.id) return
+    setOperationBusy(true)
+    setOperationError('')
+    setNotice(null)
     try {
-      const res = await api.richMenuGroups.importFromLine(menu.richMenuId, selectedAccount.id)
-      if (!res.success) throw new Error(res.error ?? '取り込み失敗')
-      alert(`取り込みました: ${res.data?.name ?? menu.name}`)
+      if (operationTarget.kind === 'delete-group') {
+        const res = await api.richMenuGroups.delete(operationTarget.group.id)
+        if (!res.success) throw new Error(res.error ?? '削除に失敗しました')
+        setNotice('リッチメニューを削除しました。')
+      } else if (operationTarget.kind === 'delete-external') {
+        const res = await api.richMenuGroups.deleteExternal(operationTarget.menu.richMenuId, selectedAccount.id)
+        if (!res.success) throw new Error(res.error ?? '削除に失敗しました')
+        setNotice('LINE公式アカウントからリッチメニューを削除しました。')
+      } else {
+        const res = await api.richMenuGroups.importFromLine(operationTarget.menu.richMenuId, selectedAccount.id)
+        if (!res.success) throw new Error(res.error ?? '取り込みに失敗しました')
+        setNotice(`「${res.data?.name ?? operationTarget.menu.name}」を管理画面に取り込みました。`)
+      }
+      setOperationTarget(null)
       await reload()
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e))
+    } catch (operationRequestError) {
+      setOperationError(operationRequestError instanceof Error ? operationRequestError.message : '操作に失敗しました')
+    } finally {
+      setOperationBusy(false)
     }
   }
 
@@ -187,6 +190,11 @@ export default function RichMenusListPage() {
       {selectedAccount && !loading && error && (
         <div className="bg-red-50 border border-red-200 text-red-700 text-sm p-3 rounded mb-4">
           {error}
+        </div>
+      )}
+      {notice && (
+        <div className="mb-4 border-l-4 border-green-500 bg-green-50 px-4 py-3 text-sm text-green-800">
+          {notice}
         </div>
       )}
 
@@ -313,6 +321,29 @@ export default function RichMenusListPage() {
           onClose={() => setApplyTo(null)}
         />
       )}
+      <ConfirmSheet
+        open={Boolean(operationTarget)}
+        title={operationTarget?.kind === 'import'
+          ? '管理画面に取り込みますか？'
+          : 'リッチメニューを削除しますか？'}
+        message={operationTarget?.kind === 'delete-group'
+          ? `「${operationTarget.group.name}」を削除します。この操作は元に戻せません。`
+          : operationTarget?.kind === 'delete-external'
+            ? `LINE公式アカウント上の「${operationTarget.menu.name}」を削除します。管理画面外で作成されたメニューもLINEから消えます。`
+            : operationTarget?.kind === 'import'
+              ? `「${operationTarget.menu.name}」を取り込み、管理画面から編集・表示設定できるようにします。`
+              : ''}
+        confirmLabel={operationTarget?.kind === 'import' ? '取り込む' : '削除する'}
+        tone={operationTarget?.kind === 'import' ? 'default' : 'danger'}
+        busy={operationBusy}
+        error={operationError}
+        onConfirm={executeOperation}
+        onClose={() => {
+          if (operationBusy) return
+          setOperationTarget(null)
+          setOperationError('')
+        }}
+      />
     </main>
   )
 }
@@ -371,11 +402,10 @@ function ExternalSection({
           ) : (
             <div className="text-gray-500 text-xs">設定なし</div>
           )}
-          {currentDefault && (
-            <div className="text-[10px] text-gray-400 font-mono mt-1 truncate">
-              {currentDefault}
-            </div>
-          )}
+          <TechnicalDetails
+            className="mt-1"
+            items={[{ label: 'LINEリッチメニューID', value: currentDefault, copyable: true }]}
+          />
         </div>
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
           <div className="text-xs text-gray-700 font-medium mb-0.5">
@@ -438,7 +468,7 @@ function ExternalSection({
                         className="text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded"
                         title="LINE 公式アカウントの全員のデフォルト"
                       >
-                        DEFAULT
+                        全員に表示中
                       </span>
                     )}
                     <span className="font-medium break-words">{m.name}</span>
@@ -446,9 +476,9 @@ function ExternalSection({
                   <div className="text-[11px] font-normal text-gray-500 break-words">
                     {m.chatBarText}
                   </div>
-                  <div className="text-[10px] font-normal text-gray-400 font-mono break-all">
-                    {m.richMenuId}
-                  </div>
+                  <TechnicalDetails
+                    items={[{ label: 'LINEリッチメニューID', value: m.richMenuId, copyable: true }]}
+                  />
                 </div>
               ),
             },
@@ -458,7 +488,7 @@ function ExternalSection({
               render: (m) => (
                 <span className="text-xs text-gray-600 whitespace-nowrap">
                   {m.size.width}×{m.size.height}
-                  <span className="text-[10px] text-gray-400 ml-1">{m.areasCount} エリア</span>
+                  <span className="text-[10px] text-gray-400 ml-1">・{m.areasCount}ボタン</span>
                 </span>
               ),
             },
@@ -477,9 +507,9 @@ function ExternalSection({
                 ) : (
                   <span
                     className="text-xs text-amber-700 font-medium"
-                    title="LINE 公式マネージャー、または旧 MCP/CLI から作成された可能性"
+                    title="LINE公式アカウント側で作成されたメニューです"
                   >
-                    管理画面外
+                    LINE側で作成
                   </span>
                 ),
             },

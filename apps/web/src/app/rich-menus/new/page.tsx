@@ -53,7 +53,7 @@ export default function NewRichMenuPage() {
     <main className="p-0 sm:p-6 max-w-2xl mx-auto">
       <Header
         title="新規リッチメニュー"
-        description="作成後の編集画面で画像 upload や areas 編集ができます。"
+        description="まずレイアウトを選び、作成後の編集画面で画像とボタンの動作を設定します。"
       />
       <Link
         href="/rich-menus"
@@ -88,7 +88,7 @@ export default function NewRichMenuPage() {
             className="block w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
           />
           <p className="mt-1 text-xs text-gray-500">
-            ユーザーがトーク画面でメニューを開く前に表示される文言。
+            友だちがトーク画面でメニューを開く前に表示される文言です。
           </p>
         </div>
 
