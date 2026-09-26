@@ -52,7 +52,6 @@ export default function UsersTable({
         <table className="min-w-full">
           <thead className="bg-gray-50 text-left text-xs font-medium uppercase text-gray-500">
             <tr>
-              <th className="px-4 py-3">識別子</th>
               <th className="px-4 py-3">表示名</th>
               <th className="px-4 py-3">登録アカウント</th>
               <th className="px-4 py-3">X</th>
@@ -63,7 +62,7 @@ export default function UsersTable({
           <tbody>
             {rows.length === 0 && !loading ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-sm text-gray-400">
+                <td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-400">
                   該当ユーザーがいません
                 </td>
               </tr>

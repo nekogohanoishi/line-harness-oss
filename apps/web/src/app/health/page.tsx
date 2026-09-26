@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import Header from '@/components/layout/header'
 import { api } from '@/lib/api'
 import CcPromptButton from '@/components/cc-prompt-button'
+import { TechnicalDetails } from '@/components/ui'
 
 interface LineAccount {
   id: string
@@ -33,6 +34,17 @@ interface AccountMigration {
   totalCount: number
   createdAt: string
   completedAt: string | null
+}
+
+function lineErrorLabel(code: number | null): string {
+  if (code === null) return '異常を検出'
+  if (code === 400) return '送信内容を確認してください'
+  if (code === 401) return 'LINEの認証情報を確認してください'
+  if (code === 403) return 'LINE側の権限を確認してください'
+  if (code === 404) return '送信先または設定が見つかりません'
+  if (code === 429) return '送信上限に達しています'
+  if (code >= 500) return 'LINE側で一時的な障害が発生しています'
+  return 'LINE APIでエラーが発生しました'
 }
 
 const riskConfig = {
@@ -207,7 +219,6 @@ export default function HealthPage() {
                         </div>
                         <div>
                           <h3 className="text-sm font-bold text-gray-900">{account.name}</h3>
-                          <p className="text-xs text-gray-400 font-mono">Channel: {account.channelId}</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -230,6 +241,13 @@ export default function HealthPage() {
                   {/* Expanded: Health Logs */}
                   {isExpanded && (
                     <div className="border-t border-gray-200 p-4">
+                      <TechnicalDetails
+                        className="mb-3"
+                        items={[
+                          { label: 'Channel ID', value: account.channelId, copyable: true },
+                          { label: '内部アカウントID', value: account.id, copyable: true },
+                        ]}
+                      />
                       {risk === 'danger' && (
                         <div className="mb-3">
                           <button
@@ -251,7 +269,7 @@ export default function HealthPage() {
                           <table className="w-full text-sm">
                             <thead>
                               <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
-                                <th className="pb-2 pr-3 font-medium">エラーコード</th>
+                                <th className="pb-2 pr-3 font-medium">内容</th>
                                 <th className="pb-2 pr-3 font-medium">エラー数</th>
                                 <th className="pb-2 pr-3 font-medium">チェック期間</th>
                                 <th className="pb-2 pr-3 font-medium">リスク</th>
@@ -263,8 +281,11 @@ export default function HealthPage() {
                                 const logConfig = riskConfig[log.riskLevel]
                                 return (
                                   <tr key={log.id} className="border-b border-gray-50">
-                                    <td className="py-2 pr-3 font-mono text-gray-700">
-                                      {log.errorCode !== null ? log.errorCode : '-'}
+                                    <td className="py-2 pr-3 text-gray-700">
+                                      <TechnicalDetails
+                                        label={lineErrorLabel(log.errorCode)}
+                                        items={[{ label: 'エラーコード', value: log.errorCode ?? '記録なし' }]}
+                                      />
                                     </td>
                                     <td className="py-2 pr-3 text-gray-700">{log.errorCount}</td>
                                     <td className="py-2 pr-3 text-gray-500">{log.checkPeriod}</td>

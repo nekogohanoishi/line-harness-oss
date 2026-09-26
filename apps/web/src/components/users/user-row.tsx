@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { TechnicalDetails } from '@/components/ui'
 
 const fmt = new Intl.DateTimeFormat('ja-JP', {
   year: 'numeric',
@@ -44,16 +45,12 @@ interface Props {
 
 export default function UserRow({ row, accountColorMap }: Props) {
   const [expanded, setExpanded] = useState(false)
-  const idShort =
-    row.identityKey.length > 12 ? `${row.identityKey.slice(0, 8)}...` : row.identityKey
-
   return (
     <>
       <tr
         className="cursor-pointer border-b border-gray-100 hover:bg-gray-50"
         onClick={() => setExpanded((v) => !v)}
       >
-        <td className="px-4 py-3 font-mono text-xs text-gray-500">{idShort}</td>
         <td className="px-4 py-3 text-sm font-medium text-gray-900">
           {row.displayName || <span className="text-gray-400">—</span>}
         </td>
@@ -91,7 +88,7 @@ export default function UserRow({ row, accountColorMap }: Props) {
       </tr>
       {expanded && (
         <tr className="border-b border-gray-100 bg-gray-50">
-          <td colSpan={6} className="px-6 py-4">
+          <td colSpan={5} className="px-6 py-4">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div>
                 <p className="mb-2 text-xs font-medium text-gray-500">登録アカウント詳細</p>
@@ -102,7 +99,6 @@ export default function UserRow({ row, accountColorMap }: Props) {
                         className={`h-2 w-2 rounded-full ${a.isFollowing ? 'bg-emerald-500' : 'bg-gray-300'}`}
                       />
                       <span className="font-medium">{a.accountName}</span>
-                      <span className="font-mono text-xs text-gray-400">{a.lineUserId}</span>
                       <span className="text-xs text-gray-400">
                         登録: {fmt.format(new Date(a.joinedAt))}
                       </span>
@@ -123,15 +119,17 @@ export default function UserRow({ row, accountColorMap }: Props) {
                     <p className="text-gray-700">{row.phones.join(', ')}</p>
                   </div>
                 )}
-                <div>
-                  <p className="text-xs font-medium text-gray-500">識別子</p>
-                  <p className="break-all font-mono text-xs text-gray-500">
-                    {row.identityKey}
-                    <span className="ml-2 rounded bg-gray-200 px-1 text-[10px] text-gray-600">
-                      {row.identityKeyKind}
-                    </span>
-                  </p>
-                </div>
+                <TechnicalDetails
+                  items={[
+                    { label: '内部識別子', value: row.identityKey, copyable: true },
+                    { label: '識別方法', value: row.identityKeyKind },
+                    ...row.accounts.map((account) => ({
+                      label: `${account.accountName}のLINE ID`,
+                      value: account.lineUserId,
+                      copyable: true,
+                    })),
+                  ]}
+                />
               </div>
             </div>
           </td>

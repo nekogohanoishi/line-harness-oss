@@ -6,6 +6,7 @@ import type { FriendListItem } from '@/lib/api'
 import { api } from '@/lib/api'
 import FriendListRow from './friend-list-row'
 import TagBadge from './tag-badge'
+import { TechnicalDetails } from '@/components/ui'
 
 interface Props {
   friends: FriendListItem[]
@@ -110,10 +111,6 @@ export default function FriendListTable({ friends, allTags, onRefresh }: Props) 
 
                 {isExpanded && (
                   <div className="bg-gray-50 px-4 py-4 lg:px-6 border-b border-gray-100 space-y-3">
-                    <div>
-                      <p className="text-xs font-semibold text-gray-500 mb-1">LINE ユーザーID</p>
-                      <p className="text-xs text-gray-600 font-mono break-all select-all">{friend.lineUserId}</p>
-                    </div>
                     <p className="text-xs font-semibold text-gray-500 mb-2">タグ管理</p>
                     <div className="flex flex-wrap gap-1.5 mb-2">
                       {friend.tags.map((tag) => (
@@ -167,6 +164,9 @@ export default function FriendListTable({ friends, allTags, onRefresh }: Props) 
                         </button>
                       )
                     )}
+                    <TechnicalDetails
+                      items={[{ label: 'LINEユーザーID', value: friend.lineUserId, copyable: true }]}
+                    />
                   </div>
                 )}
               </div>

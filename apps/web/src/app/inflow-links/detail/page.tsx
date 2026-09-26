@@ -7,6 +7,7 @@ import { api } from '@/lib/api'
 import { useWorkerOrigin } from '@/lib/use-worker-origin'
 import Header from '@/components/layout/header'
 import type { EntryRoute, EntryRouteFunnel } from '@line-crm/shared'
+import { TechnicalDetails } from '@/components/ui'
 
 export default function InflowLinkDetailPage() {
   const searchParams = useSearchParams()
@@ -47,7 +48,7 @@ export default function InflowLinkDetailPage() {
 
   return (
     <div>
-      <Header title={route.name} description={`ref_code: ${route.refCode}`} />
+      <Header title={route.name} description="流入結果と公開リンクを確認できます。" />
 
       <Link
         href="/inflow-links"
@@ -64,6 +65,12 @@ export default function InflowLinkDetailPage() {
           <code className="block bg-gray-50 px-3 py-2 rounded text-xs font-mono break-all">
             {url}
           </code>
+          <TechnicalDetails
+            items={[
+              { label: '流入コード', value: route.refCode, copyable: true },
+              { label: '内部リンクID', value: route.id, copyable: true },
+            ]}
+          />
         </div>
       </div>
     </div>

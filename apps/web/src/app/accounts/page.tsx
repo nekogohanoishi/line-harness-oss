@@ -14,6 +14,7 @@ import {
 } from '@/components/accounts/account-form-fields'
 import AccountSetupUrls from '@/components/accounts/account-setup-urls'
 import AccountEditModal from '@/components/accounts/account-edit-modal'
+import { TechnicalDetails } from '@/components/ui'
 
 interface LineAccountListItem {
   id: string
@@ -254,9 +255,7 @@ export default function AccountsPage() {
                   )}
                   <div>
                     <h3 className="text-sm font-bold text-gray-900">{account.displayName}</h3>
-                    <p className="text-xs text-gray-400 font-mono">
-                      {account.basicId ? `${account.basicId} · ` : ''}Channel: {account.channelId}
-                    </p>
+                    {account.basicId && <p className="text-xs text-gray-500">{account.basicId}</p>}
                   </div>
                 </div>
                 <button
@@ -312,6 +311,16 @@ export default function AccountsPage() {
                 onUpdated={load}
               />
               <TestRecipientsSetting accountId={account.id} />
+
+              <TechnicalDetails
+                className="mt-2"
+                items={[
+                  { label: 'Channel ID', value: account.channelId, copyable: true },
+                  { label: '内部アカウントID', value: account.id, copyable: true },
+                  { label: 'Login Channel ID', value: account.loginChannelId, copyable: true },
+                  { label: 'LIFF ID', value: account.liffId, copyable: true },
+                ]}
+              />
 
               <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
                 <p className="text-xs text-gray-400">

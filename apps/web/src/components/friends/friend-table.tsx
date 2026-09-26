@@ -4,6 +4,7 @@ import { useState } from 'react'
 import type { Tag } from '@line-crm/shared'
 import type { FriendWithTags } from '@/lib/api'
 import { api } from '@/lib/api'
+import { TechnicalDetails } from '@/components/ui'
 import TagBadge from './tag-badge'
 
 interface FriendTableProps {
@@ -194,10 +195,9 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                   <tr key={`${friend.id}-detail`} className="bg-gray-50">
                     <td colSpan={5} className="px-6 py-4">
                       <div className="space-y-3">
-                        <div>
-                          <p className="text-xs font-semibold text-gray-500 mb-1">LINE ユーザーID</p>
-                          <p className="text-xs text-gray-600 font-mono">{friend.lineUserId}</p>
-                        </div>
+                        <TechnicalDetails
+                          items={[{ label: 'LINEユーザーID', value: friend.lineUserId, copyable: true }]}
+                        />
 
                         {/* Tag management */}
                         <div>
