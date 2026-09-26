@@ -9,10 +9,12 @@ import { useAccount } from '@/contexts/account-context'
 import type { Scenario, Tag } from '@line-crm/shared'
 
 const emptyQuestion = (index: number): SurveyQuestion => ({
-  name: `質問${index + 1}`,
+  name: `回答項目${index + 1}`,
   label: '',
   options: ['ある', 'ない'],
 })
+
+const isGeneratedQuestionName = (name: string) => /^(質問|回答項目)\d+$/.test(name)
 
 function IconButton({
   label,
@@ -213,6 +215,17 @@ export default function SurveysPage() {
     setQuestions((current) => current.map((question, i) => i === index ? { ...question, ...patch } : question))
   }
 
+  const updateQuestionLabel = (index: number, label: string) => {
+    setQuestions((current) => current.map((question, i) => {
+      if (i !== index) return question
+      return {
+        ...question,
+        label,
+        name: isGeneratedQuestionName(question.name) && label.trim() ? label.trim() : question.name,
+      }
+    }))
+  }
+
   const updateOption = (questionIndex: number, optionIndex: number, value: string) => {
     setQuestions((current) => current.map((question, i) => {
       if (i !== questionIndex) return question
@@ -258,7 +271,7 @@ export default function SurveysPage() {
   }
 
   const payloadQuestions = () => questions.map((question, index) => ({
-    name: question.name.trim() || question.label.trim() || `質問${index + 1}`,
+    name: question.name.trim() || question.label.trim() || `回答項目${index + 1}`,
     label: question.label.trim(),
     options: question.options.map((option) => option.trim()).filter(Boolean),
   }))
@@ -664,7 +677,7 @@ export default function SurveysPage() {
                         <div className="flex-1 min-w-0">
                           <input
                             value={question.label}
-                            onChange={(e) => updateQuestion(questionIndex, { label: e.target.value })}
+                            onChange={(e) => updateQuestionLabel(questionIndex, e.target.value)}
                             className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                             placeholder="例: 今1番目指している試験はどれですか？"
                           />
@@ -681,16 +694,6 @@ export default function SurveysPage() {
                           <TrashIcon />
                         </IconButton>
                       </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">メタデータキー</label>
-                      <input
-                        value={question.name}
-                        onChange={(e) => updateQuestion(questionIndex, { name: e.target.value })}
-                        className="w-full max-w-md border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                        placeholder="例: 目標試験"
-                      />
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -720,6 +723,24 @@ export default function SurveysPage() {
                       <PlusIcon />
                       選択肢を追加
                     </button>
+
+                    <details className="border-t border-gray-100 pt-3">
+                      <summary className="cursor-pointer text-xs font-medium text-gray-500">
+                        データ連携設定
+                      </summary>
+                      <div className="mt-3 max-w-md">
+                        <label className="block text-xs font-medium text-gray-600 mb-1">回答の保存名</label>
+                        <input
+                          value={question.name}
+                          onChange={(e) => updateQuestion(questionIndex, { name: e.target.value })}
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                          placeholder="例: 目標試験"
+                        />
+                        <p className="mt-1 text-xs text-gray-500">
+                          友だち詳細や絞り込み条件で、この回答を見分けるための項目名です。
+                        </p>
+                      </div>
+                    </details>
                   </div>
                 ))}
               </section>
