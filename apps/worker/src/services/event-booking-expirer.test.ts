@@ -5,6 +5,7 @@ interface BookingRow {
   id: string;
   status: string;
   requested_at: string;
+  slot_starts_at: string;
   decided_at: string | null;
   updated_at: string | null;
 }
@@ -26,10 +27,10 @@ function memDB(state: { bookings: BookingRow[]; reminders: ReminderRow[]; idem: 
         bind(...args: unknown[]) { bound = args; return stmt; },
         async first<T>() { return null as T | null; },
         async all<T>() {
-          if (sql.includes('FROM event_bookings\n        WHERE status = \'requested\'')) {
-            const [cutoff] = bound as [string];
+          if (sql.includes('FROM event_bookings b') && sql.includes('JOIN event_slots')) {
+            const [now] = bound as [string];
             const items = state.bookings.filter(
-              (b) => b.status === 'requested' && b.requested_at < cutoff,
+              (b) => b.status === 'requested' && b.slot_starts_at <= now,
             );
             return { results: items as unknown as T[] };
           }
@@ -75,14 +76,12 @@ function memDB(state: { bookings: BookingRow[]; reminders: ReminderRow[]; idem: 
 }
 
 describe('runEventBookingExpirer', () => {
-  test('expires requested bookings older than 24h', async () => {
+  test('expires requested bookings only after the slot starts', async () => {
     const now = new Date('2026-05-09T12:00:00Z');
-    const stale = '2026-05-08T11:00:00Z'; // > 24h ago
-    const fresh = '2026-05-09T11:30:00Z'; // 30min ago
     const state = {
       bookings: [
-        { id: 'b1', status: 'requested', requested_at: stale, decided_at: null, updated_at: null },
-        { id: 'b2', status: 'requested', requested_at: fresh, decided_at: null, updated_at: null },
+        { id: 'b1', status: 'requested', requested_at: '2026-05-09T11:30:00Z', slot_starts_at: '2026-05-09T11:00:00Z', decided_at: null, updated_at: null },
+        { id: 'b2', status: 'requested', requested_at: '2026-05-08T00:00:00Z', slot_starts_at: '2026-05-10T11:00:00Z', decided_at: null, updated_at: null },
       ],
       reminders: [{ id: 'r1', booking_id: 'b1', status: 'pending' }],
       idem: [{ key: 'k1', expires_at: '2026-05-09T00:00:00Z' }],
@@ -96,7 +95,7 @@ describe('runEventBookingExpirer', () => {
   test('cancels related pending reminders', async () => {
     const now = new Date('2026-05-09T12:00:00Z');
     const state = {
-      bookings: [{ id: 'b1', status: 'requested', requested_at: '2026-05-08T00:00:00Z', decided_at: null, updated_at: null }],
+      bookings: [{ id: 'b1', status: 'requested', requested_at: '2026-05-08T00:00:00Z', slot_starts_at: '2026-05-09T10:00:00Z', decided_at: null, updated_at: null }],
       reminders: [
         { id: 'r1', booking_id: 'b1', status: 'pending' },
         { id: 'r2', booking_id: 'b1', status: 'sent' },
@@ -129,7 +128,7 @@ describe('runEventBookingExpirer', () => {
     const now = new Date('2026-05-09T12:00:00Z');
     const state = {
       bookings: [
-        { id: 'b1', status: 'confirmed', requested_at: '2026-01-01T00:00:00Z', decided_at: null, updated_at: null },
+        { id: 'b1', status: 'confirmed', requested_at: '2026-01-01T00:00:00Z', slot_starts_at: '2026-01-02T00:00:00Z', decided_at: null, updated_at: null },
       ],
       reminders: [],
       idem: [],

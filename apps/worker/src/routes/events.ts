@@ -1257,13 +1257,47 @@ events.get('/api/events/admin/events/notifications/pending', async (c) => {
   if (!account_id) return bad(c, 'account_id_required', 400);
   const row = await c.env.DB
     .prepare(
-      `SELECT COUNT(*) AS c
+      `SELECT SUM(CASE WHEN status = 'requested' THEN 1 ELSE 0 END) AS c,
+              SUM(CASE WHEN admin_seen_at IS NULL THEN 1 ELSE 0 END) AS unseen_count
          FROM event_bookings
-        WHERE line_account_id = ? AND status = 'requested'`,
+        WHERE line_account_id = ?`,
     )
     .bind(account_id)
-    .first<{ c: number }>();
-  return c.json({ count: row?.c ?? 0 });
+    .first<{ c: number | null; unseen_count: number | null }>();
+  return c.json({ count: row?.c ?? 0, unseenCount: row?.unseen_count ?? 0 });
+});
+
+// Account-wide event booking list used by the unified booking inbox. The
+// event-specific endpoint below remains available for detailed operations.
+events.get('/api/events/admin/bookings', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const status = c.req.query('status');
+  const conditions = ['b.line_account_id = ?'];
+  const params: unknown[] = [account_id];
+  if (status === 'unseen') {
+    conditions.push('b.admin_seen_at IS NULL');
+  } else if (status && status !== 'all') {
+    conditions.push('b.status = ?');
+    params.push(status);
+  }
+  const { results } = await c.env.DB
+    .prepare(
+      `SELECT b.*,
+              e.name AS event_name,
+              s.starts_at AS slot_starts_at, s.ends_at AS slot_ends_at,
+              f.display_name AS friend_display_name, f.line_user_id AS friend_line_user_id
+         FROM event_bookings b
+         JOIN events e ON e.id = b.event_id
+         JOIN event_slots s ON s.id = b.slot_id
+         LEFT JOIN friends f ON f.id = b.friend_id
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY b.requested_at DESC
+        LIMIT 300`,
+    )
+    .bind(...params)
+    .all();
+  return c.json({ items: results ?? [] });
 });
 
 events.get('/api/events/admin/events/:id/bookings', async (c) => {
@@ -1334,6 +1368,78 @@ async function loadBookingForAction(
     .first<BookingActionRow>();
   return row ?? null;
 }
+
+events.post('/api/events/admin/events/:id/bookings/:bookingId/seen', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const event_id = c.req.param('id');
+  if (!(await ownsEvent(c.env.DB, event_id, account_id))) return bad(c, 'not_found', 404);
+  const booking = await loadBookingForAction(c.env.DB, account_id, event_id, c.req.param('bookingId'));
+  if (!booking) return bad(c, 'not_found', 404);
+  const nowIso = new Date().toISOString();
+  await c.env.DB
+    .prepare(
+      `UPDATE event_bookings
+          SET admin_seen_at = COALESCE(admin_seen_at, ?), updated_at = ?
+        WHERE id = ? AND event_id = ?`,
+    )
+    .bind(nowIso, nowIso, booking.id, event_id)
+    .run();
+  return c.json({ ok: true, admin_seen_at: nowIso });
+});
+
+events.post('/api/events/admin/events/:id/bookings/:bookingId/restore', async (c) => {
+  const account_id = getAccountId(c);
+  if (!account_id) return bad(c, 'account_id_required', 400);
+  const event_id = c.req.param('id');
+  if (!(await ownsEvent(c.env.DB, event_id, account_id))) return bad(c, 'not_found', 404);
+  const booking = await loadBookingForAction(c.env.DB, account_id, event_id, c.req.param('bookingId'));
+  if (!booking) return bad(c, 'not_found', 404);
+  if (booking.status !== 'expired') return bad(c, 'invalid_state', 409);
+  const restoreInfo = await c.env.DB
+    .prepare(
+      `SELECT s.starts_at, s.capacity, e.max_bookings_per_friend,
+              (SELECT COUNT(*) FROM event_bookings x
+                WHERE x.slot_id = b.slot_id AND x.status IN ('requested','confirmed')) AS active_count,
+              (SELECT COUNT(*) FROM event_bookings x
+                WHERE x.event_id = b.event_id
+                  AND x.identity_key = b.identity_key
+                  AND x.status IN ('requested','confirmed')) AS identity_active_count
+         FROM event_bookings b
+         JOIN event_slots s ON s.id = b.slot_id
+         JOIN events e ON e.id = b.event_id
+        WHERE b.id = ? AND b.event_id = ?`,
+    )
+    .bind(booking.id, event_id)
+    .first<{
+      starts_at: string;
+      capacity: number | null;
+      max_bookings_per_friend: number | null;
+      active_count: number;
+      identity_active_count: number;
+    }>();
+  if (!restoreInfo) return bad(c, 'not_found', 404);
+  const nowIso = new Date().toISOString();
+  if (restoreInfo.starts_at <= nowIso) return bad(c, 'slot_already_started', 409);
+  if (restoreInfo.capacity != null && restoreInfo.active_count >= restoreInfo.capacity) {
+    return bad(c, 'slot_full', 409);
+  }
+  if (restoreInfo.identity_active_count >= (restoreInfo.max_bookings_per_friend ?? 1)) {
+    return bad(c, 'booking_limit_reached', 409);
+  }
+  const upd = await c.env.DB
+    .prepare(
+      `UPDATE event_bookings
+          SET status = 'requested', decided_at = NULL, decided_by_staff_id = NULL,
+              cancelled_at = NULL, cancelled_by = NULL, admin_seen_at = NULL,
+              updated_at = ?
+        WHERE id = ? AND event_id = ? AND status = 'expired'`,
+    )
+    .bind(nowIso, booking.id, event_id)
+    .run();
+  if ((upd.meta?.changes ?? 0) === 0) return bad(c, 'invalid_state', 409);
+  return c.json({ ok: true, status: 'requested' });
+});
 
 async function notifyBookingFriend(
   db: D1Database,
@@ -1407,10 +1513,11 @@ events.post('/api/events/admin/events/:id/bookings/:bookingId/decide', async (c)
   const upd = await c.env.DB
     .prepare(
       `UPDATE event_bookings
-          SET status = ?, decided_at = ?, decided_by_staff_id = ?, updated_at = ?
+          SET status = ?, decided_at = ?, decided_by_staff_id = ?,
+              admin_seen_at = COALESCE(admin_seen_at, ?), updated_at = ?
         WHERE id = ? AND status = ? AND decided_at IS NULL`,
     )
-    .bind(next, nowIso, staff?.id ?? null, nowIso, booking.id, booking.status)
+    .bind(next, nowIso, staff?.id ?? null, nowIso, nowIso, booking.id, booking.status)
     .run();
   if ((upd.meta?.changes ?? 0) === 0) return bad(c, 'already_decided', 409);
 
@@ -1470,10 +1577,11 @@ events.post('/api/events/admin/events/:id/bookings/:bookingId/cancel', async (c)
   const upd = await c.env.DB
     .prepare(
       `UPDATE event_bookings
-          SET status = 'cancelled', cancelled_at = ?, cancelled_by = 'admin', updated_at = ?
+          SET status = 'cancelled', cancelled_at = ?, cancelled_by = 'admin',
+              admin_seen_at = COALESCE(admin_seen_at, ?), updated_at = ?
         WHERE id = ? AND status = ?`,
     )
-    .bind(nowIso, nowIso, booking.id, booking.status)
+    .bind(nowIso, nowIso, nowIso, booking.id, booking.status)
     .run();
   if ((upd.meta?.changes ?? 0) === 0) return bad(c, 'invalid_state', 409);
   await cancelPendingRemindersFor(c.env.DB, booking.id);
@@ -1509,6 +1617,7 @@ events.put('/api/events/admin/events/:id/bookings/:bookingId', async (c) => {
     const row = await c.env.DB.prepare(`SELECT * FROM event_bookings WHERE id = ?`).bind(booking.id).first();
     return c.json(row);
   }
+  setClauses.push(`admin_seen_at = COALESCE(admin_seen_at, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`);
   setClauses.push(`updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`);
   setValues.push(booking.id, booking.status);
   // Conditional UPDATE on (id, status) — same race protection as the

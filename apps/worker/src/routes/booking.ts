@@ -896,8 +896,19 @@ booking.get('/api/booking/admin/requests', async (c) => {
   const accountId = await resolveAccountIdAdmin(c);
   if (!accountId) return c.json({ error: 'missing_account_id' }, 400);
   const status = c.req.query('status');
-  const sql = status === 'all'
-    ? `SELECT b.*,
+  const conditions = ['b.line_account_id = ?'];
+  const params: unknown[] = [accountId];
+  if (status === 'unseen') {
+    conditions.push('b.admin_seen_at IS NULL');
+  } else if (status && status !== 'all') {
+    conditions.push('b.status = ?');
+    params.push(status);
+  } else if (!status) {
+    conditions.push(`b.status = 'requested'`);
+  }
+  const rows = await c.env.DB
+    .prepare(
+      `SELECT b.*,
               m.name AS menu_name,
               s.display_name AS staff_name,
               f.display_name AS friend_name
@@ -905,25 +916,75 @@ booking.get('/api/booking/admin/requests', async (c) => {
          INNER JOIN menus m ON m.id = b.menu_id
          INNER JOIN staff s ON s.id = b.staff_id
          LEFT JOIN friends f ON f.id = b.friend_id
-        WHERE b.line_account_id = ?
-        ORDER BY b.starts_at ASC
-        LIMIT 200`
-    : `SELECT b.*,
-              m.name AS menu_name,
-              s.display_name AS staff_name,
-              f.display_name AS friend_name
-         FROM bookings b
-         INNER JOIN menus m ON m.id = b.menu_id
-         INNER JOIN staff s ON s.id = b.staff_id
-         LEFT JOIN friends f ON f.id = b.friend_id
-        WHERE b.line_account_id = ? AND b.status = ?
-        ORDER BY b.starts_at ASC
-        LIMIT 200`;
-  const stmt = c.env.DB.prepare(sql);
-  const rows = await (status === 'all' || !status
-    ? (status === 'all' ? stmt.bind(accountId) : stmt.bind(accountId, 'requested'))
-    : stmt.bind(accountId, status)).all();
+        WHERE ${conditions.join(' AND ')}
+        ORDER BY b.requested_at DESC
+        LIMIT 300`,
+    )
+    .bind(...params)
+    .all();
   return c.json({ requests: rows.results });
+});
+
+booking.post('/api/booking/admin/requests/:id/seen', async (c) => {
+  const accountId = await resolveAccountIdAdmin(c);
+  if (!accountId) return c.json({ error: 'missing_account_id' }, 400);
+  const id = c.req.param('id');
+  const nowIso = new Date().toISOString();
+  const result = await c.env.DB
+    .prepare(
+      `UPDATE bookings
+          SET admin_seen_at = COALESCE(admin_seen_at, ?), updated_at = ?
+        WHERE id = ? AND line_account_id = ?`,
+    )
+    .bind(nowIso, nowIso, id, accountId)
+    .run();
+  if ((result.meta?.changes ?? 0) === 0) return c.json({ error: 'not_found' }, 404);
+  return c.json({ ok: true, admin_seen_at: nowIso });
+});
+
+booking.post('/api/booking/admin/requests/:id/restore', async (c) => {
+  const accountId = await resolveAccountIdAdmin(c);
+  if (!accountId) return c.json({ error: 'missing_account_id' }, 400);
+  const id = c.req.param('id');
+  const row = await c.env.DB
+    .prepare(
+      `SELECT id, status, starts_at, block_ends_at, staff_id
+         FROM bookings
+        WHERE id = ? AND line_account_id = ?`,
+    )
+    .bind(id, accountId)
+    .first<{
+      id: string;
+      status: BookingStatus;
+      starts_at: string;
+      block_ends_at: string;
+      staff_id: string;
+    }>();
+  if (!row) return c.json({ error: 'not_found' }, 404);
+  if (row.status !== 'expired') return c.json({ error: 'invalid_state' }, 409);
+  const nowIso = new Date().toISOString();
+  if (row.starts_at <= nowIso) return c.json({ error: 'slot_already_started' }, 409);
+  const conflict = await c.env.DB
+    .prepare(
+      `SELECT id FROM bookings
+        WHERE id <> ? AND staff_id = ? AND status IN ('requested','confirmed')
+          AND starts_at < ? AND block_ends_at > ?
+        LIMIT 1`,
+    )
+    .bind(id, row.staff_id, row.block_ends_at, row.starts_at)
+    .first<{ id: string }>();
+  if (conflict) return c.json({ error: 'slot_conflict' }, 409);
+  const result = await c.env.DB
+    .prepare(
+      `UPDATE bookings
+          SET status = 'requested', decided_at = NULL, decided_by_staff_id = NULL,
+              admin_seen_at = NULL, updated_at = ?
+        WHERE id = ? AND line_account_id = ? AND status = 'expired'`,
+    )
+    .bind(nowIso, id, accountId)
+    .run();
+  if ((result.meta?.changes ?? 0) === 0) return c.json({ error: 'invalid_state' }, 409);
+  return c.json({ ok: true, status: 'requested' });
 });
 
 booking.patch('/api/booking/admin/requests/:id', async (c) => {
@@ -940,15 +1001,17 @@ booking.patch('/api/booking/admin/requests/:id', async (c) => {
     return c.json({ error: 'invalid_transition' }, 409);
   }
   const next = nextStatus(row.status, b.action);
+  const nowIso = new Date().toISOString();
   // 条件付き UPDATE: 同時 PATCH の race を防ぐ。changes=0 のときは別オペレータが先に
   // 状態を変えたので 409 を返し、副作用（reminders 作成・通知）は走らせない。
   const updateResult = await c.env.DB
     .prepare(
       `UPDATE bookings SET status = ?, decided_at = ?,
+                            admin_seen_at = COALESCE(admin_seen_at, ?),
                             updated_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')
         WHERE id = ? AND status = ?`,
     )
-    .bind(next, new Date().toISOString(), id, row.status)
+    .bind(next, nowIso, nowIso, id, row.status)
     .run();
   if ((updateResult.meta?.changes ?? 0) === 0) {
     return c.json({ error: 'concurrent_update' }, 409);
@@ -1013,12 +1076,14 @@ booking.get('/api/booking/admin/pending-count', async (c) => {
   if (!accountId) return c.json({ error: 'missing_account_id' }, 400);
   const row = await c.env.DB
     .prepare(
-      `SELECT COUNT(*) AS cnt FROM bookings
-        WHERE line_account_id = ? AND status = 'requested'`,
+      `SELECT SUM(CASE WHEN status = 'requested' THEN 1 ELSE 0 END) AS cnt,
+              SUM(CASE WHEN admin_seen_at IS NULL THEN 1 ELSE 0 END) AS unseen_count
+         FROM bookings
+        WHERE line_account_id = ?`,
     )
     .bind(accountId)
-    .first<{ cnt: number }>();
-  return c.json({ count: row?.cnt ?? 0 });
+    .first<{ cnt: number | null; unseen_count: number | null }>();
+  return c.json({ count: row?.cnt ?? 0, unseenCount: row?.unseen_count ?? 0 });
 });
 
 export default booking;

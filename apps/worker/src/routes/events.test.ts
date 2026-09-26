@@ -223,6 +223,27 @@ function makeEventDb(state: {
               decided_at: ((b as Record<string, unknown>).decided_at as string | null) ?? null,
             } as T;
           }
+          if (sql.includes('AS identity_active_count')) {
+            const [id, event_id] = bound as [string, string];
+            const b = (state.bookings ?? []).find((x) => x.id === id && x.event_id === event_id);
+            if (!b) return null as T | null;
+            const slotId = (b as Record<string, unknown>).slot_id as string;
+            const identityKey = (b as Record<string, unknown>).identity_key;
+            const slot = (state.slots ?? []).find((x) => x.id === slotId);
+            const event = state.events.find((x) => x.id === event_id);
+            if (!slot || !event) return null as T | null;
+            return {
+              starts_at: slot.starts_at,
+              capacity: slot.capacity,
+              max_bookings_per_friend: event.max_bookings_per_friend,
+              active_count: (state.bookings ?? []).filter(
+                (x) => (x as Record<string, unknown>).slot_id === slotId && (x.status === 'requested' || x.status === 'confirmed'),
+              ).length,
+              identity_active_count: (state.bookings ?? []).filter(
+                (x) => x.event_id === event_id && (x as Record<string, unknown>).identity_key === identityKey && (x.status === 'requested' || x.status === 'confirmed'),
+              ).length,
+            } as T;
+          }
           // SELECT * FROM event_bookings WHERE id = ?
           if (sql.startsWith('SELECT * FROM event_bookings')) {
             const [id] = bound as [string];
@@ -247,12 +268,15 @@ function makeEventDb(state: {
           // notifications/pending count: SELECT COUNT(*) AS c FROM event_bookings WHERE line_account_id = ? AND status = 'requested'
           if (sql.includes('FROM event_bookings') && sql.includes("status = 'requested'")) {
             const [account_id] = bound as [string];
-            const c = (state.bookings ?? []).filter(
+            const accountBookings = (state.bookings ?? []).filter(
               (b) =>
-                (b as Record<string, unknown>).line_account_id === account_id &&
-                b.status === 'requested',
+                (b as Record<string, unknown>).line_account_id === account_id,
+            );
+            const c = accountBookings.filter((b) => b.status === 'requested').length;
+            const unseen_count = accountBookings.filter(
+              (b) => (b as Record<string, unknown>).admin_seen_at == null,
             ).length;
-            return { c } as T;
+            return { c, unseen_count } as T;
           }
           // POST の sameIdentityActive 検出 (window 関数 COUNT(*) OVER () で total を返す)
           if (sql.includes('FROM event_bookings b') && sql.includes('identity_key') && sql.includes('COUNT(*) OVER')) {
@@ -466,20 +490,27 @@ function makeEventDb(state: {
           }
           // admin bookings list: SELECT b.*, s.starts_at, ..., friends.display_name FROM event_bookings b JOIN event_slots s ...
           if (sql.includes('FROM event_bookings b') && sql.includes('friend_display_name')) {
-            const event_id = bound[0] as string;
+            const accountWide = sql.includes('b.line_account_id = ?');
+            const ownerId = bound[0] as string;
             const filterStatus = sql.includes('b.status = ?') ? (bound[1] as string) : null;
             const filterSlot = sql.includes('b.slot_id = ?')
               ? (bound[filterStatus ? 2 : 1] as string)
               : null;
             const items = (state.bookings ?? [])
-              .filter((b) => b.event_id === event_id)
+              .filter((b) => accountWide
+                ? (b as Record<string, unknown>).line_account_id === ownerId
+                : b.event_id === ownerId)
               .filter((b) => (filterStatus ? b.status === filterStatus : true))
+              .filter((b) => (sql.includes('b.admin_seen_at IS NULL')
+                ? (b as Record<string, unknown>).admin_seen_at == null
+                : true))
               .filter((b) => (filterSlot ? (b as Record<string, unknown>).slot_id === filterSlot : true))
               .map((b) => {
                 const s = (state.slots ?? []).find((x) => x.id === (b as Record<string, unknown>).slot_id);
                 const f = (state.friends ?? []).find((x) => x.id === (b as Record<string, unknown>).friend_id);
                 return {
                   ...b,
+                  event_name: state.events.find((x) => x.id === b.event_id)?.name ?? null,
                   slot_starts_at: s?.starts_at ?? null,
                   slot_ends_at: s?.ends_at ?? null,
                   friend_display_name: (f as { display_name?: string } | undefined)?.display_name ?? null,
@@ -551,6 +582,23 @@ function makeEventDb(state: {
           return { results: [] };
         },
         async run() {
+          if (sql.startsWith('UPDATE event_bookings') && sql.includes('SET admin_seen_at = COALESCE')) {
+            const admin_seen_at = bound[0] as string;
+            const id = bound[2] as string;
+            const b = (state.bookings ?? []).find((x) => x.id === id);
+            if (!b) return { success: true, meta: { changes: 0 } };
+            (b as Record<string, unknown>).admin_seen_at ??= admin_seen_at;
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.startsWith('UPDATE event_bookings') && sql.includes("SET status = 'requested'")) {
+            const id = bound[1] as string;
+            const b = (state.bookings ?? []).find((x) => x.id === id && x.status === 'expired');
+            if (!b) return { success: true, meta: { changes: 0 } };
+            b.status = 'requested';
+            (b as Record<string, unknown>).admin_seen_at = null;
+            (b as Record<string, unknown>).decided_at = null;
+            return { success: true, meta: { changes: 1 } };
+          }
           if (sql.startsWith('UPDATE event_bookings') && sql.includes('internal_note = COALESCE')) {
             // reject reason append
             const [appended, _updated_at, id] = bound as [string, string, string];
@@ -562,23 +610,26 @@ function makeEventDb(state: {
           }
           if (sql.startsWith('UPDATE event_bookings') && sql.includes('decided_at = ?, decided_by_staff_id')) {
             // decide
-            const [next, decided_at, decided_by, _updated_at, id] = bound as [string, string, string | null, string, string];
+            const [next, decided_at, decided_by, admin_seen_at, _updated_at, id] = bound as [string, string, string | null, string, string, string];
             const b = (state.bookings ?? []).find((x) => x.id === id);
             if (!b) return { success: true, meta: { changes: 0 } };
             b.status = next;
             (b as Record<string, unknown>).decided_at = decided_at;
             (b as Record<string, unknown>).decided_by_staff_id = decided_by;
+            (b as Record<string, unknown>).admin_seen_at = admin_seen_at;
             return { success: true, meta: { changes: 1 } };
           }
           if (sql.startsWith('UPDATE event_bookings') && sql.includes("status = 'cancelled'")) {
             // admin or friend cancel
             const isFriend = sql.includes("cancelled_by = 'friend'");
-            const [cancelled_at, _updated_at, id] = bound as [string, string, string];
+            const cancelled_at = bound[0] as string;
+            const id = bound[isFriend ? 2 : 3] as string;
             const b = (state.bookings ?? []).find((x) => x.id === id);
             if (!b) return { success: true, meta: { changes: 0 } };
             b.status = 'cancelled';
             (b as Record<string, unknown>).cancelled_at = cancelled_at;
             (b as Record<string, unknown>).cancelled_by = isFriend ? 'friend' : 'admin';
+            if (!isFriend) (b as Record<string, unknown>).admin_seen_at = bound[1];
             return { success: true, meta: { changes: 1 } };
           }
           if (sql.startsWith('UPDATE event_bookings SET ')) {
@@ -1892,6 +1943,57 @@ describe('LIFF POST /api/liff/events/me/:bookingId/cancel', () => {
 });
 
 describe('admin bookings management', () => {
+  test('GET account-wide bookings can filter unseen rows', async () => {
+    const state = {
+      events: [baseEvent({ id: 'e1', line_account_id: 'la1', name: '作成会' })],
+      slots: [{ id: 's1', event_id: 'e1', starts_at: '2099-06-01T10:00:00Z', ends_at: '2099-06-01T12:00:00Z', capacity: null, is_active: 1, sort_order: 0, deleted_at: null }],
+      bookings: [
+        { id: 'b1', event_id: 'e1', slot_id: 's1', friend_id: 'f1', line_account_id: 'la1', status: 'expired', admin_seen_at: null } as BookingRow & Record<string, unknown>,
+        { id: 'b2', event_id: 'e1', slot_id: 's1', friend_id: 'f1', line_account_id: 'la1', status: 'confirmed', admin_seen_at: '2026-05-09T00:00:00Z' } as BookingRow & Record<string, unknown>,
+      ],
+      friends: [{ id: 'f1', line_account_id: 'la1', line_user_id: 'U1', display_name: 'HK' }],
+    };
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/bookings?account_id=la1&status=unseen');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: Array<{ id: string; event_name: string }> };
+    expect(body.items).toEqual([expect.objectContaining({ id: 'b1', event_name: '作成会' })]);
+  });
+
+  test('POST seen acknowledges a booking without changing its status', async () => {
+    const state = {
+      events: [baseEvent({ id: 'e1', line_account_id: 'la1' })],
+      bookings: [{ id: 'b1', event_id: 'e1', slot_id: 's1', friend_id: 'f1', line_account_id: 'la1', status: 'expired', admin_seen_at: null } as BookingRow & Record<string, unknown>],
+    };
+    const app = setupApp(state);
+    const res = await app.request('/api/events/admin/events/e1/bookings/b1/seen?account_id=la1', { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(state.bookings[0].status).toBe('expired');
+    expect((state.bookings[0] as BookingRow & Record<string, unknown>).admin_seen_at).toBeTruthy();
+  });
+
+  test('POST restore only restores an expired future booking', async () => {
+    const futureState = {
+      events: [baseEvent({ id: 'e1', line_account_id: 'la1' })],
+      slots: [{ id: 's1', event_id: 'e1', starts_at: '2099-06-01T10:00:00Z', ends_at: '2099-06-01T12:00:00Z', capacity: null, is_active: 1, sort_order: 0, deleted_at: null }],
+      bookings: [{ id: 'b1', event_id: 'e1', slot_id: 's1', friend_id: 'f1', line_account_id: 'la1', status: 'expired' } as BookingRow & Record<string, unknown>],
+    };
+    const futureApp = setupApp(futureState);
+    const restored = await futureApp.request('/api/events/admin/events/e1/bookings/b1/restore?account_id=la1', { method: 'POST' });
+    expect(restored.status).toBe(200);
+    expect(futureState.bookings[0].status).toBe('requested');
+
+    const pastState = {
+      events: [baseEvent({ id: 'e1', line_account_id: 'la1' })],
+      slots: [{ id: 's1', event_id: 'e1', starts_at: '2000-06-01T10:00:00Z', ends_at: '2000-06-01T12:00:00Z', capacity: null, is_active: 1, sort_order: 0, deleted_at: null }],
+      bookings: [{ id: 'b1', event_id: 'e1', slot_id: 's1', friend_id: 'f1', line_account_id: 'la1', status: 'expired' } as BookingRow & Record<string, unknown>],
+    };
+    const pastApp = setupApp(pastState);
+    const blocked = await pastApp.request('/api/events/admin/events/e1/bookings/b1/restore?account_id=la1', { method: 'POST' });
+    expect(blocked.status).toBe(409);
+    expect(pastState.bookings[0].status).toBe('expired');
+  });
+
   test('GET /:id/bookings aggregates multi-account bookings with line_account_id', async () => {
     const state = {
       events: [

@@ -1,9 +1,8 @@
-// Cron handler: expire 24h-old `requested` event bookings + purge
-// idempotency rows. Mirrors booking-expirer.ts but without a friend
-// notification — spec §7.1 lists no expired-kind notification for events.
+// Cron handler: expire `requested` event bookings only after their slot starts,
+// then purge idempotency rows. A staff approval delay must never make a future
+// booking disappear from the approval queue.
 
 import { purgeExpiredEventIdempotency } from './event-booking-idempotency.js';
-import { REQUESTED_EXPIRE_HOURS } from './event-booking-types.js';
 
 interface StaleRow {
   id: string;
@@ -17,16 +16,15 @@ export async function runEventBookingExpirer(
   db: D1Database,
   params: RunEventBookingExpirerParams,
 ): Promise<{ expired: number; idempotencyPurged: number }> {
-  const cutoff = new Date(
-    params.now.getTime() - REQUESTED_EXPIRE_HOURS * 3600_000,
-  ).toISOString();
   const stale = await db
     .prepare(
-      `SELECT id FROM event_bookings
-        WHERE status = 'requested' AND requested_at < ?
+      `SELECT b.id
+         FROM event_bookings b
+         JOIN event_slots s ON s.id = b.slot_id
+        WHERE b.status = 'requested' AND s.starts_at <= ?
         LIMIT 200`,
     )
-    .bind(cutoff)
+    .bind(params.now.toISOString())
     .all<StaleRow>();
 
   let expired = 0;
