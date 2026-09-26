@@ -19,6 +19,25 @@ export async function getTags(db: D1Database): Promise<Tag[]> {
   return result.results;
 }
 
+export interface TagWithCount extends Tag {
+  friend_count: number;
+}
+
+export async function getTagsWithCounts(
+  db: D1Database,
+): Promise<TagWithCount[]> {
+  const result = await db
+    .prepare(
+      `SELECT t.*, COUNT(ft.friend_id) AS friend_count
+       FROM tags t
+       LEFT JOIN friend_tags ft ON ft.tag_id = t.id
+       GROUP BY t.id
+       ORDER BY t.name ASC`,
+    )
+    .all<TagWithCount>();
+  return result.results;
+}
+
 export interface CreateTagInput {
   name: string;
   color?: string;
@@ -93,6 +112,33 @@ export async function getFriendTags(
     .bind(friendId)
     .all<Tag>();
   return result.results;
+}
+
+export async function getFriendTagsByIds(
+  db: D1Database,
+  friendIds: readonly string[],
+): Promise<Map<string, Tag[]>> {
+  const ids = [...new Set(friendIds)];
+  const byFriend = new Map<string, Tag[]>(ids.map((id) => [id, []]));
+
+  for (let offset = 0; offset < ids.length; offset += 100) {
+    const chunk = ids.slice(offset, offset + 100);
+    const result = await db
+      .prepare(
+        `SELECT ft.friend_id, t.* FROM friend_tags ft
+         INNER JOIN tags t ON t.id = ft.tag_id
+         WHERE ft.friend_id IN (${chunk.map(() => '?').join(',')})
+         ORDER BY t.name ASC`,
+      )
+      .bind(...chunk)
+      .all<Tag & { friend_id: string }>();
+
+    for (const { friend_id, ...tag } of result.results) {
+      byFriend.get(friend_id)?.push(tag);
+    }
+  }
+
+  return byFriend;
 }
 
 import type { Friend } from './friends';
