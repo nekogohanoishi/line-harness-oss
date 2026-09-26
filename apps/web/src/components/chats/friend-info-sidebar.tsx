@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { api, type FriendDetail } from '@/lib/api'
+import FriendDeliveryControls from './friend-delivery-controls'
 
 interface ChatStatusInfo {
   status: 'unread' | 'in_progress' | 'resolved' | null
@@ -37,16 +38,31 @@ const statusLabels: Record<NonNullable<ChatStatusInfo['status']>, { label: strin
   resolved: { label: '解決済', className: 'bg-green-100 text-green-700' },
 }
 
-/** Render a metadata value safely as text. Objects/arrays → JSON, primitives → as-is. */
+const metadataLabelAliases: Record<string, string> = {
+  target_exam: '目標試験',
+  goal_exam: '目標試験',
+  current_status: '現在の属性',
+  private_instruction_interest: '個別指導への興味',
+  consultation_interest: '勉強相談への興味',
+}
+
+function formatMetadataLabel(key: string): string {
+  return metadataLabelAliases[key] ?? key.replaceAll('_', ' ')
+}
+
+/** 配列やオブジェクトも、JSON記号を見せずに人が読める文へ整形する。 */
 function renderValue(value: unknown): string {
   if (value === null || value === undefined) return '-'
   if (typeof value === 'string') return value || '-'
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return '[unparseable]'
+  if (typeof value === 'number') return String(value)
+  if (typeof value === 'boolean') return value ? 'はい' : 'いいえ'
+  if (Array.isArray(value)) return value.map(renderValue).join('、') || '-'
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, nested]) => `${formatMetadataLabel(key)}: ${renderValue(nested)}`)
+      .join('\n') || '-'
   }
+  return '表示できない値'
 }
 
 export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, embedded = false }: Props) {
@@ -115,7 +131,8 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
   if (!friendId) return null
 
   return (
-    <div
+    <>
+      <div
       className={
         embedded
           ? 'w-full'
@@ -256,6 +273,8 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
               </div>
             )}
 
+            <FriendDeliveryControls key={friendId} friendId={friendId} />
+
             {/* Tags */}
             <div className="p-4">
               <h4 className="text-[11px] font-medium text-gray-500 mb-1.5">タグ</h4>
@@ -311,7 +330,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
                   <dl className="space-y-2 text-xs">
                     {visible.map(([key, value]) => (
                       <div key={key}>
-                        <dt className="text-[10px] text-gray-400 uppercase tracking-wide">{key}</dt>
+                        <dt className="text-[10px] text-gray-500">{formatMetadataLabel(key)}</dt>
                         <dd className="max-h-32 overflow-y-auto text-gray-700 mt-0.5 whitespace-pre-wrap break-words">
                           {renderValue(value)}
                         </dd>
@@ -341,6 +360,9 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
           <div className="p-4 text-xs text-gray-400">友だち情報がありません</div>
         )}
       </div>
-    </div>
+      </div>
+
+
+    </>
   )
 }

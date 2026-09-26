@@ -17,14 +17,8 @@ interface Props {
 }
 
 /**
- * xl 未満で友だち詳細を出すためのシート。
- *
- * xl 以上では従来どおり右端のサイドバー (FriendInfoSidebar) を常時表示するため、
- * このシートは開かない。中身はサイドバーと同じコンポーネントを embedded で
- * 描画しているので、表示項目が二重管理にならない。
- *
- * 枠・開閉まわりは共通プリミティブの Sheet に任せる (Esc / 背景タップ /
- * 背面スクロール抑止 / モバイルはボトムシート・sm 以上は中央モーダル)。
+ * 画面幅に関係なく友だち詳細を必要時だけ開くシート。
+ * 会話ペインを常時3列目で圧迫せず、中身は既存のサイドバーを再利用する。
  */
 export default function FriendInfoSheet({ open, onClose, friendId, chatStatus, operatorName }: Props) {
   if (!friendId) return null
