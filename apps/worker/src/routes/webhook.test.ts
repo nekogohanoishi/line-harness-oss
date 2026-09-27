@@ -467,4 +467,44 @@ describe('POST /webhook — pre-Harness friends', () => {
     expect(upsertChatOnMessage).toHaveBeenCalledWith(db, 'friend-image');
     expect(fireEvent).not.toHaveBeenCalled();
   });
+
+  test('imports an unknown existing friend on postback without starting friend-add scenarios', async () => {
+    const { db, statements } = createDbStub();
+    vi.mocked(getFriendByLineUserId).mockResolvedValue(null);
+    vi.mocked(upsertFriend).mockResolvedValue({
+      id: 'friend-postback',
+      line_user_id: 'U-postback',
+      display_name: 'ボタン操作ユーザー',
+      is_following: 1,
+      line_account_id: null,
+    } as never);
+    vi.mocked(jstNow).mockReturnValue('2026-07-28T12:10:00.000+09:00');
+    getProfileMock.mockResolvedValue({ userId: 'U-postback', displayName: 'ボタン操作ユーザー' });
+
+    await sendEvent({
+      type: 'postback',
+      replyToken: 'reply-token',
+      timestamp: 1785208200000,
+      webhookEventId: 'webhook-postback-1',
+      deliveryContext: { isRedelivery: false },
+      source: { type: 'user', userId: 'U-postback' },
+      mode: 'active',
+      postback: { data: 'unmatched-postback' },
+    }, db);
+
+    expect(upsertFriend).toHaveBeenCalledWith(db, {
+      lineUserId: 'U-postback',
+      displayName: 'ボタン操作ユーザー',
+      pictureUrl: null,
+      statusMessage: null,
+      isFollowing: true,
+    });
+    expect(statements.some((s) =>
+      s.sql.includes('UPDATE friends') &&
+      s.bindings[0] === 'account-1' &&
+      s.bindings.at(-1) === 'friend-postback'
+    )).toBe(true);
+    expect(recordFriendFollowEvent).not.toHaveBeenCalled();
+    expect(getScenarios).not.toHaveBeenCalled();
+  });
 });
