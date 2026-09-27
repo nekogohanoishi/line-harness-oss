@@ -13,6 +13,9 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: false,
-    include: ['src/**/*.test.ts'],
+    include: [
+      'src/**/*.test.ts',
+      '../web/src/components/auto-replies/auto-reply-editor-utils.test.ts',
+    ],
   },
 });

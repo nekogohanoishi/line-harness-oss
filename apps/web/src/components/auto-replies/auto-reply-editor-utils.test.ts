@@ -8,7 +8,7 @@ import {
   stringifySequenceDocument,
   updateFlexButton,
   updateJsonAtPath,
-} from '../../../web/src/components/auto-replies/auto-reply-editor-utils.js';
+} from './auto-reply-editor-utils.js';
 
 const customFlex = {
   type: 'bubble',
