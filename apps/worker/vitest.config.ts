@@ -16,6 +16,7 @@ export default defineConfig({
     include: [
       'src/**/*.test.ts',
       '../web/src/components/auto-replies/auto-reply-editor-utils.test.ts',
+      '../web/src/lib/delivery-labels.test.ts',
     ],
   },
 });

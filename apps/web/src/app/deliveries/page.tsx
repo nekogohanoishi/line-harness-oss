@@ -1,13 +1,14 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import type { Automation, Scenario, ScenarioStep, Tag } from '@line-crm/shared'
 import { api, type ApiBroadcast, type RegistrationSurveySettings } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import { PageHeader } from '@/components/ui'
 import ManualRefreshButton from '@/components/ui/manual-refresh-button'
-import FlexPreviewComponent from '@/components/flex-preview'
+import { FriendBubble, MessageBubble, TalkArea, TalkNote, TalkStep, TalkTimeline } from '@/components/messages/talk-preview'
+import { replyTimingLabel, scenarioStartText, stepConditionText, stepTimingLabel } from '@/lib/delivery-labels'
 
 type AutoReplyItem = {
   id: string
@@ -23,28 +24,6 @@ type AutoReplyItem = {
 
 type TemplateItem = { id: string; name: string; messageType: string; messageContent: string }
 type ScenarioItem = Scenario & { stepCount?: number }
-
-const triggerLabels: Record<Scenario['triggerType'], string> = {
-  friend_add: '友だち追加・ブロック解除',
-  tag_added: 'タグが付いたとき',
-  manual: '手動開始',
-}
-
-function MessageContent({ type, content }: { type: string; content: string }) {
-  if (type === 'flex' || type === 'carousel') {
-    return <div className="max-w-[320px] overflow-x-auto"><FlexPreviewComponent content={content} maxWidth={300} /></div>
-  }
-  if (type === 'image') {
-    try {
-      const image = JSON.parse(content) as { previewImageUrl?: string; originalContentUrl?: string }
-      const url = image.previewImageUrl || image.originalContentUrl
-      return url ? <img src={url} alt="配信する画像" className="max-h-48 max-w-full object-contain" /> : <p className="text-sm text-red-600">画像URLが設定されていません</p>
-    } catch {
-      return <p className="text-sm text-red-600">画像情報を読み込めません</p>
-    }
-  }
-  return <p className="whitespace-pre-wrap break-words text-sm leading-6 text-gray-800">{content}</p>
-}
 
 function sequenceMessages(type: string, content: string) {
   if (type !== 'sequence') return [{ messageType: type, messageContent: content, delaySeconds: 0 }]
@@ -64,10 +43,74 @@ function sequenceMessages(type: string, content: string) {
   }
 }
 
-function scheduleLabel(step: ScenarioStep, mode: Scenario['deliveryMode']) {
-  if (mode === 'absolute_time') return `開始から${step.offsetDays ?? 0}日後 ${step.deliveryTime ?? '時刻未設定'}（日本時間）`
-  if (mode === 'elapsed') return `開始から${step.offsetDays ?? 0}日と${step.offsetMinutes ?? 0}分後`
-  return `前のステップから${step.delayMinutes}分後`
+/** 区切りの太線・見出し・件数・編集リンク・ひとこと説明をまとめたセクション */
+function DeliverySection({
+  id,
+  title,
+  count,
+  loading,
+  description,
+  editHref,
+  editLabel,
+  children,
+}: {
+  id: string
+  title: string
+  count?: number
+  loading: boolean
+  description: string
+  editHref: string
+  editLabel: string
+  children: ReactNode
+}) {
+  return (
+    <section className="mt-10 border-t-2 border-gray-900 pt-3 first-of-type:mt-6" aria-labelledby={id}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 id={id} className="text-lg font-bold text-gray-900">
+          {title}
+          {count !== undefined && <span className="ml-2 text-sm font-medium text-gray-500">{loading ? '確認中' : `${count}件`}</span>}
+        </h2>
+        <Link href={editHref} className="text-sm font-medium text-blue-700 hover:underline">{editLabel}</Link>
+      </div>
+      <p className="mt-1 text-sm leading-6 text-gray-600">{description}</p>
+      <div className="mt-2">{children}</div>
+    </section>
+  )
+}
+
+/** 開くと中身 (トーク画面のプレビュー) が出る1行。区切り線は濃いめにする */
+function DeliveryRow({
+  title,
+  subtitle,
+  onOpen,
+  children,
+}: {
+  title: ReactNode
+  subtitle: ReactNode
+  onOpen?: () => void
+  children: ReactNode
+}) {
+  return (
+    <details
+      className="group border-b border-gray-300"
+      onToggle={(event) => { if (event.currentTarget.open) onOpen?.() }}
+    >
+      <summary className="flex cursor-pointer list-none items-start gap-3 rounded-md px-1 py-3.5 hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 [&::-webkit-details-marker]:hidden">
+        <svg aria-hidden viewBox="0 0 20 20" fill="currentColor" className="mt-1 h-4 w-4 shrink-0 text-gray-500 group-open:rotate-90 motion-safe:transition-transform">
+          <path fillRule="evenodd" d="M7.2 4.2a1 1 0 011.4 0l5.1 5.1a1 1 0 010 1.4l-5.1 5.1a1 1 0 01-1.4-1.4L11.6 10 7.2 5.6a1 1 0 010-1.4z" clipRule="evenodd" />
+        </svg>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[15px] font-semibold leading-6 text-gray-900 break-words">{title}</span>
+          <span className="mt-0.5 block text-sm leading-6 text-gray-600">{subtitle}</span>
+        </span>
+      </summary>
+      <div className="pb-5 sm:pl-8">{children}</div>
+    </details>
+  )
+}
+
+function EmptyLine({ children }: { children: ReactNode }) {
+  return <p className="py-3 text-sm text-gray-500">{children}</p>
 }
 
 export default function DeliveriesPage() {
@@ -140,6 +183,7 @@ export default function DeliveriesPage() {
 
   const templateById = useMemo(() => new Map(templates?.map((template) => [template.id, template]) ?? []), [templates])
   const tagById = useMemo(() => new Map(tags.map((tag) => [tag.id, tag.name])), [tags])
+  const tagName = useCallback((id: string) => tagById.get(id), [tagById])
   const activeScenarios = scenarios.filter((scenario) => scenario.isActive)
   const scheduledBroadcasts = broadcasts.filter((broadcast) => broadcast.status === 'scheduled' || broadcast.status === 'sending')
   const activeReplies = autoReplies.filter((reply) => reply.isActive && reply.effectiveAccounts?.some(
@@ -160,7 +204,7 @@ export default function DeliveriesPage() {
       setStepsByScenario((current) => ({ ...current, [scenarioId]: result.data.steps }))
       setStepErrors((current) => ({ ...current, [scenarioId]: '' }))
     } catch {
-      if (requestId === requestIdRef.current) setStepErrors((current) => ({ ...current, [scenarioId]: 'ステップを読み込めませんでした。もう一度開いてください。' }))
+      if (requestId === requestIdRef.current) setStepErrors((current) => ({ ...current, [scenarioId]: 'ステップを読み込めませんでした。閉じてからもう一度開いてください。' }))
     } finally {
       if (requestId === requestIdRef.current) setLoadingStepId(null)
     }
@@ -168,153 +212,230 @@ export default function DeliveriesPage() {
 
   const resolved = (type: string, content: string, templateId: string | null | undefined) => {
     if (!templateId) return { type, content, note: '' }
-    if (!templates) return { type: '', content: '', note: '共有テンプレートを読み込めないため、現在の本文は確認できません' }
+    if (!templates) return { type: '', content: '', note: '共有テンプレートを読み込めないため、今の本文は確認できません' }
     const template = templateById.get(templateId)
     return template
-      ? { type: template.messageType, content: template.messageContent, note: `共有テンプレート「${template.name}」の現在の内容` }
-      : { type, content, note: '参照先のテンプレートがないため、保存済みの本文を使用' }
+      ? { type: template.messageType, content: template.messageContent, note: `共有テンプレート「${template.name}」の今の本文です` }
+      : { type, content, note: '参照先のテンプレートがないため、保存済みの本文を表示しています' }
   }
 
   const formatTime = (value: string | null) => value
     ? new Date(value).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     : '日時未設定'
 
+  const broadcastTarget = (broadcast: ApiBroadcast) => broadcast.targetType === 'all'
+    ? '友だち全員'
+    : broadcast.targetType === 'tag'
+      ? `タグ「${broadcast.targetTagId ? tagById.get(broadcast.targetTagId) ?? 'タグ名未確認' : '未指定'}」の人`
+      : '複数アカウントの友だち'
+
   return (
-    <div>
+    <div className="pb-10">
       <PageHeader
         title="現在有効な配信"
-        description={`${selectedAccount?.displayName || selectedAccount?.name || '選択中のアカウント'}のHarness内設定`}
+        description={`${selectedAccount?.displayName || selectedAccount?.name || '選択中のアカウント'}で、今の設定のまま届くメッセージ`}
         actions={<ManualRefreshButton onClick={load} loading={loading} />}
       />
-      <p className="mb-4 border-l-2 border-amber-400 pl-3 text-xs leading-5 text-gray-600">
-        ここでは設定上有効な配信を表示します。LINE公式アカウント側の挨拶、既に送信待ちの遅延返信、友だちごとの停止状態、リマインダーは含みません。実際の送信は条件や個別の状態で変わります。
+      <p className="mb-2 border-l-2 border-amber-400 pl-3 text-xs leading-5 text-gray-600">
+        Harnessの設定上で有効な配信だけを表示しています。LINE公式アカウント側のあいさつ、送信待ちの遅延返信、友だちごとの停止、リマインダーは含みません。実際に届くかは、条件や友だちごとの状態で変わります。
       </p>
-      {loading && <p role="status" className="mb-4 text-sm text-gray-600">配信設定を読み込み中...</p>}
-      {!accountLoading && !selectedAccountId && <p role="alert" className="mb-4 text-sm text-red-700">LINEアカウントが選択されていません。</p>}
-      {loadedAt && <p className="mb-4 text-xs text-gray-500">確認時刻: {formatTime(loadedAt.toISOString())}（日本時間）</p>}
+      {loadedAt && <p className="text-xs text-gray-500">{formatTime(loadedAt.toISOString())} 時点（日本時間）</p>}
+      {loading && <p role="status" className="mt-3 text-sm text-gray-600">配信設定を読み込み中...</p>}
+      {!accountLoading && !selectedAccountId && <p role="alert" className="mt-3 text-sm text-red-700">LINEアカウントが選択されていません。</p>}
       {errors.length > 0 && (
-        <div role="alert" className="mb-5 border-l-2 border-red-500 pl-3 text-sm text-red-700">
-          {errors.join('・')}を読み込めませんでした。この画面の一覧は不完全です。
-        </div>
+        <p role="alert" className="mt-3 border-l-2 border-red-500 pl-3 text-sm text-red-700">
+          {errors.join('、')}を読み込めませんでした。この画面の一覧は不完全です。右上の「更新」で読み込み直してください。
+        </p>
       )}
 
-      <section className="mb-8" aria-labelledby="active-scenarios">
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2 border-b border-gray-200 pb-2">
-          <h2 id="active-scenarios" className="text-base font-semibold">シナリオ配信 <span className="text-sm font-normal text-gray-500">{loading ? '確認中' : `${activeScenarios.length}件`}</span></h2>
-          <Link href="/scenarios" className="text-sm text-blue-700 hover:underline">シナリオを編集</Link>
-        </div>
-        {!loading && !errors.includes('シナリオ') && activeScenarios.length === 0 && <p className="py-3 text-sm text-gray-500">有効なシナリオはありません。</p>}
-        {activeScenarios.map((scenario) => (
-          <details key={scenario.id} className="border-b border-gray-100 py-3" onToggle={(event) => {
-            if (event.currentTarget.open) void showScenario(scenario.id)
-          }}>
-            <summary className="cursor-pointer text-sm font-medium text-gray-900">{scenario.name} <span className="ml-2 font-normal text-gray-500">{triggerLabels[scenario.triggerType]}{scenario.triggerType === 'tag_added' && scenario.triggerTagId ? `「${tagById.get(scenario.triggerTagId) ?? 'タグ名未確認'}」` : ''}・{scenario.stepCount ?? 0}通</span></summary>
-            <div className="mt-3 space-y-4 pl-4">
-              <Link href={`/scenarios/detail?id=${scenario.id}`} className="text-sm text-blue-700 hover:underline">設定・参加者を確認</Link>
-              {loadingStepId === scenario.id && <p className="text-sm text-gray-500">読み込み中...</p>}
-              {stepErrors[scenario.id] && <p className="text-sm text-red-700">{stepErrors[scenario.id]}</p>}
-              {stepsByScenario[scenario.id]?.map((step, index) => {
-                const message = resolved(step.messageType, step.messageContent, step.templateId)
-                return (
-                  <div key={step.id} className="border-l-2 border-gray-200 pl-3">
-                    <p className="mb-1 text-xs font-medium text-gray-600">{index + 1}通目・{scheduleLabel(step, scenario.deliveryMode)}{step.conditionType ? '・条件あり' : ''}</p>
-                    {message.note && <p className="mb-1 text-xs text-gray-500">{message.note}</p>}
-                    {message.type && <MessageContent type={message.type} content={message.content} />}
-                  </div>
-                )
-              })}
-            </div>
-          </details>
-        ))}
-      </section>
+      <DeliverySection
+        id="active-scenarios"
+        title="シナリオ配信"
+        count={activeScenarios.length}
+        loading={loading}
+        description="友だち追加などをきっかけに、決めた順番で自動で届くメッセージです。開くと1通ずつ確認できます。"
+        editHref="/scenarios"
+        editLabel="シナリオを編集"
+      >
+        {!loading && !errors.includes('シナリオ') && activeScenarios.length === 0 && <EmptyLine>有効なシナリオはありません。</EmptyLine>}
+        {activeScenarios.map((scenario) => {
+          const steps = stepsByScenario[scenario.id]
+          return (
+            <DeliveryRow
+              key={scenario.id}
+              title={scenario.name}
+              subtitle={`${scenarioStartText(scenario.triggerType, scenario.triggerTagId ? tagById.get(scenario.triggerTagId) : null)}。全${scenario.stepCount ?? 0}通。`}
+              onOpen={() => void showScenario(scenario.id)}
+            >
+              <TalkArea>
+                {loadingStepId === scenario.id && <TalkNote>読み込み中...</TalkNote>}
+                {stepErrors[scenario.id] && <p className="text-sm text-red-700">{stepErrors[scenario.id]}</p>}
+                {steps && steps.length === 0 && <TalkNote>このシナリオにはまだメッセージがありません</TalkNote>}
+                {steps && steps.length > 0 && (
+                  <TalkTimeline>
+                    {steps.map((step, index) => {
+                      const message = resolved(step.messageType, step.messageContent, step.templateId)
+                      return (
+                        <TalkStep
+                          key={step.id}
+                          number={index + 1}
+                          timing={stepTimingLabel(step, index, scenario.deliveryMode, scenario.triggerType)}
+                          condition={stepConditionText(step, tagName)}
+                          note={message.note}
+                          isLast={index === steps.length - 1}
+                        >
+                          {message.type ? <MessageBubble type={message.type} content={message.content} /> : null}
+                        </TalkStep>
+                      )
+                    })}
+                  </TalkTimeline>
+                )}
+              </TalkArea>
+              <Link href={`/scenarios/detail?id=${scenario.id}`} className="mt-3 inline-block text-sm font-medium text-blue-700 hover:underline">
+                このシナリオの設定と参加者を見る
+              </Link>
+            </DeliveryRow>
+          )
+        })}
+      </DeliverySection>
 
-      <section className="mb-8" aria-labelledby="active-survey">
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2 border-b border-gray-200 pb-2">
-          <h2 id="active-survey" className="text-base font-semibold">登録時アンケート</h2>
-          <Link href="/surveys" className="text-sm text-blue-700 hover:underline">アンケートを編集</Link>
-        </div>
+      <DeliverySection
+        id="active-survey"
+        title="登録時アンケート"
+        loading={loading}
+        description="友だち追加の直後に、あいさつのシナリオの中で送るアンケートです。"
+        editHref="/surveys"
+        editLabel="アンケートを編集"
+      >
         {survey ? (
-          <p className="py-2 text-sm text-gray-700">
-            {survey.form.name}：{survey.isActive && survey.friendAddScenario?.isActive ? '挨拶シナリオ内で有効' : '配信されない設定'}
-            <span className="ml-2 text-gray-500">{survey.questions.length}問</span>
-          </p>
-        ) : !loading && <p className="py-2 text-sm text-gray-500">設定を確認できませんでした。</p>}
-      </section>
+          <div className="border-b border-gray-300 px-1 py-3.5">
+            <p className="text-[15px] font-semibold leading-6 text-gray-900 break-words">{survey.form.name}</p>
+            <p className="mt-0.5 text-sm leading-6 text-gray-600">
+              {survey.isActive && survey.friendAddScenario?.isActive ? 'あいさつのシナリオの中で送っています' : '今は送らない設定です'}。全{survey.questions.length}問。
+            </p>
+          </div>
+        ) : !loading && <EmptyLine>設定を確認できませんでした。</EmptyLine>}
+      </DeliverySection>
 
-      <section className="mb-8" aria-labelledby="scheduled-broadcasts">
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2 border-b border-gray-200 pb-2">
-          <h2 id="scheduled-broadcasts" className="text-base font-semibold">一斉配信 <span className="text-sm font-normal text-gray-500">{loading ? '確認中' : `${scheduledBroadcasts.length}件`}</span></h2>
-          <Link href="/broadcasts" className="text-sm text-blue-700 hover:underline">一斉配信を編集</Link>
-        </div>
-        {!loading && !errors.includes('一斉配信') && scheduledBroadcasts.length === 0 && <p className="py-3 text-sm text-gray-500">予約済み・送信中の一斉配信はありません。</p>}
+      <DeliverySection
+        id="scheduled-broadcasts"
+        title="一斉配信"
+        count={scheduledBroadcasts.length}
+        loading={loading}
+        description="日時を決めて、対象の友だちにまとめて送るメッセージです。予約済みと送信中のものを表示します。"
+        editHref="/broadcasts"
+        editLabel="一斉配信を編集"
+      >
+        {!loading && !errors.includes('一斉配信') && scheduledBroadcasts.length === 0 && <EmptyLine>予約済み・送信中の一斉配信はありません。</EmptyLine>}
         {scheduledBroadcasts.map((broadcast) => (
-          <details key={broadcast.id} className="border-b border-gray-100 py-3">
-            <summary className="cursor-pointer text-sm font-medium text-gray-900">{broadcast.title} <span className="ml-2 font-normal text-gray-500">{broadcast.status === 'sending' ? '送信中' : formatTime(broadcast.scheduledAt)}・{broadcast.targetType === 'all' ? '全員' : broadcast.targetType === 'tag' ? `タグ「${broadcast.targetTagId ? tagById.get(broadcast.targetTagId) ?? '名前未確認' : '未指定'}」` : '複数アカウント'}</span></summary>
-            <div className="mt-3 space-y-3 pl-4">
-              <MessageContent type={broadcast.messageType} content={broadcast.messageContent} />
-              <Link href={`/broadcasts?id=${broadcast.id}`} className="text-sm text-blue-700 hover:underline">配信詳細を確認</Link>
-            </div>
-          </details>
+          <DeliveryRow
+            key={broadcast.id}
+            title={broadcast.title}
+            subtitle={`${broadcast.status === 'sending' ? '今送信しています' : `${formatTime(broadcast.scheduledAt)}に送信予定`}。送り先は${broadcastTarget(broadcast)}。`}
+          >
+            <TalkArea>
+              <div className="space-y-4">
+                <TalkNote>{broadcast.status === 'sending' ? '送信中' : `${formatTime(broadcast.scheduledAt)} に届く`}</TalkNote>
+                <div className="pl-2"><MessageBubble type={broadcast.messageType} content={broadcast.messageContent} /></div>
+              </div>
+            </TalkArea>
+            <Link href={`/broadcasts?id=${broadcast.id}`} className="mt-3 inline-block text-sm font-medium text-blue-700 hover:underline">
+              この一斉配信の詳細を見る
+            </Link>
+          </DeliveryRow>
         ))}
-      </section>
+      </DeliverySection>
 
-      <section className="mb-8" aria-labelledby="active-replies">
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2 border-b border-gray-200 pb-2">
-          <h2 id="active-replies" className="text-base font-semibold">自動返信 <span className="text-sm font-normal text-gray-500">{loading ? '確認中' : `${activeReplies.length}件`}</span></h2>
-          <Link href="/auto-replies" className="text-sm text-blue-700 hover:underline">自動返信を編集</Link>
-        </div>
-        {!loading && !errors.includes('自動返信') && activeReplies.length === 0 && <p className="py-3 text-sm text-gray-500">このアカウントで返信する有効なルールはありません。</p>}
+      <DeliverySection
+        id="active-replies"
+        title="自動返信"
+        count={activeReplies.length}
+        loading={loading}
+        description="友だちが決まった言葉を送ってきたときに、自動で返すメッセージです。右の緑が友だちの送る言葉、左の白が返信です。"
+        editHref="/auto-replies"
+        editLabel="自動返信を編集"
+      >
+        {!loading && !errors.includes('自動返信') && activeReplies.length === 0 && <EmptyLine>このアカウントで返信する有効なルールはありません。</EmptyLine>}
         {activeReplies.map((reply) => {
           const message = resolved(reply.responseType, reply.responseContent, reply.templateId)
           const viaAutomation = reply.effectiveAccounts?.some((account) => account.accountId === selectedAccountId && account.via === 'automation')
           const messages = message.type && !viaAutomation ? sequenceMessages(message.type, message.content) : []
           return (
-            <details key={reply.id} className="border-b border-gray-100 py-3">
-              <summary className="cursor-pointer text-sm font-medium text-gray-900">「{reply.keyword}」 <span className="ml-2 font-normal text-gray-500">{reply.matchType === 'exact' ? '完全一致' : '部分一致'}{viaAutomation ? '・自動化経由' : ''}</span></summary>
-              <div className="mt-3 space-y-3 pl-4">
-                {message.note && <p className="text-xs text-gray-500">{message.note}</p>}
-                {viaAutomation
-                  ? <p className="text-sm text-gray-700">このルールは返信文を持たず、下の自動化ルールから送信します。</p>
-                  : messages.length === 0 && <p className="text-sm text-amber-700">本文を確認できません。編集画面で確認してください。</p>}
-                {messages.map((item, index) => (
-                  <div key={index} className="border-l-2 border-gray-200 pl-3">
-                    <p className="mb-1 text-xs text-gray-500">{index + 1}通目{item.deliveryTimeJst ? `・${item.sameDayCutoffTimeJst}までの受信で当日${item.deliveryTimeJst}、以降は翌日` : item.delaySeconds ? `・${item.delaySeconds}秒後` : '・即時'}</p>
-                    <MessageContent type={item.messageType} content={item.messageContent} />
-                  </div>
-                ))}
-                {viaAutomation && <p className="text-xs text-gray-500">自動化経由の本文は下の自動化ルールでも確認してください。</p>}
-              </div>
-            </details>
+            <DeliveryRow
+              key={reply.id}
+              title={`「${reply.keyword}」`}
+              subtitle={`${reply.matchType === 'exact' ? 'この言葉とまったく同じとき' : 'この言葉を含むとき'}に返信${viaAutomation ? '（返信は自動化ルールから送信）' : messages.length > 0 ? `。全${messages.length}通` : ''}。`}
+            >
+              <TalkArea>
+                <div className="space-y-5">
+                  <FriendBubble>{reply.keyword}</FriendBubble>
+                  {viaAutomation && <TalkNote>このルールは返信文を持たず、下の「メッセージに関係する自動化」から送信します</TalkNote>}
+                  {!viaAutomation && messages.length === 0 && <TalkNote>本文を確認できません。自動返信の編集画面で確認してください</TalkNote>}
+                  {messages.length > 0 && (
+                    <TalkTimeline>
+                      {messages.map((item, index) => (
+                        <TalkStep
+                          key={index}
+                          number={index + 1}
+                          timing={replyTimingLabel(item)}
+                          note={index === 0 ? message.note : undefined}
+                          isLast={index === messages.length - 1}
+                        >
+                          <MessageBubble type={item.messageType} content={item.messageContent} />
+                        </TalkStep>
+                      ))}
+                    </TalkTimeline>
+                  )}
+                </div>
+              </TalkArea>
+            </DeliveryRow>
           )
         })}
-      </section>
+      </DeliverySection>
 
-      <section className="mb-8" aria-labelledby="active-automations">
-        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2 border-b border-gray-200 pb-2">
-          <h2 id="active-automations" className="text-base font-semibold">メッセージに関係する自動化 <span className="text-sm font-normal text-gray-500">{loading ? '確認中' : `${activeAutomations.length}件`}</span></h2>
-          <Link href="/automations" className="text-sm text-blue-700 hover:underline">自動化を編集</Link>
-        </div>
-        {!loading && !errors.includes('自動化') && activeAutomations.length === 0 && <p className="py-3 text-sm text-gray-500">このアカウントで有効な対象ルールはありません。</p>}
-        {activeAutomations.map((automation) => (
-          <details key={automation.id} className="border-b border-gray-100 py-3">
-            <summary className="cursor-pointer text-sm font-medium text-gray-900">{automation.name} <span className="ml-2 font-normal text-gray-500">{automation.eventType === 'friend_add' ? '友だち追加' : automation.eventType === 'message_received' ? 'メッセージ受信' : automation.eventType}{Object.keys(automation.conditions).length > 0 ? '・条件あり' : ''}</span></summary>
-            <div className="mt-3 space-y-3 pl-4">
-              {automation.actions.filter((action) => action.type === 'send_message' || action.type === 'start_scenario').map((action, index) => {
-                if (action.type === 'start_scenario') {
-                  const next = scenarios.find((scenario) => scenario.id === action.params.scenarioId)
-                  return <p key={index} className="text-sm text-gray-700">シナリオ「{next?.name ?? '参照先未確認'}」を開始</p>
-                }
-                const message = resolved(
-                  typeof action.params.messageType === 'string' ? action.params.messageType : 'text',
-                  typeof action.params.content === 'string' ? action.params.content : '',
-                  typeof action.params.template_id === 'string' ? action.params.template_id : null,
-                )
-                return <div key={index} className="border-l-2 border-gray-200 pl-3">{message.note && <p className="mb-1 text-xs text-gray-500">{message.note}</p>}{message.type && <MessageContent type={message.type} content={message.content} />}</div>
-              })}
-            </div>
-          </details>
-        ))}
-      </section>
+      <DeliverySection
+        id="active-automations"
+        title="メッセージに関係する自動化"
+        count={activeAutomations.length}
+        loading={loading}
+        description="友だち追加やメッセージの受信などをきっかけに、メッセージを送ったりシナリオを始めたりするルールです。"
+        editHref="/automations"
+        editLabel="自動化を編集"
+      >
+        {!loading && !errors.includes('自動化') && activeAutomations.length === 0 && <EmptyLine>このアカウントで有効な対象ルールはありません。</EmptyLine>}
+        {activeAutomations.map((automation) => {
+          const actions = automation.actions.filter((action) => action.type === 'send_message' || action.type === 'start_scenario')
+          return (
+            <DeliveryRow
+              key={automation.id}
+              title={automation.name}
+              subtitle={`${automation.eventType === 'friend_add' ? '友だち追加のとき' : automation.eventType === 'message_received' ? 'メッセージを受け取ったとき' : `「${automation.eventType}」のとき`}に動きます${Object.keys(automation.conditions).length > 0 ? '（条件あり）' : ''}。`}
+            >
+              <TalkArea>
+                <div className="space-y-4">
+                  {actions.map((action, index) => {
+                    if (action.type === 'start_scenario') {
+                      const next = scenarios.find((scenario) => scenario.id === action.params.scenarioId)
+                      return <TalkNote key={index}>シナリオ「{next?.name ?? '参照先未確認'}」を開始</TalkNote>
+                    }
+                    const message = resolved(
+                      typeof action.params.messageType === 'string' ? action.params.messageType : 'text',
+                      typeof action.params.content === 'string' ? action.params.content : '',
+                      typeof action.params.template_id === 'string' ? action.params.template_id : null,
+                    )
+                    return (
+                      <div key={index} className="pl-2">
+                        {message.type && <MessageBubble type={message.type} content={message.content} />}
+                        {message.note && <p className="mt-1.5 text-xs leading-5 text-gray-600">{message.note}</p>}
+                      </div>
+                    )
+                  })}
+                </div>
+              </TalkArea>
+            </DeliveryRow>
+          )
+        })}
+      </DeliverySection>
     </div>
   )
 }
