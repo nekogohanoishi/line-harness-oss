@@ -1446,7 +1446,9 @@ webinar.post('/api/liff/webinar/:bookingId/event/completed', async (c) => {
         already_open: true,
       };
     } else {
-      const closesAtMs = Date.now() + b.cart_relative_close_minutes * 60_000;
+      // opened_at と同じ時刻 (now) を起点にする。Date.now() を読み直すと、
+      // 途中の DB 待ちの分だけ締切が数ミリ秒ずれ、期間が「N分ちょうど」にならない。
+      const closesAtMs = new Date(now).getTime() + b.cart_relative_close_minutes * 60_000;
       const closesAtIso = new Date(closesAtMs).toISOString();
       const updatedAt = now;
       if (existing) {
