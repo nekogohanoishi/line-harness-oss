@@ -26,10 +26,11 @@ interface ScenarioListProps {
   scenarios: ScenarioWithCount[]
   onToggleActive: (id: string, current: boolean, options?: { alsoDeactivateId?: string }) => Promise<void>
   onDelete: (id: string) => Promise<void>
+  onShowProgress: (id: string) => void
   loading?: boolean
 }
 
-export default function ScenarioList({ scenarios, onToggleActive, onDelete, loading }: ScenarioListProps) {
+export default function ScenarioList({ scenarios, onToggleActive, onDelete, onShowProgress, loading }: ScenarioListProps) {
   const router = useRouter()
   const [statusTarget, setStatusTarget] = useState<ScenarioWithCount | null>(null)
   const [statusConflict, setStatusConflict] = useState<ScenarioWithCount | null>(null)
@@ -145,6 +146,7 @@ export default function ScenarioList({ scenarios, onToggleActive, onDelete, load
                     label={`「${scenario.name}」の操作`}
                     items={[
                       { label: '詳細を開く', tone: 'primary', onSelect: () => router.push(`/scenarios/detail?id=${scenario.id}`) },
+                      { label: '一覧で進行状況を見る', onSelect: () => onShowProgress(scenario.id) },
                       { label: '進行中の友だちを確認', onSelect: () => router.push(`/scenarios/detail?id=${scenario.id}#participants`) },
                       { label: scenario.isActive ? '配信を停止する' : '配信を有効にする', onSelect: () => requestToggleActive(scenario), disabled: loading || actionBusy },
                       { label: '削除', tone: 'danger', onSelect: () => { setActionError(''); setDeleteTarget(scenario) }, disabled: loading || actionBusy },

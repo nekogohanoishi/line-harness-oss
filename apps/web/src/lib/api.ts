@@ -296,6 +296,28 @@ export type ScenarioParticipant = {
   totalSteps: number
   sentSteps: number
 }
+export type ScenarioProgressStatus = ScenarioParticipant['status'] | 'completed'
+export type ScenarioProgressItem = {
+  id: string
+  friendId: string
+  scenarioId: string
+  scenarioName: string
+  scenarioActive: boolean
+  status: ScenarioProgressStatus
+  startedAt: string
+  nextDeliveryAt: string | null
+  displayName: string
+  pictureUrl: string | null
+  isFollowing: boolean
+  totalSteps: number
+  passedSteps: number
+}
+export type ScenarioProgressSummary = {
+  scenarioId: string
+  status: ScenarioProgressStatus
+  passedSteps: number
+  count: number
+}
 export type FriendDeliveryControl = {
   scheduledMessagesPaused: boolean
   scheduledMessagesPausedAt: string | null
@@ -500,6 +522,30 @@ export const api = {
     list: (params?: { accountId?: string }) => {
       const query = params?.accountId ? '?lineAccountId=' + params.accountId : ''
       return fetchApi<ApiResponse<(Scenario & { stepCount?: number })[]>>('/api/scenarios' + query)
+    },
+    progress: (params?: {
+      accountId?: string
+      scenarioId?: string
+      status?: ScenarioProgressStatus | 'current' | 'all'
+      stage?: number
+      search?: string
+      offset?: number
+      limit?: number
+    }) => {
+      const query = new URLSearchParams()
+      if (params?.accountId) query.set('lineAccountId', params.accountId)
+      if (params?.scenarioId) query.set('scenarioId', params.scenarioId)
+      if (params?.status) query.set('status', params.status)
+      if (params?.stage !== undefined) query.set('stage', String(params.stage))
+      if (params?.search) query.set('search', params.search)
+      if (params?.offset) query.set('offset', String(params.offset))
+      if (params?.limit) query.set('limit', String(params.limit))
+      const suffix = query.toString() ? `?${query.toString()}` : ''
+      return fetchApi<ApiResponse<{
+        summary: ScenarioProgressSummary[]
+        total: number
+        items: ScenarioProgressItem[]
+      }>>(`/api/scenarios/progress${suffix}`)
     },
     get: (id: string) =>
       fetchApi<ApiResponse<Scenario & { steps: ScenarioStep[] }>>(`/api/scenarios/${id}`),

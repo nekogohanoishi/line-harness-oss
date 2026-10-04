@@ -179,6 +179,31 @@ function serializeScenarioParticipant(row: ScenarioParticipantRow) {
   };
 }
 
+type ScenarioProgressStatus = ScenarioParticipantStatus | 'completed';
+
+interface ScenarioProgressRow {
+  id: string;
+  friend_id: string;
+  scenario_id: string;
+  scenario_name: string;
+  scenario_is_active: number;
+  status: ScenarioProgressStatus;
+  started_at: string;
+  next_delivery_at: string | null;
+  display_name: string | null;
+  picture_url: string | null;
+  is_following: number;
+  total_steps: number;
+  passed_steps: number;
+}
+
+interface ScenarioProgressSummaryRow {
+  scenario_id: string;
+  status: ScenarioProgressStatus;
+  passed_steps: number;
+  count: number;
+}
+
 // GET /api/scenarios - list all
 scenarios.get('/api/scenarios', async (c) => {
   try {
@@ -211,6 +236,140 @@ scenarios.get('/api/scenarios', async (c) => {
     });
   } catch (err) {
     console.error('GET /api/scenarios error:', err);
+    return c.json({ success: false, error: 'Internal server error' }, 500);
+  }
+});
+
+// GET /api/scenarios/progress - latest enrollment for each friend and scenario.
+// Keep historical completed rows out when the same friend has re-enrolled.
+scenarios.get('/api/scenarios/progress', async (c) => {
+  try {
+    const lineAccountId = c.req.query('lineAccountId');
+    const scenarioId = c.req.query('scenarioId');
+    const requestedStatus = c.req.query('status');
+    const status = requestedStatus === 'active' || requestedStatus === 'paused'
+      || requestedStatus === 'delivering' || requestedStatus === 'completed'
+      || requestedStatus === 'current' || requestedStatus === 'all'
+      ? requestedStatus
+      : 'current';
+    const search = (c.req.query('search') ?? '').trim().slice(0, 100);
+    const parsedStage = Number(c.req.query('stage'));
+    const stage = c.req.query('stage') !== undefined && Number.isInteger(parsedStage)
+      && parsedStage >= 0 ? parsedStage : null;
+    const parsedLimit = Number(c.req.query('limit') ?? '30');
+    const parsedOffset = Number(c.req.query('offset') ?? '0');
+    const limit = Number.isFinite(parsedLimit) ? Math.min(100, Math.max(1, Math.floor(parsedLimit))) : 30;
+    const offset = Number.isFinite(parsedOffset) ? Math.max(0, Math.floor(parsedOffset)) : 0;
+
+    const accountClause = lineAccountId
+      ? 'AND f.line_account_id = ? AND (s.line_account_id IS NULL OR s.line_account_id = ?)'
+      : '';
+    const accountBinds = lineAccountId ? [lineAccountId, lineAccountId] : [];
+    const baseSql = `WITH ranked AS (
+      SELECT fs.id, fs.friend_id, fs.scenario_id, fs.status, fs.started_at,
+             fs.next_delivery_at, fs.current_step_order,
+             s.name AS scenario_name, s.is_active AS scenario_is_active,
+             f.display_name, f.picture_url, f.is_following,
+             ROW_NUMBER() OVER (
+               PARTITION BY fs.scenario_id, fs.friend_id
+               ORDER BY CASE WHEN fs.status = 'completed' THEN 1 ELSE 0 END,
+                        fs.started_at DESC, fs.updated_at DESC, fs.id DESC
+             ) AS enrollment_rank
+      FROM friend_scenarios fs
+      INNER JOIN friends f ON f.id = fs.friend_id
+      INNER JOIN scenarios s ON s.id = fs.scenario_id
+      WHERE 1 = 1 ${accountClause}
+    ), latest AS (
+      SELECT * FROM ranked WHERE enrollment_rank = 1
+    ), progress AS (
+      SELECT latest.*, COUNT(ss.id) AS total_steps,
+             SUM(CASE WHEN ss.step_order <= latest.current_step_order THEN 1 ELSE 0 END) AS passed_steps
+      FROM latest
+      LEFT JOIN scenario_steps ss ON ss.scenario_id = latest.scenario_id
+      GROUP BY latest.id
+    )`;
+
+    const summaryResult = await c.env.DB.prepare(`${baseSql}
+      SELECT scenario_id, status,
+             CASE WHEN status = 'completed' THEN total_steps ELSE passed_steps END AS passed_steps,
+             COUNT(*) AS count
+      FROM progress
+      GROUP BY scenario_id, status,
+               CASE WHEN status = 'completed' THEN total_steps ELSE passed_steps END`)
+      .bind(...accountBinds)
+      .all<ScenarioProgressSummaryRow>();
+
+    const filters: string[] = [];
+    const filterBinds: Array<string | number> = [];
+    if (scenarioId) {
+      filters.push('scenario_id = ?');
+      filterBinds.push(scenarioId);
+    }
+    if (status === 'current') {
+      filters.push("status IN ('active', 'paused', 'delivering')");
+    } else if (status !== 'all') {
+      filters.push('status = ?');
+      filterBinds.push(status);
+    }
+    if (stage !== null) {
+      filters.push("(CASE WHEN status = 'completed' THEN total_steps ELSE passed_steps END) = ?");
+      filterBinds.push(stage);
+    }
+    if (search) {
+      filters.push('(display_name LIKE ? OR scenario_name LIKE ?)');
+      filterBinds.push(`%${search}%`, `%${search}%`);
+    }
+    const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const binds = [...accountBinds, ...filterBinds];
+
+    const totalRow = await c.env.DB.prepare(`${baseSql}
+      SELECT COUNT(*) AS total FROM progress ${where}`)
+      .bind(...binds)
+      .first<{ total: number }>();
+    const listResult = await c.env.DB.prepare(`${baseSql}
+      SELECT id, friend_id, scenario_id, scenario_name, scenario_is_active,
+             status, started_at, next_delivery_at, display_name, picture_url,
+             is_following, total_steps,
+             CASE WHEN status = 'completed' THEN total_steps ELSE passed_steps END AS passed_steps
+      FROM progress ${where}
+      ORDER BY CASE status
+                 WHEN 'delivering' THEN 0 WHEN 'active' THEN 1
+                 WHEN 'paused' THEN 2 ELSE 3 END,
+               CASE WHEN next_delivery_at IS NULL THEN 1 ELSE 0 END,
+               next_delivery_at ASC, started_at DESC, id DESC
+      LIMIT ? OFFSET ?`)
+      .bind(...binds, limit, offset)
+      .all<ScenarioProgressRow>();
+
+    return c.json({
+      success: true,
+      data: {
+        summary: summaryResult.results.map((row) => ({
+          scenarioId: row.scenario_id,
+          status: row.status,
+          passedSteps: Number(row.passed_steps),
+          count: Number(row.count),
+        })),
+        total: Number(totalRow?.total ?? 0),
+        items: listResult.results.map((row) => ({
+          id: row.id,
+          friendId: row.friend_id,
+          scenarioId: row.scenario_id,
+          scenarioName: row.scenario_name,
+          scenarioActive: Boolean(row.scenario_is_active),
+          status: row.status,
+          startedAt: row.started_at,
+          nextDeliveryAt: row.next_delivery_at,
+          displayName: row.display_name || '名前未取得',
+          pictureUrl: row.picture_url,
+          isFollowing: Boolean(row.is_following),
+          totalSteps: Number(row.total_steps),
+          passedSteps: Number(row.passed_steps),
+        })),
+      },
+    });
+  } catch (err) {
+    console.error('GET /api/scenarios/progress error:', err);
     return c.json({ success: false, error: 'Internal server error' }, 500);
   }
 });

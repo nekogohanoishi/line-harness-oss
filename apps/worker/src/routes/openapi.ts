@@ -244,6 +244,22 @@ const spec = {
         responses: { '201': { description: 'Scenario created' } },
       },
     },
+    '/api/scenarios/progress': {
+      get: {
+        tags: ['Scenarios'],
+        summary: '友だちごとのシナリオ進行状況と段階別人数',
+        parameters: [
+          { name: 'lineAccountId', in: 'query', schema: { type: 'string' } },
+          { name: 'scenarioId', in: 'query', schema: { type: 'string' } },
+          { name: 'status', in: 'query', schema: { type: 'string', enum: ['current', 'active', 'paused', 'delivering', 'completed', 'all'] } },
+          { name: 'stage', in: 'query', schema: { type: 'integer', minimum: 0 } },
+          { name: 'search', in: 'query', schema: { type: 'string' } },
+          { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0 } },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100 } },
+        ],
+        responses: { '200': { description: 'Latest enrollment per friend and scenario, with summary counts' } },
+      },
+    },
     '/api/scenarios/{id}': {
       get: {
         tags: ['Scenarios'],

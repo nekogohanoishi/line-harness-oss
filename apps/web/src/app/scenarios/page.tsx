@@ -7,6 +7,7 @@ import { api } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import ScenarioList from '@/components/scenarios/scenario-list'
+import ScenarioProgress from '@/components/scenarios/scenario-progress'
 import ScenarioModePicker from '@/components/scenarios/scenario-mode-picker'
 import CcPromptButton from '@/components/cc-prompt-button'
 
@@ -39,6 +40,8 @@ export default function ScenariosPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [view, setView] = useState<'list' | 'progress'>('list')
+  const [progressScenarioId, setProgressScenarioId] = useState('')
 
   const loadScenarios = useCallback(async () => {
     setLoading(true)
@@ -157,6 +160,25 @@ export default function ScenariosPage() {
         onCreate={handleCreate}
       />
 
+      <div className="mb-5 flex w-fit gap-1 rounded-lg bg-gray-100 p-1" aria-label="シナリオ画面の表示切り替え">
+        <button
+          type="button"
+          onClick={() => setView('list')}
+          aria-pressed={view === 'list'}
+          className={`min-h-10 rounded-md px-4 text-sm font-medium ${view === 'list' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+        >
+          シナリオ一覧
+        </button>
+        <button
+          type="button"
+          onClick={() => { setProgressScenarioId(''); setView('progress') }}
+          aria-pressed={view === 'progress'}
+          className={`min-h-10 rounded-md px-4 text-sm font-medium ${view === 'progress' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+        >
+          進行状況
+        </button>
+      </div>
+
       {loading ? (
         <div className="divide-y divide-gray-100 overflow-hidden rounded-lg border border-gray-200 bg-white">
           {[...Array(3)].map((_, i) => (
@@ -170,12 +192,19 @@ export default function ScenariosPage() {
             </div>
           ))}
         </div>
-      ) : (
+      ) : view === 'list' ? (
         <ScenarioList
           scenarios={scenarios}
           onToggleActive={handleToggleActive}
           onDelete={handleDelete}
+          onShowProgress={(id) => { setProgressScenarioId(id); setView('progress') }}
           loading={loading}
+        />
+      ) : (
+        <ScenarioProgress
+          scenarios={scenarios}
+          accountId={selectedAccountId}
+          initialScenarioId={progressScenarioId}
         />
       )}
 
