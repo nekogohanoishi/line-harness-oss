@@ -14,8 +14,11 @@ export function TalkArea({ children }: { children: ReactNode }) {
 
 const bubbleFrame = 'border border-[#CDD8E5] bg-white'
 
-/** 公式アカウントから友だちへ届く1通 (トーク画面の左側・白の吹き出し)。 */
-export function MessageBubble({ type, content }: { type: string; content: string }) {
+/**
+ * 公式アカウントから友だちへ届く1通 (トーク画面の左側・白の吹き出し)。
+ * clamp を付けると、テキストを先頭4行だけ見せる (一覧で長文が続くとき用)。
+ */
+export function MessageBubble({ type, content, clamp = false }: { type: string; content: string; clamp?: boolean }) {
   if (type === 'flex' || type === 'carousel') {
     return (
       <div className="max-w-full overflow-x-auto">
@@ -46,12 +49,13 @@ export function MessageBubble({ type, content }: { type: string; content: string
       </p>
     )
   }
+  // 吹き出しの「しっぽ」は外側の枠に付ける。行数を絞る overflow:hidden は内側にだけ掛け、しっぽを切らない。
   return (
     <div
-      className={`relative inline-block max-w-full rounded-2xl rounded-tl-md px-4 py-3 text-[15px] leading-[1.7] text-gray-900 whitespace-pre-wrap break-words sm:max-w-[34rem] ${bubbleFrame}
+      className={`relative inline-block max-w-full rounded-2xl rounded-tl-md px-4 py-3 text-[15px] leading-[1.7] text-gray-900 sm:max-w-[34rem] ${bubbleFrame}
         before:absolute before:-left-[7px] before:top-3 before:h-3 before:w-3 before:rotate-45 before:border-b before:border-l before:border-[#CDD8E5] before:bg-white before:content-['']`}
     >
-      {content}
+      <div className={`whitespace-pre-wrap break-words ${clamp ? 'line-clamp-4' : ''}`}>{content}</div>
     </div>
   )
 }
@@ -83,20 +87,23 @@ export function TalkTimeline({ children }: { children: ReactNode }) {
 
 /**
  * 配信の1通。番号の丸から次の通の丸まで縦線が伸び、
- * 見出し (何通目・いつ届くか)、届く人の条件、吹き出し、補足の順に並べる。
+ * 見出し (何通目・いつ届くか・操作)、届く人の条件、吹き出し、補足の順に並べる。
  */
 export function TalkStep({
   number,
   timing,
   condition,
   note,
+  actions,
   isLast,
   children,
 }: {
   number: number
   timing: string
   condition?: string | null
-  note?: string
+  note?: ReactNode
+  /** 見出しの右端に置く操作 (編集ボタンなど) */
+  actions?: ReactNode
   isLast: boolean
   children: ReactNode
 }) {
@@ -110,10 +117,14 @@ export function TalkStep({
         {number}
       </span>
       <div className="min-w-0 flex-1 pt-0.5">
-        <p className="text-sm leading-6">
-          <span className="font-bold text-gray-900">{number}通目</span>
-          <span className="ml-2 text-gray-700">{timing}</span>
-        </p>
+        <div className="flex items-start justify-between gap-2">
+          <p className="min-w-0 text-sm leading-6">
+            <span className="font-bold text-gray-900">{number}通目</span>
+            {/* 狭い画面では操作ボタンと並ぶので、タイミングは2行目に回して語の途中で折り返さない */}
+            <span className={`text-gray-700 ${actions ? 'block sm:ml-2 sm:inline' : 'ml-2'}`}>{timing}</span>
+          </p>
+          {actions && <div className="-my-2 flex shrink-0 items-center">{actions}</div>}
+        </div>
         {condition && (
           <p className="mt-1 text-[13px] leading-5 text-amber-900">
             <span className="mr-1 rounded bg-amber-100 px-1.5 py-0.5 font-medium">条件</span>
@@ -121,7 +132,7 @@ export function TalkStep({
           </p>
         )}
         <div className="mt-2 pl-2">{children}</div>
-        {note && <p className="mt-1.5 pl-2 text-xs leading-5 text-gray-600">{note}</p>}
+        {note && <div className="mt-1.5 pl-2 text-xs leading-5 text-gray-600">{note}</div>}
       </div>
     </li>
   )

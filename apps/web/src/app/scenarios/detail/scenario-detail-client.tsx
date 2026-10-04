@@ -22,6 +22,8 @@ import EditSheet from '@/components/scenarios/edit-sheet'
 import ScenarioStatusSheet from '@/components/scenarios/scenario-status-sheet'
 import ScenarioParticipants from '@/components/scenarios/scenario-participants'
 import { ConfirmSheet, Sheet, SheetButton } from '@/components/ui'
+import { MessageBubble, TalkArea, TalkStep, TalkTimeline } from '@/components/messages/talk-preview'
+import { stepConditionText, stepTimingLabel } from '@/lib/delivery-labels'
 
 type ScenarioWithSteps = Scenario & { steps: ScenarioStep[] }
 type ScenarioWithCount = Scenario & { stepCount?: number }
@@ -97,65 +99,6 @@ function isMetadataCondition(conditionType?: string | null): boolean {
   return conditionType === 'metadata_equals' || conditionType === 'metadata_not_equals'
 }
 
-/** 保存された conditionValue (タグID / トラッキングリンクID / メタデータJSON等) を人間可読な表示に逆引きする */
-function formatConditionValue(
-  conditionType: string | null | undefined,
-  conditionValue: string | null | undefined,
-  tags: TagOpt[],
-  trackedLinks: TrackedLinkOpt[],
-): string {
-  if (!conditionValue) return ''
-  if (isTagCondition(conditionType)) {
-    return tags.find((t) => t.id === conditionValue)?.name ?? conditionValue
-  }
-  if (isTrackedUrlCondition(conditionType)) {
-    const link = trackedLinks.find((l) => l.id === conditionValue)
-    return link ? (link.name ?? link.originalUrl) : conditionValue
-  }
-  if (isMetadataCondition(conditionType)) {
-    try {
-      const parsed = JSON.parse(conditionValue) as { key?: string; value?: unknown }
-      return `${parsed.key ?? ''} = ${parsed.value ?? ''}`
-    } catch {
-      return conditionValue
-    }
-  }
-  return conditionValue
-}
-
-function formatDelay(minutes: number): string {
-  if (minutes === 0) return '即時'
-  if (minutes < 60) return `${minutes}分後`
-  if (minutes < 1440) {
-    const h = Math.floor(minutes / 60)
-    const m = minutes % 60
-    return m === 0 ? `${h}時間後` : `${h}時間${m}分後`
-  }
-  const d = Math.floor(minutes / 1440)
-  const remaining = minutes % 1440
-  if (remaining === 0) return `${d}日後`
-  const h = Math.floor(remaining / 60)
-  return h > 0 ? `${d}日${h}時間後` : `${d}日${remaining}分後`
-}
-
-function formatScheduleLabel(mode: DeliveryMode | undefined, step: ScenarioStep): string {
-  const m = mode ?? 'relative'
-  if (m === 'relative') return formatDelay(step.delayMinutes)
-  if (m === 'elapsed') {
-    const days = step.offsetDays ?? 0
-    const mins = step.offsetMinutes ?? 0
-    const h = Math.floor(mins / 60)
-    const r = mins % 60
-    if (days === 0 && mins === 0) return '開始直後'
-    const parts: string[] = []
-    if (days > 0) parts.push(`${days}日`)
-    if (h > 0) parts.push(`${h}時間`)
-    if (r > 0) parts.push(`${r}分`)
-    return `購読開始から${parts.join('')}後`
-  }
-  // absolute_time
-  return `購読開始から${step.offsetDays ?? 0}日後の ${step.deliveryTime ?? '00:00'}`
-}
 
 /** Flex JSON から最初のテキストを拾う (折りたたみ見出しの本文冒頭に使う) */
 function firstFlexText(node: unknown): string {
@@ -327,25 +270,6 @@ function getSurveyIdFromContent(content: string): string | null {
 function getSurveyFromContent(content: string, surveys: SurveySettings[]): SurveySettings | null {
   const surveyId = getSurveyIdFromContent(content)
   return surveyId ? surveys.find((survey) => survey.form.id === surveyId) ?? null : null
-}
-
-function ImagePreview({ content }: { content: string }) {
-  try {
-    const parsed = JSON.parse(content)
-    const url = parsed.previewImageUrl || parsed.originalContentUrl
-    return (
-      <div>
-        <span className="text-xs font-medium text-purple-600 bg-purple-50 px-2 py-0.5 rounded mb-2 inline-block">画像</span>
-        {url ? (
-          <img src={url} alt="preview" className="max-w-[200px] rounded-lg border border-gray-200 mt-1" />
-        ) : (
-          <p className="text-xs text-gray-400">プレビューなし</p>
-        )}
-      </div>
-    )
-  } catch {
-    return <p className="text-xs text-red-500">画像 JSON パースエラー</p>
-  }
 }
 
 export default function ScenarioDetailClient({ scenarioId }: { scenarioId: string }) {
@@ -1542,186 +1466,99 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
             </div>
         </EditSheet>
 
-        {/* Steps list */}
+        {/* Steps list: 友だちのトーク画面での見え方に寄せ、1通ずつ吹き出しと番号付きの縦線で区切る */}
         {sortedSteps.length === 0 ? (
-          <div className="text-center py-8 text-gray-400 text-sm">
-            ステップがありません。「+ ステップ追加」から追加してください。
+          <div className="py-8 text-center text-sm text-gray-500">
+            ステップがありません。「+ ステップ追加」から1通目を追加してください。
           </div>
         ) : (
-          <div className="space-y-3">
-            {sortedSteps.map((step, idx) => {
-              // テンプレ参照時は、表示も「現在のテンプレ内容」を見せる。
-              // (templates state には list で取得済みの最新内容が入っている)
-              const survey = getSurveyFromContent(step.messageContent, surveys)
-              const tpl = step.templateId ? templates.find((t) => t.id === step.templateId) : null
-              const displayType = survey ? 'flex' : tpl ? tpl.messageType : step.messageType
-              const displayContent = survey ? buildSurveyFlexContent(survey) : tpl ? tpl.messageContent : step.messageContent
-              const readableDisplayContent = displayContent.replaceAll('{{name}}', '［友だちの表示名］')
-              const stat = stats?.steps.find((s) => s.stepOrder === step.stepOrder)
-              // モバイルのみ折りたたむ。デスクトップは md: クラスで常に展開する。
-              const isExpanded = expandedStepIds.has(step.id)
+          <TalkArea>
+            <TalkTimeline>
+              {sortedSteps.map((step, idx) => {
+                // テンプレ参照時は、表示も「現在のテンプレ内容」を見せる。
+                // (templates state には list で取得済みの最新内容が入っている)
+                const survey = getSurveyFromContent(step.messageContent, surveys)
+                const tpl = step.templateId ? templates.find((t) => t.id === step.templateId) : null
+                const displayType = survey ? 'flex' : tpl ? tpl.messageType : step.messageType
+                const displayContent = survey ? buildSurveyFlexContent(survey) : tpl ? tpl.messageContent : step.messageContent
+                const readableDisplayContent = displayContent.replaceAll('{{name}}', '［友だちの表示名］')
+                const stat = stats?.steps.find((s) => s.stepOrder === step.stepOrder)
+                const reachTagName = step.onReachTagId ? (tags.find((t) => t.id === step.onReachTagId)?.name ?? '削除されたタグ') : null
+                // モバイルだけ長文を4行に縮める。デスクトップは md: クラスで常に全文を出す。
+                const isExpanded = expandedStepIds.has(step.id)
+                const testBusy = testConfirmLoadingStepId === step.id || testSendingStepId === step.id
+                const notes = [
+                  survey && <p key="survey">アンケート「{survey.form.name}」を送ります</p>,
+                  step.templateId && <p key="template">共有テンプレート「{tpl?.name ?? '参照先が見つかりません'}」の今の本文です</p>,
+                  reachTagName && <p key="tag">この通が届いたら、タグ「{reachTagName}」を付けます</p>,
+                  stat && <p key="stat">ここまで届いた人: {stat.reachedCount}人（{Math.round(stat.reachRate * 100)}%）</p>,
+                  testSendMessages[step.id] && <p key="test" className="text-blue-700">{testSendMessages[step.id]}</p>,
+                ].filter(Boolean)
 
-              return (
-              <div
-                key={step.id}
-                className="border border-gray-200 rounded-lg p-3 sm:p-4 hover:border-gray-300 transition-colors"
-              >
-                <div className="flex items-start justify-between gap-2 sm:gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 sm:gap-3 mb-2 flex-wrap">
-                      <span
-                        className="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold text-white shrink-0"
-                        style={{ backgroundColor: '#06C755' }}
-                      >
-                        {step.stepOrder}
-                      </span>
-                      <span className="text-xs text-gray-500">{formatScheduleLabel(deliveryMode, step)}</span>
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                        step.messageType === 'text' ? 'bg-blue-50 text-blue-600' :
-                        step.messageType === 'image' ? 'bg-purple-50 text-purple-600' :
-                        'bg-orange-50 text-orange-600'
-                      }`}>
-                        {messageTypeOptions.find(o => o.value === step.messageType)?.label ?? step.messageType}
-                      </span>
-                      {survey && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-50 text-green-700">
-                          アンケート
-                        </span>
-                      )}
-                      {step.conditionType && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-700">
-                          条件: {formatConditionLabel(step.conditionType)}
-                        </span>
-                      )}
-                      {stat && (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-50 text-purple-700">
-                          📊 {stat.reachedCount}人到達 ({Math.round(stat.reachRate * 100)}%)
-                        </span>
-                      )}
-                    </div>
-
-                    {/* 折りたたみ時の本文冒頭 (モバイルのみ) */}
-                    {!isExpanded && (
-                      <p className="md:hidden text-xs text-gray-500 truncate">
-                        {buildStepSnippet(displayType, readableDisplayContent)}
-                      </p>
+                return (
+                  <TalkStep
+                    key={step.id}
+                    number={idx + 1}
+                    timing={stepTimingLabel(step, idx, deliveryMode, scenario.triggerType)}
+                    condition={stepConditionText(
+                      step,
+                      (tagId) => tags.find((t) => t.id === tagId)?.name,
+                      (linkId) => {
+                        const link = trackedLinks.find((l) => l.id === linkId)
+                        return link ? (link.name ?? link.originalUrl) : undefined
+                      },
                     )}
-                    {!isExpanded && (step.onReachTagId || (step.conditionType && step.conditionValue)) && (
-                      <div className="mt-1 space-y-0.5 md:hidden">
-                        {step.onReachTagId && (
-                          <p className="truncate text-xs text-green-700">到達タグ: {tags.find((tag) => tag.id === step.onReachTagId)?.name ?? '削除されたタグ'}</p>
-                        )}
-                        {step.conditionType && step.conditionValue && (
-                          <p className="truncate text-xs text-amber-700">
-                            配信条件: {formatConditionLabel(step.conditionType)} / {formatConditionValue(step.conditionType, step.conditionValue, tags, trackedLinks)}
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    {/* 詳細: モバイルは折りたたみ / デスクトップは常時表示 */}
+                    isLast={idx === sortedSteps.length - 1}
+                    note={notes.length > 0 ? <>{notes}</> : undefined}
+                    actions={
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => openEditStep(step)}
+                          className="min-h-[44px] rounded-lg px-3 text-sm font-medium text-green-700 hover:bg-green-50"
+                        >
+                          編集
+                        </button>
+                        <ActionMenu
+                          label={`${idx + 1}通目のその他の操作`}
+                          items={[
+                            {
+                              label: testConfirmLoadingStepId === step.id ? '送信先を確認中...' : testSendingStepId === step.id ? '送信中...' : 'テスト送信',
+                              disabled: testBusy,
+                              onSelect: () => void requestTestSend(step),
+                            },
+                            { label: '複製', onSelect: () => void handleDuplicateStep(step) },
+                            { label: '上へ移動', disabled: idx === 0, onSelect: () => void handleMoveStep(step.id, 'up') },
+                            { label: '下へ移動', disabled: idx === sortedSteps.length - 1, onSelect: () => void handleMoveStep(step.id, 'down') },
+                            { label: '削除', tone: 'danger', onSelect: () => { setDeleteStepError(''); setDeleteStepTarget(step) } },
+                          ]}
+                        />
+                      </>
+                    }
+                  >
                     <div className={isExpanded ? 'block' : 'hidden md:block'}>
-                      <div className="text-sm text-gray-700 bg-gray-50 rounded-md px-3 py-2 overflow-x-auto">
-                        {displayType === 'flex' ? (
-                          <FlexPreview content={readableDisplayContent} />
-                        ) : displayType === 'image' ? (
-                          <ImagePreview content={readableDisplayContent} />
-                        ) : (
-                          <p className="whitespace-pre-wrap break-words">{readableDisplayContent}</p>
-                        )}
-                      </div>
-                      {step.templateId && (
-                        <p className="mt-2 text-xs text-amber-700 break-words">
-                          テンプレート: {tpl?.name ?? '参照先が見つかりません'}
-                        </p>
-                      )}
-                      {survey && (
-                        <p className="mt-2 text-xs text-green-700 break-words">
-                          アンケート: {survey.form.name}
-                        </p>
-                      )}
-                      {step.onReachTagId && (
-                        <p className="mt-1 text-xs text-green-700 break-words">
-                          到達タグ: {tags.find((t) => t.id === step.onReachTagId)?.name ?? '削除されたタグ'}
-                        </p>
-                      )}
-                      {step.conditionType && step.conditionValue && (
-                        <p className="mt-1 text-xs text-amber-700 break-words">
-                          配信条件: {formatConditionLabel(step.conditionType)} / {formatConditionValue(step.conditionType, step.conditionValue, tags, trackedLinks)}
-                        </p>
-                      )}
+                      <MessageBubble type={displayType} content={readableDisplayContent} />
                     </div>
-
-                    {testSendMessages[step.id] && (
-                      <p className="mt-1 text-xs text-blue-700">{testSendMessages[step.id]}</p>
+                    {!isExpanded && (
+                      <div className="md:hidden">
+                        {displayType === 'text'
+                          ? <MessageBubble type="text" content={readableDisplayContent} clamp />
+                          : <MessageBubble type="text" content={buildStepSnippet(displayType, readableDisplayContent)} />}
+                      </div>
                     )}
-                  </div>
-
-                  {/* モバイル: 展開トグル + 操作をケバブメニューに集約 */}
-                  <div className="flex items-start shrink-0 md:hidden">
                     <button
                       type="button"
                       onClick={() => toggleStepExpanded(step.id)}
                       aria-expanded={isExpanded}
-                      aria-label={isExpanded ? '詳細を閉じる' : '詳細を開く'}
-                      className="inline-flex h-11 w-9 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+                      className="mt-1 min-h-[36px] text-sm font-medium text-blue-700 md:hidden"
                     >
-                      <svg
-                        className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-                        viewBox="0 0 20 20"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth={2}
-                        aria-hidden="true"
-                      >
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 7.5l5 5 5-5" />
-                      </svg>
+                      {isExpanded ? '短く表示する' : '全文を表示する'}
                     </button>
-                    <ActionMenu
-                      label={`ステップ ${step.stepOrder} の操作`}
-                      items={[
-                        { label: '本文・条件を編集', tone: 'primary', onSelect: () => openEditStep(step) },
-                        {
-                          label: testConfirmLoadingStepId === step.id ? '送信先を確認中...' : testSendingStepId === step.id ? '送信中...' : 'テスト送信',
-                          disabled: testConfirmLoadingStepId === step.id || testSendingStepId === step.id,
-                          onSelect: () => void requestTestSend(step),
-                        },
-                        { label: '複製', onSelect: () => handleDuplicateStep(step) },
-                        { label: '↑ 上へ移動', disabled: idx === 0, onSelect: () => handleMoveStep(step.id, 'up') },
-                        { label: '↓ 下へ移動', disabled: idx === sortedSteps.length - 1, onSelect: () => handleMoveStep(step.id, 'down') },
-                        { label: '削除', tone: 'danger', onSelect: () => { setDeleteStepError(''); setDeleteStepTarget(step) } },
-                      ]}
-                    />
-                  </div>
-
-                  {/* デスクトップ: 編集だけを常時表示し、その他の操作はメニューへ集約 */}
-                  <div className="hidden md:flex items-start gap-1 shrink-0">
-                    <button
-                      onClick={() => openEditStep(step)}
-                      className="min-h-[44px] rounded-lg px-3 py-2 text-xs font-medium text-green-700 hover:bg-green-50 transition-colors"
-                    >
-                      編集
-                    </button>
-                    <ActionMenu
-                      label={`ステップ ${step.stepOrder} のその他の操作`}
-                      items={[
-                        {
-                          label: testConfirmLoadingStepId === step.id ? '送信先を確認中...' : testSendingStepId === step.id ? '送信中...' : 'テスト送信',
-                          disabled: testConfirmLoadingStepId === step.id || testSendingStepId === step.id,
-                          onSelect: () => void requestTestSend(step),
-                        },
-                        { label: '複製', onSelect: () => void handleDuplicateStep(step) },
-                        { label: '上へ移動', disabled: idx === 0, onSelect: () => void handleMoveStep(step.id, 'up') },
-                        { label: '下へ移動', disabled: idx === sortedSteps.length - 1, onSelect: () => void handleMoveStep(step.id, 'down') },
-                        { label: '削除', tone: 'danger', onSelect: () => { setDeleteStepError(''); setDeleteStepTarget(step) } },
-                      ]}
-                    />
-                  </div>
-                </div>
-              </div>
-              )
-            })}
-          </div>
+                  </TalkStep>
+                )
+              })}
+            </TalkTimeline>
+          </TalkArea>
         )}
       </div>
 

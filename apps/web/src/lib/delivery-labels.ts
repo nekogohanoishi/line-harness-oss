@@ -77,15 +77,21 @@ export function scenarioStartText(triggerType: Scenario['triggerType'], tagName?
 
 /**
  * ステップの配信条件を「誰に送るか」の文で返す。条件なしは null。
- * tagName は タグID → タグ名 の引き当て (見つからなければ undefined)。
+ * tagName は タグID → タグ名、linkName は 計測リンクID → リンク名 の引き当て
+ * (見つからなければ undefined)。
  */
 export function stepConditionText(
   step: Pick<ScenarioStep, 'conditionType' | 'conditionValue' | 'nextStepOnFalse'>,
   tagName: (id: string) => string | undefined,
+  linkName?: (id: string) => string | undefined,
 ): string | null {
   if (!step.conditionType) return null
   const value = step.conditionValue ?? ''
   const tag = () => `タグ「${tagName(value) ?? 'タグ名未確認'}」`
+  const link = () => {
+    const name = linkName?.(value)
+    return name ? `リンク「${name}」` : '指定したリンク'
+  }
   const metadata = () => {
     try {
       const parsed = JSON.parse(value) as { key?: unknown; value?: unknown }
@@ -98,8 +104,8 @@ export function stepConditionText(
   switch (step.conditionType) {
     case 'tag_exists': text = `${tag()}が付いている人だけに送る`; break
     case 'tag_not_exists': text = `${tag()}が付いていない人だけに送る`; break
-    case 'tracked_url_clicked': text = '指定したリンクを開いた人だけに送る'; break
-    case 'tracked_url_not_clicked': text = '指定したリンクをまだ開いていない人だけに送る'; break
+    case 'tracked_url_clicked': text = `${link()}を開いた人だけに送る`; break
+    case 'tracked_url_not_clicked': text = `${link()}をまだ開いていない人だけに送る`; break
     case 'incoming_text_contains': text = `「${value}」を含むメッセージを送ってきた人だけに送る`; break
     case 'incoming_text_not_contains': text = `「${value}」を含むメッセージを送ってきていない人だけに送る`; break
     case 'metadata_equals': { const m = metadata(); text = `友だち情報「${m.key}」が「${m.value}」の人だけに送る`; break }

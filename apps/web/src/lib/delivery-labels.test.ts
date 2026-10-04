@@ -79,6 +79,14 @@ describe('stepConditionText', () => {
       .toBe('タグ「タグ名未確認」が付いていない人だけに送る')
   })
 
+  test('リンク条件は名前が分かればリンク名で表し、分からなければ「指定したリンク」と書く', () => {
+    const linkName = (id: string) => (id === 'link-1' ? '解説速報ページ' : undefined)
+    expect(stepConditionText({ conditionType: 'tracked_url_clicked', conditionValue: 'link-1', nextStepOnFalse: null }, tagName, linkName))
+      .toBe('リンク「解説速報ページ」を開いた人だけに送る')
+    expect(stepConditionText({ conditionType: 'tracked_url_not_clicked', conditionValue: 'link-x', nextStepOnFalse: null }, tagName))
+      .toBe('指定したリンクをまだ開いていない人だけに送る')
+  })
+
   test('友だち情報の条件はキーと値を引用し、合わない人の行き先も書く', () => {
     expect(stepConditionText({
       conditionType: 'metadata_equals',
