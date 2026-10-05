@@ -234,7 +234,7 @@ export default function SequenceEditor({ value, onChange }: Props) {
         </button>
       </div>
 
-      <div className="divide-y divide-gray-200 rounded-md border border-gray-200">
+      <div className="divide-y divide-gray-300 rounded-md border border-gray-300">
         {document.messages.map((message, index) => (
           <section key={index} className="space-y-4 p-4 sm:p-5">
             <div className="flex flex-wrap items-center justify-between gap-2">

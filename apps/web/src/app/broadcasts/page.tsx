@@ -1,15 +1,21 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { useSearchParams, useRouter } from 'next/navigation'
 import type { Tag } from '@line-crm/shared'
 import { api, type ApiBroadcast, type BroadcastInsight } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
 import BroadcastForm from '@/components/broadcasts/broadcast-form'
-import BroadcastDetail from '@/components/broadcasts/broadcast-detail'
+import BroadcastDetail, {
+  broadcastMessageTypeLabels,
+  broadcastStatusConfig,
+  broadcastTargetText,
+  formatBroadcastTime,
+} from '@/components/broadcasts/broadcast-detail'
 import CcPromptButton from '@/components/cc-prompt-button'
-import { ResponsiveTable, EmptyState } from '@/components/ui'
+import { EmptyState } from '@/components/ui'
 
 const ccPrompts = [
   {
@@ -29,27 +35,6 @@ const ccPrompts = [
 データに基づいた根拠も示してください。`,
   },
 ]
-
-const statusConfig: Record<
-  ApiBroadcast['status'],
-  { label: string; className: string }
-> = {
-  draft: { label: '下書き', className: 'bg-gray-100 text-gray-600' },
-  scheduled: { label: '予約済み', className: 'bg-blue-100 text-blue-700' },
-  sending: { label: '送信中', className: 'bg-yellow-100 text-yellow-700' },
-  sent: { label: '送信完了', className: 'bg-green-100 text-green-700' },
-}
-
-function formatDatetime(iso: string | null): string {
-  if (!iso) return '-'
-  return new Date(iso).toLocaleString('ja-JP', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
 
 export default function BroadcastsPage() {
   const searchParams = useSearchParams()
@@ -139,50 +124,59 @@ function BroadcastList() {
     return tags.find((t) => t.id === tagId)?.name ?? null
   }
 
-  /** 配信対象 (全員 / タグ / 複アカ重複除外) の表示 */
-  const renderTarget = (broadcast: ApiBroadcast) => {
-    const tagName = getTagName(broadcast.targetTagId)
-    if (broadcast.targetType === 'multi-account-dedup') {
-      return <span className="text-purple-700">重複除外{tagName ? `: ${tagName}` : ''}</span>
-    }
-    if (broadcast.targetType === 'all') return '全員'
-    return tagName ? <span>タグ: {tagName}</span> : 'タグ指定'
+  /** 状態・送信日時・送り先を、日本語の1文にまとめる (状態の色つきラベルは呼び出し側で先頭に付ける) */
+  const renderSummary = (broadcast: ApiBroadcast) => {
+    const when = broadcast.status === 'sent'
+      ? (broadcast.sentAt ? `${formatBroadcastTime(broadcast.sentAt)} に送信しました` : '送信しました')
+      : broadcast.status === 'sending'
+        ? 'いま送信しています'
+        : broadcast.status === 'scheduled'
+          ? (broadcast.scheduledAt ? `${formatBroadcastTime(broadcast.scheduledAt)} に送信予定` : '送信日時は未設定です')
+          : 'まだ送っていません'
+    const target = broadcastTargetText(broadcast, getTagName(broadcast.targetTagId))
+    return (
+      <>
+        {`${when}。送り先は`}
+        {broadcast.targetType === 'multi-account-dedup' ? <span className="text-purple-700">{target}</span> : target}
+        。
+      </>
+    )
   }
 
-  /** 送信実績 + LINE インサイト */
+  /** 送信実績 + LINE インサイト (送信済みの行の下に1行で出す) */
   const renderInsight = (broadcast: ApiBroadcast) => {
-    if (broadcast.status !== 'sent') return '-'
     const insight = insights[broadcast.id]
     return (
-      <div>
+      <div className="flex flex-wrap items-center gap-x-3">
+        <span className="font-medium text-gray-700">実績</span>
         {broadcast.totalCount > 0 && (
-          <p>{broadcast.successCount.toLocaleString('ja-JP')} / {broadcast.totalCount.toLocaleString('ja-JP')} 件</p>
+          <span>{broadcast.successCount.toLocaleString('ja-JP')} / {broadcast.totalCount.toLocaleString('ja-JP')} 件</span>
         )}
         {insight ? (
-          <div className="mt-1 space-y-0.5">
+          <>
             {insight.delivered != null && (
-              <p className="text-xs">配信: <span className="font-medium text-gray-700">{insight.delivered.toLocaleString('ja-JP')}</span></p>
+              <span>配信 <span className="font-medium text-gray-700">{insight.delivered.toLocaleString('ja-JP')}</span></span>
             )}
             {insight.uniqueImpression != null && (
-              <p className="text-xs">開封: <span className="font-medium text-blue-600">{insight.uniqueImpression.toLocaleString('ja-JP')}</span>
+              <span>開封 <span className="font-medium text-blue-600">{insight.uniqueImpression.toLocaleString('ja-JP')}</span>
                 {insight.openRate != null && (
-                  <span className="text-gray-400"> ({(insight.openRate * 100).toFixed(1)}%)</span>
+                  <span className="text-gray-500"> ({(insight.openRate * 100).toFixed(1)}%)</span>
                 )}
-              </p>
+              </span>
             )}
             {insight.uniqueClick != null && (
-              <p className="text-xs">クリック: <span className="font-medium text-green-600">{insight.uniqueClick.toLocaleString('ja-JP')}</span>
+              <span>クリック <span className="font-medium text-green-600">{insight.uniqueClick.toLocaleString('ja-JP')}</span>
                 {insight.clickRate != null && (
-                  <span className="text-gray-400"> ({(insight.clickRate * 100).toFixed(1)}%)</span>
+                  <span className="text-gray-500"> ({(insight.clickRate * 100).toFixed(1)}%)</span>
                 )}
-              </p>
+              </span>
             )}
-          </div>
+          </>
         ) : (
           <button
             onClick={() => handleFetchInsight(broadcast.id)}
             disabled={fetchingInsight === broadcast.id}
-            className="mt-1 min-h-[44px] sm:min-h-0 text-xs text-blue-500 hover:text-blue-700 disabled:opacity-50"
+            className="min-h-[44px] sm:min-h-0 text-sm font-medium text-blue-700 hover:underline disabled:opacity-50"
           >
             {fetchingInsight === broadcast.id ? '取得中...' : 'インサイトを取得'}
           </button>
@@ -208,7 +202,7 @@ function BroadcastList() {
         action={
           <button
             onClick={() => setShowCreate(true)}
-            className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
+            className="min-h-[44px] px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
             style={{ backgroundColor: '#06C755' }}
           >
             + 新規配信
@@ -259,87 +253,70 @@ function BroadcastList() {
         </div>
       )}
 
-      {/* Loading */}
+      {/* 1件ずつ濃い区切り線で分け、状態・送信日時・送り先は日本語の1文で出す */}
       {loading ? (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+        <ul aria-hidden className="animate-pulse">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="px-4 py-4 border-b border-gray-100 flex items-center gap-4 animate-pulse">
-              <div className="flex-1 space-y-2">
-                <div className="h-3 bg-gray-200 rounded w-48" />
-                <div className="h-2 bg-gray-100 rounded w-32" />
-              </div>
-              <div className="h-5 bg-gray-100 rounded-full w-16" />
-              <div className="h-3 bg-gray-100 rounded w-24" />
-            </div>
+            <li key={i} className="space-y-2 border-b border-gray-300 px-1 py-4">
+              <div className="h-3 w-48 max-w-full rounded bg-gray-200" />
+              <div className="h-2 w-72 max-w-full rounded bg-gray-100" />
+            </li>
           ))}
-        </div>
-      ) : broadcasts.length === 0 && !showCreate ? (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+        </ul>
+      ) : broadcasts.length === 0 ? (
+        // 最初の1件を作成中は、作成フォームだけを見せる
+        showCreate ? null : (
           <EmptyState
             title="配信がありません"
             description="「新規配信」から作成してください。"
           />
-        </div>
-      ) : (
-        <ResponsiveTable
-          rows={visibleBroadcasts}
-          rowKey={(broadcast) => broadcast.id}
-          className="shadow-sm"
-          empty={
-            <EmptyState
-              size="sm"
-              title={activeTab === 'dedup' ? '複数アカ重複除外配信はまだありません' : 'このタブに該当する配信はありません'}
-            />
-          }
-          columns={[
-            {
-              key: 'title',
-              label: '配信タイトル',
-              priority: 'primary',
-              render: (broadcast) => (
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <a href={`/broadcasts?id=${broadcast.id}`} className="text-sm font-medium text-blue-600 hover:text-blue-800 hover:underline break-words">
-                      {broadcast.title}
-                    </a>
-                    {broadcast.targetType === 'multi-account-dedup' && (
-                      <span className="inline-flex items-center px-1.5 py-0 rounded text-[10px] font-medium bg-purple-100 text-purple-700">
-                        複アカ
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs font-normal text-gray-400 mt-0.5">
-                    {broadcast.messageType === 'text' ? 'テキスト' : broadcast.messageType === 'image' ? '画像' : 'Flex'}
-                  </p>
-                </div>
-              ),
-            },
-            {
-              key: 'status',
-              label: 'ステータス',
-              priority: 'meta',
-              render: (broadcast) => (
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusConfig[broadcast.status].className}`}>
-                  {statusConfig[broadcast.status].label}
-                </span>
-              ),
-            },
-            { key: 'target', label: '配信対象', render: renderTarget },
-            { key: 'scheduledAt', label: '予約日時', render: (broadcast) => formatDatetime(broadcast.scheduledAt) },
-            { key: 'sentAt', label: '送信完了日時', render: (broadcast) => formatDatetime(broadcast.sentAt) },
-            { key: 'insight', label: '実績', render: renderInsight },
-          ]}
-          actions={(broadcast) =>
-            broadcast.status === 'draft' || broadcast.status === 'scheduled' ? (
-              <button
-                onClick={() => handleDelete(broadcast.id)}
-                className="px-3 py-1 min-h-[44px] text-xs font-medium text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
-              >
-                削除
-              </button>
-            ) : null
-          }
+        )
+      ) : visibleBroadcasts.length === 0 ? (
+        <EmptyState
+          size="sm"
+          title={activeTab === 'dedup' ? '複数アカ重複除外配信はまだありません' : 'このタブに該当する配信はありません'}
         />
+      ) : (
+        <ul>
+          {visibleBroadcasts.map((broadcast) => {
+            const status = broadcastStatusConfig[broadcast.status]
+            const canDelete = broadcast.status === 'draft' || broadcast.status === 'scheduled'
+            return (
+              <li key={broadcast.id} className="border-b border-gray-300 sm:flex sm:items-start sm:justify-between sm:gap-4">
+                <div className="min-w-0 flex-1">
+                  <Link
+                    href={`/broadcasts?id=${broadcast.id}`}
+                    className="group block rounded-md px-1 py-3.5 hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                  >
+                    <span className="block text-[15px] font-semibold leading-6 text-blue-700 break-words group-hover:underline">
+                      {broadcast.title}
+                      <span className="ml-2 text-xs font-normal text-gray-500">{broadcastMessageTypeLabels[broadcast.messageType]}</span>
+                    </span>
+                    <span className="mt-0.5 block text-sm leading-6 text-gray-600 break-words">
+                      <span className={`mr-1.5 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${status.className}`}>
+                        {status.label}
+                      </span>
+                      {renderSummary(broadcast)}
+                    </span>
+                  </Link>
+                  {broadcast.status === 'sent' && (
+                    <div className="-mt-1 px-1 pb-3 text-[13px] leading-6 text-gray-600">{renderInsight(broadcast)}</div>
+                  )}
+                </div>
+                {canDelete && (
+                  <div className="flex justify-end px-1 pb-3 sm:shrink-0 sm:pb-0 sm:pt-2">
+                    <button
+                      onClick={() => handleDelete(broadcast.id)}
+                      className="px-3 py-1 min-h-[44px] text-xs font-medium text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
+                    >
+                      削除
+                    </button>
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
       )}
 
       <CcPromptButton prompts={ccPrompts} />

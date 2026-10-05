@@ -4,10 +4,10 @@ import Link from 'next/link'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
-import FlexPreviewComponent from '@/components/flex-preview'
 import CcPromptButton from '@/components/cc-prompt-button'
 import TemplateMessageEditor, { validateTemplateMessage } from '@/components/templates/template-message-editor'
-import { ResponsiveTable, EmptyState, ConfirmSheet } from '@/components/ui'
+import TemplatePreview, { isFlexLikeType } from '@/components/templates/template-preview'
+import { EmptyState, ConfirmSheet } from '@/components/ui'
 
 interface Template {
   id: string
@@ -60,36 +60,6 @@ function formatDate(iso: string): string {
   })
 }
 
-function firstMessageText(node: unknown): string {
-  if (!node || typeof node !== 'object') return ''
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const found = firstMessageText(child)
-      if (found) return found
-    }
-    return ''
-  }
-  const record = node as Record<string, unknown>
-  if (typeof record.text === 'string') return record.text
-  for (const child of Object.values(record)) {
-    const found = firstMessageText(child)
-    if (found) return found
-  }
-  return ''
-}
-
-function templateSummary(template: Template): string {
-  if (template.messageType === 'image') return '画像メッセージ'
-  if (template.messageType === 'flex' || template.messageType === 'carousel') {
-    try {
-      return firstMessageText(JSON.parse(template.messageContent)) || 'Flexメッセージ'
-    } catch {
-      return '内容を確認できません'
-    }
-  }
-  return template.messageContent
-}
-
 function templateDeleteErrorMessage(message: string): string {
   if (message.includes('automation rule')) {
     return 'このテンプレートはオートメーションで使用中のため削除できません。先に使用しているオートメーションから外してください。'
@@ -97,15 +67,26 @@ function templateDeleteErrorMessage(message: string): string {
   return message
 }
 
+// 自動化の「きっかけ」の種類 (AutomationEventType) に合わせる
 const automationEventLabels: Record<string, string> = {
-  friend_added: '友だち追加時',
+  friend_add: '友だち追加時',
   tag_change: 'タグ変更時',
   score_threshold: 'スコア到達時',
+  cv_fire: 'コンバージョン発生時',
   message_received: 'メッセージ受信時',
-  webinar_registered: 'ウェビナー申込時',
-  webinar_attended: 'ウェビナー参加時',
-  webinar_cta_clicked: 'ウェビナー案内のクリック時',
+  calendar_booked: 'カレンダー予約時',
+  webinar_opened: 'ウェビナーページを開いた時',
+  webinar_started: 'ウェビナー動画の再生時',
+  webinar_completed: 'ウェビナーを最後まで視聴した時',
+  webinar_cta_clicked: 'ウェビナーの案内ボタンを押した時',
+  webinar_abandoned: 'ウェビナー途中離脱時',
 }
+
+// カテゴリの初期値 general は内部の名前なので、画面では「一般」と表示する
+const categoryLabel = (category: string) => (category === 'general' ? '一般' : category)
+
+const editEmptyNote = (type: string) =>
+  type === 'image' ? '画像のURLを入力すると、ここに表示されます' : '本文を入力すると、ここに表示されます'
 
 const ccPrompts = [
   {
@@ -117,6 +98,82 @@ const ccPrompts = [
 手順を示してください。`,
   },
 ]
+
+function TypeBadge({ type }: { type: string }) {
+  return (
+    <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${typeBadgeColor[type] ?? 'bg-gray-100 text-gray-700'}`}>
+      {messageTypeLabels[type] ?? 'その他'}
+    </span>
+  )
+}
+
+function CategoryBadge({ category }: { category: string }) {
+  return (
+    <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+      {categoryLabel(category)}
+    </span>
+  )
+}
+
+/** 一覧の1行。名前と操作の下に、友だちのトーク画面での見え方 (吹き出し) を置き、行の区切りは線で付ける */
+function TemplateRow({
+  template,
+  selected,
+  onOpen,
+  onDelete,
+}: {
+  template: Template
+  selected: boolean
+  onOpen: () => void
+  onDelete: () => void
+}) {
+  return (
+    // 開いている行は、ページの左の余白に出す緑線で示す (行の中身の位置をずらさないため)
+    <li
+      className={`relative border-b border-gray-300 py-4 ${
+        selected ? "before:absolute before:-left-3 before:bottom-0 before:top-0 before:w-[3px] before:rounded-full before:bg-green-500 before:content-['']" : ''
+      }`}
+    >
+      {/* 名前と操作は、見た目の行の高さを増やさず、押せる範囲だけ44pxにする (上下の負の余白)。下の行と重なっても押せるよう relative にする */}
+      <div className="flex items-start justify-between gap-2">
+        <button
+          type="button"
+          onClick={onOpen}
+          className="relative -my-2.5 flex min-w-0 flex-1 items-start rounded-md py-2.5 text-left hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+        >
+          <span className="min-w-0 break-words text-[15px] font-semibold leading-6 text-gray-900">{template.name}</span>
+        </button>
+        <div className="relative -my-2.5 flex shrink-0 items-center">
+          <button
+            type="button"
+            onClick={onOpen}
+            aria-label={`${template.name}を編集`}
+            className="min-h-[44px] rounded-lg px-3 text-sm font-medium text-green-700 hover:bg-green-50"
+          >
+            編集
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            aria-label={`${template.name}を削除`}
+            className="min-h-[44px] rounded-lg px-3 text-sm font-medium text-red-600 hover:bg-red-50"
+          >
+            削除
+          </button>
+        </div>
+      </div>
+      <p className="mb-3 mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5 text-gray-600">
+        <TypeBadge type={template.messageType} />
+        <CategoryBadge category={template.category} />
+        <span className={template.usageCount === 0 ? 'text-gray-500' : 'font-medium text-gray-800'}>
+          {template.usageCount === 0 ? '未使用' : `${template.usageCount}箇所で使用`}
+        </span>
+        <span>更新 {formatDate(template.updatedAt)}</span>
+      </p>
+      <TemplatePreview type={template.messageType} content={template.messageContent} compact />
+    </li>
+  )
+}
 
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState<Template[]>([])
@@ -289,14 +346,22 @@ export default function TemplatesPage() {
     }
   }
 
+  // Flex の編集欄は画面幅で左右2列になるため、細い引き出しだと入力欄が潰れる。読み込み前は一覧の情報で幅を決める
+  const drawerType = drawerData?.messageType ?? templates.find((t) => t.id === drawerId)?.messageType ?? ''
+  const drawerWide = isFlexLikeType(drawerType)
+  const usageTotal = drawerData
+    ? drawerData.usedBy.autoReplies.length + drawerData.usedBy.automations.length + scenarioStepUsages.length
+    : 0
+
   return (
-    <div>
+    // 右下の「CCに依頼」ボタンに、最後の行が隠れないよう下に余白を取る
+    <div className="pb-16">
       <Header
         title="テンプレート管理"
         action={
           <button
             onClick={() => setShowCreate(true)}
-            className="px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
+            className="min-h-[44px] px-4 py-2 text-sm font-medium text-white rounded-lg transition-opacity hover:opacity-90"
             style={{ backgroundColor: '#06C755' }}
           >
             + 新規テンプレート
@@ -327,7 +392,7 @@ export default function TemplatesPage() {
           <button
             key={key}
             onClick={() => setTypeFilter(key)}
-            className={`px-4 py-1.5 min-h-[40px] text-xs font-medium rounded-full transition-colors ${
+            className={`px-4 py-1.5 min-h-[44px] text-xs font-medium rounded-full transition-colors ${
               typeFilter === key ? 'text-white' : 'text-gray-600 bg-gray-100 hover:bg-gray-200'
             }`}
             style={typeFilter === key ? { backgroundColor: '#06C755' } : undefined}
@@ -337,17 +402,18 @@ export default function TemplatesPage() {
         ))}
       </div>
 
-      {/* Create form */}
+      {/* Create form: 箱で囲まず、上の太線と見出しで区切る */}
       {showCreate && (
-        <div className="mb-6 bg-white rounded-lg shadow-sm border border-gray-200 p-4 sm:p-6">
-          <h2 className="text-sm font-semibold text-gray-800 mb-4">新規テンプレートを作成</h2>
-          <div className="space-y-4 max-w-lg">
+        <section className="mb-8 border-t-2 border-gray-900 pt-3" aria-labelledby="template-create-heading">
+          <h2 id="template-create-heading" className="text-lg font-bold text-gray-900">新規テンプレートを作成</h2>
+          {/* Flex の編集欄は左右2列になるので、広めに取る */}
+          <div className={`mt-4 space-y-4 ${isFlexLikeType(form.messageType) ? 'max-w-3xl' : 'max-w-lg'}`}>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">名前 <span className="text-red-500">*</span></label>
               <input
                 type="text"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                placeholder="例: コスト比較 flex"
+                className="w-full min-h-[44px] border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                placeholder="例: 申し込み案内のカード"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
@@ -356,8 +422,8 @@ export default function TemplatesPage() {
               <label className="block text-xs font-medium text-gray-600 mb-1">カテゴリ</label>
               <input
                 type="text"
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                placeholder="例: general, 挨拶, 返信"
+                className="w-full min-h-[44px] border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                placeholder="例: 挨拶、返信、案内"
                 value={form.category}
                 onChange={(e) => setForm({ ...form, category: e.target.value })}
               />
@@ -365,7 +431,7 @@ export default function TemplatesPage() {
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">タイプ</label>
               <select
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
+                className="w-full min-h-[44px] border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
                 value={form.messageType}
                 onChange={(e) => setForm({ ...form, messageType: e.target.value, messageContent: '' })}
               >
@@ -384,11 +450,19 @@ export default function TemplatesPage() {
                 onChange={(nextValue) => setForm({ ...form, messageContent: nextValue })}
                 textRef={createContentRef}
               />
+              {/* Flex の編集欄はプレビューを中に持つので、ここでは出さない (2か所になる)。
+                  テキストと画像は入力欄の下に置く。上に置くと、入力で吹き出しが伸びるたびに入力欄が下へ動く */}
+              {!isFlexLikeType(form.messageType) && (
+                <div className="mt-5">
+                  <h3 className="mb-2 text-xs font-medium text-gray-600">友だちの画面での見え方</h3>
+                  <TemplatePreview type={form.messageType} content={form.messageContent} emptyNote={editEmptyNote(form.messageType)} />
+                </div>
+              )}
             </div>
 
             {formError && <p className="text-xs text-red-600">{formError}</p>}
 
-            <div className="flex flex-col sm:flex-row gap-2 sticky bottom-0 bg-white pt-2 pb-1 -mx-4 px-4 sm:static sm:mx-0 sm:px-0 sm:pt-0 sm:pb-0">
+            <div className="flex flex-col sm:flex-row gap-2 sticky bottom-0 bg-gray-50 pt-2 pb-1 -mx-4 px-4 sm:static sm:mx-0 sm:px-0 sm:pt-0 sm:pb-0">
               <button
                 onClick={handleCreate}
                 disabled={saving}
@@ -405,266 +479,205 @@ export default function TemplatesPage() {
               </button>
             </div>
           </div>
-        </div>
+        </section>
       )}
 
-      {/* Table */}
+      {/* List: 1通ごとに吹き出しで見せ、行の間は線で区切る */}
       {loading ? (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="px-4 py-4 border-b border-gray-100 flex items-center gap-4 animate-pulse">
-              <div className="h-5 bg-gray-100 rounded w-12" />
-              <div className="flex-1 space-y-2">
-                <div className="h-3 bg-gray-200 rounded w-48" />
-                <div className="h-2 bg-gray-100 rounded w-32" />
-              </div>
-              <div className="h-3 bg-gray-100 rounded w-12" />
-              <div className="h-3 bg-gray-100 rounded w-24" />
+        <div role="status" aria-label="テンプレートを読み込み中" className="max-w-3xl border-t border-gray-300">
+          {[...Array(3)].map((_, i) => (
+            <div key={i} aria-hidden className="animate-pulse border-b border-gray-300 py-4">
+              <div className="h-4 w-48 rounded bg-gray-200" />
+              <div className="mt-2 h-3 w-40 rounded bg-gray-100" />
+              <div className="mt-3 h-20 max-w-2xl rounded-xl bg-[#E8EEF6]" />
             </div>
           ))}
         </div>
+      ) : filteredTemplates.length === 0 ? (
+        <EmptyState size="sm" title="該当するテンプレートがありません" />
       ) : (
-        <ResponsiveTable
-          rows={filteredTemplates}
-          rowKey={(t) => t.id}
-          className="shadow-sm"
-          onRowClick={(t) => setDrawerId(t.id)}
-          rowLabel={(t) => `${t.name}を編集`}
-          empty={<EmptyState size="sm" title="該当するテンプレートがありません" />}
-          columns={[
-            {
-              key: 'name',
-              label: '名前',
-              priority: 'primary',
-              render: (t) => (
-                // 選択中の行はデスクトップの行ハイライトが使えないため、左の緑線で示す
-                <div className={drawerId === t.id ? 'border-l-2 border-green-500 pl-2 -ml-2' : ''}>
-                  <p className="text-sm font-medium text-gray-900 break-words">{t.name}</p>
-                  <p className="text-[11px] font-normal text-gray-400 mt-0.5 truncate max-w-md">
-                    {templateSummary(t).slice(0, 60)}{templateSummary(t).length > 60 ? '...' : ''}
-                  </p>
-                </div>
-              ),
-            },
-            {
-              key: 'messageType',
-              label: 'タイプ',
-              priority: 'meta',
-              render: (t) => (
-                <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${typeBadgeColor[t.messageType] ?? 'bg-gray-100 text-gray-700'}`}>
-                  {messageTypeLabels[t.messageType] ?? t.messageType}
-                </span>
-              ),
-            },
-            {
-              key: 'category',
-              label: 'カテゴリ',
-              render: (t) => (
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700">
-                  {t.category}
-                </span>
-              ),
-            },
-            {
-              key: 'usageCount',
-              label: '使用数',
-              align: 'right',
-              render: (t) => (
-                <span className={`text-sm ${t.usageCount === 0 ? 'text-gray-400' : 'text-gray-900 font-medium'}`}>
-                  {t.usageCount}
-                </span>
-              ),
-            },
-            { key: 'updatedAt', label: '更新日', render: (t) => formatDate(t.updatedAt) },
-          ]}
-          actions={(t) => (
-            <>
-              <button
-                onClick={() => setDrawerId(t.id)}
-                className="px-2.5 py-1 min-h-[44px] sm:min-h-0 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
-              >
-                編集
-              </button>
-              <button
-                onClick={() => {
-                  setDeleteTarget(t)
-                  setDeleteError('')
-                }}
-                className="px-2.5 py-1 min-h-[44px] sm:min-h-0 text-xs font-medium text-red-500 bg-red-50 sm:bg-transparent hover:bg-red-50 rounded-md"
-              >
-                削除
-              </button>
-            </>
-          )}
-        />
+        <ul className="max-w-3xl border-t border-gray-300">
+          {filteredTemplates.map((t) => (
+            <TemplateRow
+              key={t.id}
+              template={t}
+              selected={drawerId === t.id}
+              onOpen={() => setDrawerId(t.id)}
+              onDelete={() => {
+                setDeleteTarget(t)
+                setDeleteError('')
+              }}
+            />
+          ))}
+        </ul>
       )}
 
-      {/* Drawer */}
+      {/* Drawer: スマホでは画面いっぱい (上のメニューバーも覆う)。入力欄とプレビューを細い2列にしないため、Flex のときは広げる */}
       {drawerId && (
         <>
           <div
             className="fixed inset-0 bg-black/30 z-30 lg:hidden"
             onClick={() => setDrawerId(null)}
           />
-          <div className="fixed inset-y-0 right-0 w-full lg:w-[480px] bg-white shadow-xl border-l border-gray-200 z-40 overflow-y-auto">
-            <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between sticky top-0 bg-white z-10">
-              <div className="flex items-center gap-2 min-w-0 flex-1">
+          <aside
+            aria-label="テンプレートの内容と編集"
+            className={`fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-gray-200 bg-white shadow-xl ${drawerWide ? 'lg:w-[760px]' : 'lg:w-[480px]'}`}
+          >
+            <div className="flex shrink-0 items-center gap-2 border-b border-gray-200 bg-white pl-4 pr-1">
+              <div className="min-w-0 flex-1">
                 {editName !== null ? (
                   <input
                     type="text"
                     autoFocus
                     value={editName}
                     onChange={(e) => setEditName(e.target.value)}
-                    className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                    aria-label="テンプレートの名前"
+                    className="my-1 min-h-[44px] w-full rounded-lg border border-gray-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                   />
                 ) : (
-                  <h3
-                    className="text-sm font-semibold truncate cursor-text"
-                    onClick={() => setEditName(drawerData?.name ?? '')}
-                    title="クリックで編集"
-                  >
-                    {drawerData?.name ?? '読み込み中...'}
+                  <h3 className="min-w-0 text-sm font-semibold">
+                    <button
+                      type="button"
+                      disabled={!drawerData}
+                      onClick={() => setEditName(drawerData?.name ?? '')}
+                      title="クリックで名前を変更"
+                      className="flex min-h-[52px] w-full items-center gap-2 text-left"
+                    >
+                      <span className="min-w-0 truncate">{drawerData?.name ?? '読み込み中...'}</span>
+                      {drawerData && <span className="shrink-0 text-xs font-medium text-blue-700">名前を変更</span>}
+                    </button>
                   </h3>
                 )}
               </div>
               <button
+                type="button"
                 onClick={() => setDrawerId(null)}
-                className="ml-2 text-gray-400 hover:text-gray-600 text-2xl leading-none px-1"
+                aria-label="閉じる"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-2xl leading-none text-gray-500 hover:bg-gray-100 hover:text-gray-700"
               >
                 ×
               </button>
             </div>
 
-            {drawerLoading ? (
-              <div className="p-6 text-sm text-gray-400">読み込み中...</div>
-            ) : drawerError ? (
-              <div className="p-6">
-                <p className="text-sm text-red-600 mb-2">読み込みに失敗しました</p>
-                <p className="text-xs text-gray-500">{drawerError}</p>
-              </div>
-            ) : !drawerData ? null : (
-              <div className="p-4 space-y-5">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium ${typeBadgeColor[drawerData.messageType] ?? 'bg-gray-100 text-gray-700'}`}>
-                    {messageTypeLabels[drawerData.messageType] ?? drawerData.messageType}
-                  </span>
-                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-700">
-                    {drawerData.category}
-                  </span>
-                  <span className="text-[10px] text-gray-400">
-                    更新: {formatDate(drawerData.updatedAt)}
-                  </span>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+              {drawerLoading ? (
+                <p role="status" className="p-6 text-sm text-gray-500">読み込み中...</p>
+              ) : drawerError ? (
+                <div className="p-6">
+                  <p className="text-sm text-red-600 mb-2">読み込みに失敗しました</p>
+                  <p className="text-xs text-gray-500">{drawerError}</p>
                 </div>
+              ) : !drawerData ? null : (
+                // 下は、右下の「CCに依頼」ボタンに使用箇所が隠れないための余白
+                <div className="space-y-6 p-4 pb-24">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <TypeBadge type={drawerData.messageType} />
+                    <CategoryBadge category={drawerData.category} />
+                    <span className="text-xs text-gray-500">
+                      更新: {formatDate(drawerData.updatedAt)}
+                    </span>
+                  </div>
 
-                {/* Preview */}
-                <div>
-                  <h4 className="text-[11px] font-medium text-gray-500 mb-1.5 uppercase tracking-wide">プレビュー</h4>
-                  <div className="border border-gray-200 rounded-lg p-3 bg-gray-50 overflow-x-auto">
-                    {(drawerData.messageType === 'flex' || drawerData.messageType === 'carousel') ? (
-                      (() => {
-                        try {
-                          return <FlexPreviewComponent content={drawerData.messageContent} maxWidth={420} />
-                        } catch {
-                          return <p className="text-xs text-red-500">プレビューを表示できません</p>
-                        }
-                      })()
-                    ) : drawerData.messageType === 'image' ? (
-                      (() => {
-                        try {
-                          const parsed = JSON.parse(drawerData.messageContent)
-                          return <img src={parsed.originalContentUrl || parsed.previewImageUrl} alt="" className="max-w-full rounded" />
-                        } catch {
-                          return <p className="text-xs text-red-500">プレビューを表示できません</p>
-                        }
-                      })()
+                  <section>
+                    <h4 className="mb-2 text-sm font-semibold text-gray-900">メッセージ内容</h4>
+                    <TemplateMessageEditor
+                      messageType={drawerData.messageType}
+                      value={editContent ?? drawerData.messageContent}
+                      onChange={setEditContent}
+                      textRef={editContentRef}
+                    />
+                    {/* Flex の編集欄はプレビューを中に持つので、ここでは出さない (2か所になる)。
+                        テキストと画像は入力欄の下に置く。上に置くと、入力で吹き出しが伸びるたびに入力欄が下へ動く */}
+                    {!isFlexLikeType(drawerData.messageType) && (
+                      <div className="mt-5">
+                        <h5 className="mb-2 text-xs font-medium text-gray-600">友だちの画面での見え方</h5>
+                        <TemplatePreview
+                          type={drawerData.messageType}
+                          content={editContent ?? drawerData.messageContent}
+                          emptyNote={editEmptyNote(drawerData.messageType)}
+                        />
+                      </div>
+                    )}
+                  </section>
+
+                  {/* Used by */}
+                  <section>
+                    <h4 className="mb-1 text-sm font-semibold text-gray-900">使用箇所（{usageTotal}）</h4>
+                    {usageTotal === 0 ? (
+                      <p className="text-sm text-gray-500">どこからも使用されていません</p>
                     ) : (
-                      <p className="text-sm whitespace-pre-wrap break-words">{drawerData.messageContent}</p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Edit content */}
-                <div>
-                  <h4 className="mb-1.5 text-[11px] font-medium text-gray-500">メッセージ内容</h4>
-                  <TemplateMessageEditor
-                    messageType={drawerData.messageType}
-                    value={editContent ?? drawerData.messageContent}
-                    onChange={setEditContent}
-                    textRef={editContentRef}
-                  />
-                </div>
-
-                {(editContent !== null || editName !== null) && (
-                  <div>
-                    {editError && (
-                      <p className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                        {editError}
-                      </p>
-                    )}
-                    <div className="flex gap-2">
-                      <button
-                        onClick={handleSaveEdit}
-                        disabled={savingEdit}
-                        className="px-3 py-1.5 text-xs font-medium text-white rounded-md disabled:opacity-50"
-                        style={{ backgroundColor: '#06C755' }}
-                      >
-                        {savingEdit ? '保存中...' : '保存'}
-                      </button>
-                      <button
-                        onClick={() => { setEditContent(null); setEditName(null); setEditError('') }}
-                        className="px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md"
-                      >
-                        キャンセル
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Used by */}
-                <div>
-                  <h4 className="text-[11px] font-medium text-gray-500 mb-1.5 uppercase tracking-wide">
-                    使用箇所 ({drawerData.usedBy.autoReplies.length + drawerData.usedBy.automations.length + scenarioStepUsages.length})
-                  </h4>
-                  {(drawerData.usedBy.autoReplies.length === 0 && drawerData.usedBy.automations.length === 0 && scenarioStepUsages.length === 0) ? (
-                    <p className="text-[11px] text-gray-400 italic">どこからも使用されていません</p>
-                  ) : (
-                    <>
-                      <ul className="space-y-1.5 text-xs">
-                        {drawerData.usedBy.autoReplies.map((ar) => (
-                          <li key={`ar-${ar.id}`}>
-                            <Link href="/auto-replies" className="text-blue-600 hover:underline">
-                              自動返信：{ar.keyword} <span className="text-gray-400">（{ar.matchType === 'exact' ? '完全一致' : '部分一致'}）</span>
-                            </Link>
-                          </li>
-                        ))}
-                        {drawerData.usedBy.automations.map((au) => (
-                          <li key={`au-${au.id}`}>
-                            <Link href="/automations" className="text-blue-600 hover:underline">
-                              オートメーション：{au.name} <span className="text-gray-400">（{automationEventLabels[au.eventType] ?? 'その他の条件'}）</span>
-                            </Link>
-                          </li>
-                        ))}
-                        {scenarioStepUsages.map((ss) => (
-                          <li key={`ss-${ss.stepId}`}>
-                            <Link href={`/scenarios/detail?id=${ss.scenarioId}`} className="text-blue-600 hover:underline">
-                              シナリオ：{ss.scenarioName} <span className="text-gray-400">（{ss.stepOrder}番目）</span>
-                            </Link>
-                          </li>
-                        ))}
-                      </ul>
-                      {scenarioStepUsages.length > 0 && (
-                        <p className="mt-2 text-[10px] text-amber-700">
-                          このテンプレートを修正すると、上記すべてに反映されます
+                      <>
+                        <p className="mb-2 text-xs leading-5 text-amber-800">
+                          このテンプレートを修正すると、下記すべてに反映されます
                         </p>
-                      )}
-                    </>
-                  )}
+                        <ul className="divide-y divide-gray-200 border-y border-gray-200 text-sm">
+                          {drawerData.usedBy.autoReplies.map((ar) => (
+                            <li key={`ar-${ar.id}`}>
+                              <Link href="/auto-replies" className="flex min-h-[44px] items-center py-2 text-blue-700 hover:underline">
+                                <span className="min-w-0 break-words">
+                                  自動返信：{ar.keyword} <span className="text-gray-500">（{ar.matchType === 'exact' ? '完全一致' : '部分一致'}）</span>
+                                </span>
+                              </Link>
+                            </li>
+                          ))}
+                          {drawerData.usedBy.automations.map((au) => (
+                            <li key={`au-${au.id}`}>
+                              <Link href="/automations" className="flex min-h-[44px] items-center py-2 text-blue-700 hover:underline">
+                                <span className="min-w-0 break-words">
+                                  オートメーション：{au.name} <span className="text-gray-500">（{automationEventLabels[au.eventType] ?? 'その他の条件'}）</span>
+                                </span>
+                              </Link>
+                            </li>
+                          ))}
+                          {scenarioStepUsages.map((ss) => (
+                            <li key={`ss-${ss.stepId}`}>
+                              <Link href={`/scenarios/detail?id=${ss.scenarioId}`} className="flex min-h-[44px] items-center py-2 text-blue-700 hover:underline">
+                                <span className="min-w-0 break-words">
+                                  シナリオ：{ss.scenarioName} <span className="text-gray-500">（{ss.stepOrder}番目）</span>
+                                </span>
+                              </Link>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </section>
+                </div>
+              )}
+            </div>
+
+            {/* 変更があるときだけ、保存の操作を画面の下に固定する。右の余白は「CCに依頼」ボタンを避けるため */}
+            {drawerData && (editContent !== null || editName !== null) && (
+              <div className="shrink-0 border-t border-gray-200 bg-white px-4 py-3 pr-20 sm:pr-4">
+                {editError && (
+                  <p role="alert" className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {editError}
+                  </p>
+                )}
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleSaveEdit}
+                    disabled={savingEdit}
+                    className="min-h-[44px] flex-1 rounded-lg px-4 text-sm font-medium text-white disabled:opacity-50 sm:flex-none"
+                    style={{ backgroundColor: '#06C755' }}
+                  >
+                    {savingEdit ? '保存中...' : '保存'}
+                  </button>
+                  <button
+                    onClick={() => { setEditContent(null); setEditName(null); setEditError('') }}
+                    className="min-h-[44px] flex-1 rounded-lg bg-gray-100 px-4 text-sm font-medium text-gray-600 hover:bg-gray-200 sm:flex-none"
+                  >
+                    キャンセル
+                  </button>
                 </div>
               </div>
             )}
-          </div>
+          </aside>
         </>
       )}
+
+      {/* 右下のボタンは、削除の確認シートより前に置く (同じ z-50 で、後ろに置くと確認ボタンに重なる) */}
+      <CcPromptButton prompts={ccPrompts} />
 
       <ConfirmSheet
         open={Boolean(deleteTarget)}
@@ -683,8 +696,6 @@ export default function TemplatesPage() {
           setDeleteError('')
         }}
       />
-
-      <CcPromptButton prompts={ccPrompts} />
     </div>
   )
 }

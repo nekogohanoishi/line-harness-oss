@@ -3,8 +3,8 @@
 import { useMemo, useRef, type RefObject } from 'react'
 import { parseBuilderFlex } from '@line-crm/shared'
 import FlexBuilder from '@/components/flex-builder/flex-builder'
-import FlexPreviewComponent from '@/components/flex-preview'
 import MessageVariableButton from '@/components/message-variable-button'
+import { MessageBubble, TalkArea } from '@/components/messages/talk-preview'
 import {
   collectFlexButtonFields,
   collectFlexTextFields,
@@ -172,9 +172,10 @@ export default function FlexContentEditor({ value, onChange }: Props) {
 
         <div className="min-w-0">
           <p className="mb-2 text-xs font-medium text-gray-500">LINEでの表示</p>
-          <div className="overflow-x-auto rounded-md border border-gray-200 bg-gray-50 p-3">
-            <FlexPreviewComponent content={value} maxWidth={270} />
-          </div>
+          {/* 名前の差し込みは、表示のときだけ分かりやすい言葉にする (保存する内容は変えない) */}
+          <TalkArea>
+            <MessageBubble type="flex" content={value.replaceAll('{{name}}', '［友だちの表示名］')} />
+          </TalkArea>
         </div>
       </div>
 

@@ -1,11 +1,11 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { api, type ApiBroadcast, type BroadcastInsight } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import Header from '@/components/layout/header'
-import FlexPreviewComponent from '@/components/flex-preview'
+import { MessageBubble, TalkArea, TalkNote } from '@/components/messages/talk-preview'
 import TestSendSection from '@/components/broadcasts/test-send-section'
 import ProgressBar from '@/components/broadcasts/progress-bar'
 import SendConfirmDialog from '@/components/broadcasts/send-confirm-dialog'
@@ -14,6 +14,56 @@ import type { Tag } from '@line-crm/shared'
 
 interface BroadcastDetailProps {
   broadcastId: string
+}
+
+// 以下の4つは一覧 (app/broadcasts/page.tsx) と表示をそろえるために共用する。
+export const broadcastStatusConfig: Record<ApiBroadcast['status'], { label: string; className: string }> = {
+  draft: { label: '下書き', className: 'bg-gray-100 text-gray-600' },
+  scheduled: { label: '予約済み', className: 'bg-blue-100 text-blue-700' },
+  sending: { label: '送信中', className: 'bg-yellow-100 text-yellow-700' },
+  sent: { label: '送信完了', className: 'bg-green-100 text-green-700' },
+}
+
+export const broadcastMessageTypeLabels: Record<ApiBroadcast['messageType'], string> = {
+  text: 'テキスト',
+  image: '画像',
+  flex: 'Flexメッセージ',
+}
+
+/** 日本時間の「2026/10/12 20:00」形式 (「現在有効な配信」ページと同じ) */
+export function formatBroadcastTime(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '日時不明'
+  return date.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+/** 送り先を「友だち全員」「タグ「X」の人」のような日本語にする。tagName はタグ名 (見つからなければ未確認と表示) */
+export function broadcastTargetText(broadcast: ApiBroadcast, tagName: string | null | undefined): string {
+  const tag = broadcast.targetTagId ? tagName ?? 'タグ名未確認' : '未指定'
+  if (broadcast.targetType === 'all') return '友だち全員'
+  if (broadcast.targetType === 'tag') return `タグ「${tag}」の人`
+  if (broadcast.targetType === 'multi-account-dedup') {
+    return `複数アカウントの友だち${broadcast.targetTagId ? `のうち、タグ「${tag}」の人` : ''}（重複する人には1通だけ）`
+  }
+  return '条件で絞り込んだ友だち'
+}
+
+/** トーク画面の日付表示にあたる一言。いつ届くか・届いたかを、状態と日時から作る */
+function talkNoteText(broadcast: ApiBroadcast): string {
+  if (broadcast.status === 'sent') return broadcast.sentAt ? `${formatBroadcastTime(broadcast.sentAt)} に送信済み` : '送信済み'
+  if (broadcast.status === 'sending') return '送信中'
+  if (broadcast.status === 'scheduled') return broadcast.scheduledAt ? `${formatBroadcastTime(broadcast.scheduledAt)} に届く` : '送信日時が未設定です'
+  return '下書き（まだ送っていません）'
+}
+
+/** 配信設定の1行。区切り線は濃いめにして、カードの箱は使わない */
+function SettingRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex gap-3 border-b border-gray-300 py-3">
+      <dt className="w-20 shrink-0 text-gray-500">{label}</dt>
+      <dd className="min-w-0 flex-1 break-words text-gray-900">{children}</dd>
+    </div>
+  )
 }
 
 export default function BroadcastDetail({ broadcastId }: BroadcastDetailProps) {
@@ -186,6 +236,8 @@ export default function BroadcastDetail({ broadcastId }: BroadcastDetailProps) {
 
   const raw = broadcast as unknown as Record<string, unknown>
   const accountId = raw.lineAccountId as string | null
+  const targetTagName = broadcast.targetTagId ? tags.find((t) => t.id === broadcast.targetTagId)?.name : undefined
+  const status = broadcastStatusConfig[broadcast.status]
 
   return (
     <div>
@@ -194,7 +246,7 @@ export default function BroadcastDetail({ broadcastId }: BroadcastDetailProps) {
         action={
           <button
             onClick={() => router.push('/broadcasts', { scroll: false })}
-            className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900"
+            className="min-h-[44px] px-3 py-2 text-sm text-gray-600 hover:text-gray-900"
           >
             ← 一覧に戻る
           </button>
@@ -205,62 +257,45 @@ export default function BroadcastDetail({ broadcastId }: BroadcastDetailProps) {
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{error}</div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-        {/* Left: Preview */}
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <h3 className="text-sm font-semibold text-gray-700 mb-3">メッセージプレビュー</h3>
-          {broadcast.messageType === 'flex' ? (
-            <FlexPreviewComponent content={broadcast.messageContent} maxWidth={300} />
-          ) : broadcast.messageType === 'image' ? (
-            (() => {
-              try {
-                const img = JSON.parse(broadcast.messageContent)
-                return <img src={img.originalContentUrl} alt="" className="max-w-[300px] rounded-lg" />
-              } catch { return <p className="text-gray-400 text-sm">画像プレビュー不可</p> }
-            })()
-          ) : (
-            <div className="bg-green-500 text-white rounded-2xl rounded-tl-sm px-4 py-3 max-w-[300px] text-sm whitespace-pre-wrap">
-              {broadcast.messageContent}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8 mb-6">
+        {/* Left: 友だちのトーク画面での見え方。本文は白の吹き出しに入れ、いつ届くかを日付表示のように添える */}
+        <section aria-labelledby="broadcast-message-heading" className="min-w-0">
+          <h3 id="broadcast-message-heading" className="text-sm font-semibold text-gray-700">
+            {broadcast.status === 'sent' ? '送ったメッセージ' : '送るメッセージ'}
+          </h3>
+          <p className="mb-3 mt-1 text-xs leading-5 text-gray-500">友だちのLINEのトーク画面での見え方です。</p>
+          <TalkArea>
+            <div className="space-y-4">
+              <TalkNote>{talkNoteText(broadcast)}</TalkNote>
+              <div className="pl-2">
+                <MessageBubble type={broadcast.messageType} content={broadcast.messageContent} />
+              </div>
             </div>
-          )}
-        </div>
+          </TalkArea>
+        </section>
 
         {/* Right: Settings */}
-        <div className="bg-white rounded-lg border border-gray-200 p-4">
-          <h3 className="text-sm font-semibold text-gray-700 mb-3">配信設定</h3>
-          <dl className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <dt className="text-gray-500">種別</dt>
-              <dd className="text-gray-900">{broadcast.messageType === 'text' ? 'テキスト' : broadcast.messageType === 'image' ? '画像' : 'Flex'}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-gray-500">対象</dt>
-              <dd className="text-gray-900">
-                {broadcast.targetType === 'all' ? '全員' : `タグ: ${broadcast.targetTagId ?? '-'}`}
-                {targetCount != null && <span className="ml-1 text-gray-500">({targetCount.toLocaleString('ja-JP')}人)</span>}
-              </dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-gray-500">ステータス</dt>
-              <dd>
-                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                  broadcast.status === 'draft' ? 'bg-gray-100 text-gray-600' :
-                  broadcast.status === 'scheduled' ? 'bg-blue-100 text-blue-700' :
-                  broadcast.status === 'sending' ? 'bg-yellow-100 text-yellow-700' :
-                  'bg-green-100 text-green-700'
-                }`}>
-                  {broadcast.status === 'draft' ? '下書き' : broadcast.status === 'scheduled' ? '予約済み' : broadcast.status === 'sending' ? '送信中' : '送信完了'}
-                </span>
-              </dd>
-            </div>
+        <section aria-labelledby="broadcast-settings-heading" className="min-w-0">
+          <h3 id="broadcast-settings-heading" className="text-sm font-semibold text-gray-700">配信設定</h3>
+          <dl className="mt-1 border-t border-gray-300 text-sm">
+            <SettingRow label="種類">{broadcastMessageTypeLabels[broadcast.messageType]}</SettingRow>
+            <SettingRow label="送り先">
+              {broadcastTargetText(broadcast, targetTagName)}
+              {targetCount != null && <span className="ml-1 text-gray-500">({targetCount.toLocaleString('ja-JP')}人)</span>}
+            </SettingRow>
+            <SettingRow label="状態">
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${status.className}`}>
+                {status.label}
+              </span>
+            </SettingRow>
             {broadcast.scheduledAt && (
-              <div className="flex justify-between">
-                <dt className="text-gray-500">予約日時</dt>
-                <dd className="text-gray-900">{new Date(broadcast.scheduledAt).toLocaleString('ja-JP')}</dd>
-              </div>
+              <SettingRow label="予約日時">{formatBroadcastTime(broadcast.scheduledAt)}</SettingRow>
+            )}
+            {broadcast.sentAt && (
+              <SettingRow label="送信日時">{formatBroadcastTime(broadcast.sentAt)}</SettingRow>
             )}
           </dl>
-        </div>
+        </section>
       </div>
 
       {/* Segment Builder */}
@@ -269,7 +304,7 @@ export default function BroadcastDetail({ broadcastId }: BroadcastDetailProps) {
           {!showSegmentBuilder ? (
             <button
               onClick={() => setShowSegmentBuilder(true)}
-              className="text-xs text-blue-500 hover:text-blue-700"
+              className="inline-flex min-h-[44px] items-center text-sm font-medium text-blue-700 hover:underline"
             >
               セグメント条件を編集
             </button>

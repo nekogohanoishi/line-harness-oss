@@ -91,6 +91,7 @@ export function TalkTimeline({ children }: { children: ReactNode }) {
  */
 export function TalkStep({
   number,
+  title,
   timing,
   condition,
   note,
@@ -99,7 +100,12 @@ export function TalkStep({
   children,
 }: {
   number: number
-  timing: string
+  /**
+   * 太字の見出し。省略すると「N通目」。1通ずつではなく、シナリオごとの次の送信など
+   * 「何通目か」が意味を持たない並びでは、いつ何が起きるかをここに書く。
+   */
+  title?: string
+  timing?: string
   condition?: string | null
   note?: ReactNode
   /** 見出しの右端に置く操作 (編集ボタンなど) */
@@ -119,9 +125,9 @@ export function TalkStep({
       <div className="min-w-0 flex-1 pt-0.5">
         <div className="flex items-start justify-between gap-2">
           <p className="min-w-0 text-sm leading-6">
-            <span className="font-bold text-gray-900">{number}通目</span>
+            <span className="font-bold text-gray-900">{title ?? `${number}通目`}</span>
             {/* 狭い画面では操作ボタンと並ぶので、タイミングは2行目に回して語の途中で折り返さない */}
-            <span className={`text-gray-700 ${actions ? 'block sm:ml-2 sm:inline' : 'ml-2'}`}>{timing}</span>
+            {timing && <span className={`text-gray-700 ${actions ? 'block sm:ml-2 sm:inline' : 'ml-2'}`}>{timing}</span>}
           </p>
           {actions && <div className="-my-2 flex shrink-0 items-center">{actions}</div>}
         </div>

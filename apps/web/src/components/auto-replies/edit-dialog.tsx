@@ -92,8 +92,8 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
   })()
 
   const handleSave = async () => {
-    if (!keyword.trim()) { setError('keyword を入力してください'); return }
-    if (mode === 'template' && !templateId) { setError('template を選んでください'); return }
+    if (!keyword.trim()) { setError('受信する言葉を入力してください'); return }
+    if (mode === 'template' && !templateId) { setError('使用するテンプレートを選んでください'); return }
     if ((mode === 'inline-text' || mode === 'inline-flex' || mode === 'inline-image' || mode === 'inline-sequence') && !responseContent.trim()) {
       setError('内容を入力してください'); return
     }
@@ -215,7 +215,7 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
               >
                 <option value="">選択してください</option>
                 {flexTemplates.length > 0 && (
-                  <optgroup label="Flex">
+                  <optgroup label="ボタン付きメッセージ">
                     {flexTemplates.map((t) => (
                       <option key={t.id} value={t.id}>{t.name}</option>
                     ))}
@@ -238,7 +238,7 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
               </select>
               {templates.length === 0 && (
                 <p className="text-[11px] text-amber-600 mt-1">
-                  テンプレートがありません。<Link href="/templates" className="underline">/templates</Link> で作成してください。
+                  テンプレートがありません。<Link href="/templates" className="underline">テンプレートの画面</Link>で作成してください。
                 </p>
               )}
             </div>
