@@ -68,6 +68,15 @@ export interface FriendChatStatus {
   /** 進行中シナリオ. 複数あれば最新 (started_at DESC). なければ null */
   activeScenario: { name: string; status: string } | null;
   /**
+   * 一覧に出す「いまのシナリオの状態」. 送信処理中 > 配信待ち > 一時停止 > 完了 の
+   * 優先で1件選ぶ. 一度もシナリオに入っていなければ null.
+   */
+  scenarioSummary: {
+    name: string;
+    status: string;
+    nextDeliveryAt: string | null;
+  } | null;
+  /**
    * "対応済み" フラグ.
    * true = 受信メッセージなし or 受信より新しい送信メッセージあり (= 既に対応済).
    * false = 直近の活動が受信メッセージ (= 未対応).

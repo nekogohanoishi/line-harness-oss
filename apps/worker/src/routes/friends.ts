@@ -304,7 +304,7 @@ friends.get('/api/friends', async (c) => {
 
       type IncomingRow = { friend_id: string; content: string; message_type: string; created_at: string };
       type OutgoingRow = { friend_id: string; max_at: string };
-      type ScenarioRow = { friend_id: string; scenario_name: string; status: string };
+      type ScenarioRow = { friend_id: string; scenario_name: string; status: string; next_delivery_at: string | null };
 
       const [incomingRes, outgoingRes, scenarioRes] = await Promise.all([
         db
@@ -335,11 +335,19 @@ friends.get('/api/friends', async (c) => {
           .all<OutgoingRow>(),
         db
           .prepare(
-            `SELECT fs.friend_id, s.name AS scenario_name, fs.status FROM (
-               SELECT friend_id, scenario_id, status,
-                      ROW_NUMBER() OVER (PARTITION BY friend_id ORDER BY started_at DESC) AS rn
+            // 友だちごとに「いまの状態」を表すシナリオを1件選ぶ。送信処理中 > 配信待ち >
+            // 一時停止 > 完了 の順に優先し、同じ状態なら新しく始まったものを採る。
+            // 以前は active/delivering だけを見ていたため、一時停止中・配信完了・
+            // 未登録の友だちが一覧で区別できなかった。
+            `SELECT fs.friend_id, s.name AS scenario_name, fs.status, fs.next_delivery_at FROM (
+               SELECT friend_id, scenario_id, status, next_delivery_at,
+                      ROW_NUMBER() OVER (
+                        PARTITION BY friend_id
+                        ORDER BY CASE status WHEN 'delivering' THEN 0 WHEN 'active' THEN 1 WHEN 'paused' THEN 2 ELSE 3 END,
+                                 started_at DESC
+                      ) AS rn
                FROM friend_scenarios
-               WHERE status IN ('active', 'delivering') AND friend_id IN (${placeholders})
+               WHERE friend_id IN (${placeholders})
              ) fs
              JOIN scenarios s ON s.id = fs.scenario_id
              WHERE fs.rn = 1`,
@@ -371,7 +379,13 @@ friends.get('/api/friends', async (c) => {
             ? { content: inc.content, messageType: inc.message_type, createdAt: inc.created_at }
             : null,
           latestOutgoingAt: outAt ?? null,
-          activeScenario: sc ? { name: sc.scenario_name, status: sc.status } : null,
+          // activeScenario は従来どおり「進行中 (active / delivering)」のときだけ返す。
+          activeScenario: sc && (sc.status === 'active' || sc.status === 'delivering')
+            ? { name: sc.scenario_name, status: sc.status }
+            : null,
+          scenarioSummary: sc
+            ? { name: sc.scenario_name, status: sc.status, nextDeliveryAt: sc.next_delivery_at }
+            : null,
           handled,
         };
       });
