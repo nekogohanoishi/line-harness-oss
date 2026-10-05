@@ -74,7 +74,7 @@ export default function UsersTable({
           </tbody>
         </table>
       </div>
-      <div className="flex items-center justify-between border-t border-gray-100 px-4 py-3 text-sm text-gray-600">
+      <div className="flex items-center justify-between border-t border-gray-200 px-4 py-3 text-sm text-gray-600">
         <span>
           {fmt.format(total)} 件中 {fmt.format(start)}–{fmt.format(end)} 件
         </span>

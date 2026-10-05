@@ -189,7 +189,7 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
                 { key: 'silent', label: '返信しない' },
                 { key: 'template', label: 'テンプレートを使う' },
                 { key: 'inline-text', label: 'テキスト' },
-                { key: 'inline-flex', label: 'ボタン付きメッセージ' },
+                { key: 'inline-flex', label: 'カード型メッセージ' },
                 { key: 'inline-image', label: '画像' },
                 { key: 'inline-sequence', label: '複数メッセージ' },
               ] as const).map(({ key, label }) => (
@@ -215,7 +215,7 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
               >
                 <option value="">選択してください</option>
                 {flexTemplates.length > 0 && (
-                  <optgroup label="ボタン付きメッセージ">
+                  <optgroup label="カード型メッセージ">
                     {flexTemplates.map((t) => (
                       <option key={t.id} value={t.id}>{t.name}</option>
                     ))}
@@ -237,7 +237,7 @@ export default function EditDialog({ draft, templates, onClose, onSaved }: Props
                 )}
               </select>
               {templates.length === 0 && (
-                <p className="text-[11px] text-amber-600 mt-1">
+                <p className="text-xs text-amber-600 mt-1">
                   テンプレートがありません。<Link href="/templates" className="underline">テンプレートの画面</Link>で作成してください。
                 </p>
               )}

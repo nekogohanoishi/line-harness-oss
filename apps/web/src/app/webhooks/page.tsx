@@ -505,7 +505,7 @@ export default function WebhooksPage() {
       {loading ? (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="px-4 py-4 border-b border-gray-100 flex items-center gap-4 animate-pulse">
+            <div key={i} className="px-4 py-4 border-b border-gray-200 flex items-center gap-4 animate-pulse">
               <div className="flex-1 space-y-2">
                 <div className="h-3 bg-gray-200 rounded w-48" />
                 <div className="h-2 bg-gray-100 rounded w-32" />
@@ -536,7 +536,7 @@ export default function WebhooksPage() {
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-200">
                 {incoming.map((wh) => (
                   <tr key={wh.id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3 text-sm font-medium text-gray-900">{wh.name}</td>
@@ -624,7 +624,7 @@ export default function WebhooksPage() {
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-200">
                 {outgoing.map((wh) => {
                   const hasValidUrl = isHttpsUrl(wh.url)
                   const canActivate = wh.hasSecret && hasValidUrl

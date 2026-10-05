@@ -62,7 +62,7 @@ function formatOffset(minutes: number): string {
 const messageTypeLabels: Record<string, string> = {
   text: 'テキスト',
   image: '画像',
-  flex: 'Flex',
+  flex: 'カード型',
 }
 
 const ccPrompts = [
@@ -435,7 +435,7 @@ export default function RemindersPage() {
                               .map((step) => (
                                 <div
                                   key={step.id}
-                                  className="flex items-start justify-between bg-gray-50 rounded-lg p-3 border border-gray-100"
+                                  className="flex items-start justify-between bg-gray-50 rounded-lg p-3 border border-gray-200"
                                 >
                                   <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-2 mb-1">
@@ -488,7 +488,7 @@ export default function RemindersPage() {
                                 >
                                   <option value="text">テキスト</option>
                                   <option value="image">画像</option>
-                                  <option value="flex">Flex</option>
+                                  <option value="flex">カード型</option>
                                 </select>
                               </div>
                               <div>

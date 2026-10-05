@@ -113,7 +113,7 @@ export default function MenusPage() {
                   <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase">操作</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-200">
                 {items.map((m) => (
                   <tr key={m.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-sm font-medium">{m.name}</td>

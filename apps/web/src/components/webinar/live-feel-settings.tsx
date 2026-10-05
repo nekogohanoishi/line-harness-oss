@@ -94,7 +94,7 @@ export default function LiveFeelSettings({ accountId, eventId, event, setEvent }
               }}
               className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
             />
-            <div className="text-[11px] text-gray-500 mt-1">
+            <div className="text-xs text-gray-500 mt-1">
               実視聴者がこれ未満ならこの数を表示
             </div>
           </label>
@@ -111,7 +111,7 @@ export default function LiveFeelSettings({ accountId, eventId, event, setEvent }
               }}
               className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
             />
-            <div className="text-[11px] text-gray-500 mt-1">
+            <div className="text-xs text-gray-500 mt-1">
               +0〜N 人のランダム値を加算
             </div>
           </label>
@@ -128,7 +128,7 @@ export default function LiveFeelSettings({ accountId, eventId, event, setEvent }
           />
           <span>動画下部にスクリプト化されたコメントを流す</span>
         </label>
-        <div className="text-[11px] text-gray-500 mt-1">
+        <div className="text-xs text-gray-500 mt-1">
           コメント本文・タイムスタンプは「コメント演出」サブタブで管理します。
           この設定を OFF にすると、行データはそのまま残しつつ視聴ページには表示されません。
         </div>

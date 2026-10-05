@@ -188,7 +188,7 @@ export default function StaffShiftsPage() {
                   </div>
                 )
               })}
-              <div className="flex flex-wrap items-center gap-3 pt-3 border-t border-gray-100 mt-3">
+              <div className="flex flex-wrap items-center gap-3 pt-3 border-t border-gray-200 mt-3">
                 <label className="text-xs text-gray-600 flex items-center gap-2">
                   開始日
                   <input
@@ -241,7 +241,7 @@ export default function StaffShiftsPage() {
                       <th className="px-4 py-2 text-right text-xs font-semibold text-gray-500 uppercase">操作</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody className="divide-y divide-gray-200">
                     {shifts.map((s) => (
                       <tr key={s.id} className="hover:bg-gray-50">
                         <td className="px-4 py-2 text-sm tabular-nums">{s.work_date}</td>

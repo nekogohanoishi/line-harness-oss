@@ -193,7 +193,7 @@ export default function TagsPage() {
                 <th className="px-4 py-3" />
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-gray-200">
               {loading ? (
                 <tr><td colSpan={4} className="px-4 py-10 text-center text-sm text-gray-500">読み込み中...</td></tr>
               ) : items.length === 0 ? (

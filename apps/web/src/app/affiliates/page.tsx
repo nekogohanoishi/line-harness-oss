@@ -102,19 +102,19 @@ export default function AttributionPage() {
       {/* Summary cards */}
       {summary && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          <div className="bg-white rounded-xl p-5 border border-gray-100">
+          <div className="bg-white rounded-xl p-5 border border-gray-200">
             <p className="text-sm text-gray-500">総友だち数</p>
             <p className="text-3xl font-bold text-gray-900 mt-1">{summary.totalFriends}</p>
           </div>
-          <div className="bg-white rounded-xl p-5 border border-gray-100">
+          <div className="bg-white rounded-xl p-5 border border-gray-200">
             <p className="text-sm text-gray-500">ref 経由</p>
             <p className="text-3xl font-bold text-green-600 mt-1">{summary.friendsWithRef}</p>
           </div>
-          <div className="bg-white rounded-xl p-5 border border-gray-100">
+          <div className="bg-white rounded-xl p-5 border border-gray-200">
             <p className="text-sm text-gray-500">ref 不明</p>
             <p className="text-3xl font-bold text-gray-400 mt-1">{summary.friendsWithoutRef}</p>
           </div>
-          <div className="bg-white rounded-xl p-5 border border-gray-100">
+          <div className="bg-white rounded-xl p-5 border border-gray-200">
             <p className="text-sm text-gray-500">経路数</p>
             <p className="text-3xl font-bold text-blue-600 mt-1">{summary.routes.length}</p>
           </div>
@@ -183,7 +183,7 @@ export default function AttributionPage() {
                               </p>
                               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                                 {detail.friends.map((f) => (
-                                  <div key={f.id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-100">
+                                  <div key={f.id} className="flex items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-200">
                                     <span className="text-sm text-gray-800 font-medium truncate">{f.displayName}</span>
                                     <span className="text-xs text-gray-400 ml-2 shrink-0">{formatDate(f.trackedAt)}</span>
                                   </div>

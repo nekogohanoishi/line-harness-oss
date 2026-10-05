@@ -251,7 +251,7 @@ export default function RichMenusListPage() {
               >
                 {/* thumbnail */}
                 <div
-                  className="w-full bg-gray-100 border-b border-gray-100"
+                  className="w-full bg-gray-100 border-b border-gray-200"
                   style={{
                     aspectRatio: g.size === 'large' ? '2500 / 1686' : '2500 / 843',
                   }}
@@ -285,7 +285,7 @@ export default function RichMenusListPage() {
                   </div>
                 </div>
               </Link>
-              <div className="border-t border-gray-100 px-2 py-1 flex justify-end items-center gap-1 text-xs">
+              <div className="border-t border-gray-200 px-2 py-1 flex justify-end items-center gap-1 text-xs">
                 {g.status === 'published' && (
                   <button
                     onClick={() => setApplyTo(g)}
@@ -465,7 +465,7 @@ function ExternalSection({
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
                     {m.isCurrentDefault && (
                       <span
-                        className="text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded"
+                        className="text-xs font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded"
                         title="LINE 公式アカウントの全員のデフォルト"
                       >
                         全員に表示中
@@ -473,7 +473,7 @@ function ExternalSection({
                     )}
                     <span className="font-medium break-words">{m.name}</span>
                   </div>
-                  <div className="text-[11px] font-normal text-gray-500 break-words">
+                  <div className="text-xs font-normal text-gray-500 break-words">
                     {m.chatBarText}
                   </div>
                   <TechnicalDetails
@@ -488,7 +488,7 @@ function ExternalSection({
               render: (m) => (
                 <span className="text-xs text-gray-600 whitespace-nowrap">
                   {m.size.width}×{m.size.height}
-                  <span className="text-[10px] text-gray-400 ml-1">・{m.areasCount}ボタン</span>
+                  <span className="text-xs text-gray-400 ml-1">・{m.areasCount}ボタン</span>
                 </span>
               ),
             },

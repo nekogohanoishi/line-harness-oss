@@ -54,7 +54,7 @@ export default function AccountSettingsSection({
   }
 
   return (
-    <div className="space-y-3 mt-3 pt-3 border-t border-gray-100">
+    <div className="space-y-3 mt-3 pt-3 border-t border-gray-200">
       <p className="text-xs font-medium text-gray-600">アカウント設定</p>
 
       <div>

@@ -86,7 +86,7 @@ export default function WebinarSettingsTab({ accountId, eventId, event, setEvent
               }`}
             >
               <div>{t.label}</div>
-              <div className="text-[10px] text-gray-500 mt-0.5">{t.sub}</div>
+              <div className="text-xs text-gray-500 mt-0.5">{t.sub}</div>
             </button>
           )
         })}

@@ -164,7 +164,7 @@ export default function DuplicatesPage() {
                       <th className="px-4 py-3 text-right">重複率</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100 bg-white">
+                  <tbody className="divide-y divide-gray-200 bg-white">
                     {data.perAccount.map((row) => (
                       <tr key={row.accountId}>
                         <td className="px-4 py-3 font-medium text-gray-900">{row.accountName}</td>
@@ -206,7 +206,7 @@ export default function DuplicatesPage() {
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100 bg-white">
+                  <tbody className="divide-y divide-gray-200 bg-white">
                     {data.perAccount.map((row) => (
                       <tr key={row.accountId}>
                         <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">

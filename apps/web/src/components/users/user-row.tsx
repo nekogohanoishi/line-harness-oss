@@ -48,7 +48,7 @@ export default function UserRow({ row, accountColorMap }: Props) {
   return (
     <>
       <tr
-        className="cursor-pointer border-b border-gray-100 hover:bg-gray-50"
+        className="cursor-pointer border-b border-gray-200 hover:bg-gray-50"
         onClick={() => setExpanded((v) => !v)}
       >
         <td className="px-4 py-3 text-sm font-medium text-gray-900">
@@ -87,7 +87,7 @@ export default function UserRow({ row, accountColorMap }: Props) {
         </td>
       </tr>
       {expanded && (
-        <tr className="border-b border-gray-100 bg-gray-50">
+        <tr className="border-b border-gray-200 bg-gray-50">
           <td colSpan={5} className="px-6 py-4">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div>

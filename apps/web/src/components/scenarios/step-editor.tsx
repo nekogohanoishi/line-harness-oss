@@ -14,7 +14,7 @@ interface StepEditorProps {
 const messageTypeLabels: Record<MessageType, string> = {
   text: 'テキスト',
   image: '画像',
-  flex: 'Flexメッセージ',
+  flex: 'カード型メッセージ',
 }
 
 function minutesToDisplay(minutes: number): { days: number; hours: number; mins: number } {
@@ -49,7 +49,7 @@ export default function StepEditor({ step, stepOrder, onSave, onCancel }: StepEd
       try {
         JSON.parse(messageContent)
       } catch {
-        setError('FlexメッセージのJSONが無効です')
+        setError('カード型メッセージの設定（JSON）が正しくありません')
         return
       }
     }

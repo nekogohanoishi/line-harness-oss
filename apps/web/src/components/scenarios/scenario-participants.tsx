@@ -229,7 +229,7 @@ export default function ScenarioParticipants({ scenarioId, scenarioActive, onCha
           </p>
         </div>
       ) : (
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-gray-200">
           {items.map((participant) => (
             <div key={participant.id} className="grid gap-3 px-4 py-4 sm:px-6 lg:grid-cols-[minmax(220px,1.3fr)_130px_170px_150px_112px] lg:items-center">
               <div className="flex min-w-0 items-center gap-3">

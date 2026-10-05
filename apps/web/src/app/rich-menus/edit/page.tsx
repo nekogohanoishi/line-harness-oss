@@ -551,7 +551,7 @@ function Editor({
                 onChange={(e) => setName(e.target.value)}
                 className="mt-1 block w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
               />
-              <p className="mt-1 text-[11px] text-gray-500">管理画面でだけ使う名前です。友だちには表示されません。</p>
+              <p className="mt-1 text-xs text-gray-500">管理画面でだけ使う名前です。友だちには表示されません。</p>
             </label>
             <label className="block">
               <span className="text-xs font-medium text-gray-600">トーク画面下の文言</span>
@@ -561,7 +561,7 @@ function Editor({
                 maxLength={14}
                 className="mt-1 block w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
               />
-              <p className="mt-1 text-[11px] text-gray-500">14文字以内。友だちのトーク画面で、メニューを開く前に表示されます。</p>
+              <p className="mt-1 text-xs text-gray-500">14文字以内。友だちのトーク画面で、メニューを開く前に表示されます。</p>
             </label>
           </section>
 
@@ -604,16 +604,16 @@ function Editor({
                 >
                   {activePage.imageR2Key ? '画像を差し替え' : '画像を選択'}
                 </button>
-                <p className="mt-1.5 text-[11px] text-gray-500">
+                <p className="mt-1.5 text-xs text-gray-500">
                   PNG / JPEG, {SIZE_LABEL[group.size]}, 1MB 以下
                 </p>
                 {activePage.id.startsWith('tmp-') && (
-                  <p className="mt-1 text-[11px] text-amber-600">
+                  <p className="mt-1 text-xs text-amber-600">
                     新規ページは「下書き保存」してから画像をアップロードしてください
                   </p>
                 )}
               </div>
-              <p className="text-[11px] text-gray-500 pt-3 border-t border-gray-100">
+              <p className="text-xs text-gray-500 pt-3 border-t border-gray-200">
                 中央の画像上をドラッグすると、ボタンとして反応する範囲を追加できます。
               </p>
             </section>

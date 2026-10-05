@@ -199,7 +199,7 @@ export default function FakeCommentsList({ accountId, eventId, videoDurationSeco
               }
               className="w-full border border-gray-300 rounded px-2 py-1 text-sm"
             />
-            <div className="text-[10px] text-gray-500 mt-0.5">{formatMmSs(form.at_seconds)}</div>
+            <div className="text-xs text-gray-500 mt-0.5">{formatMmSs(form.at_seconds)}</div>
           </label>
           <label className="block md:col-span-3">
             <div className="text-xs text-gray-600 mb-1">表示名 (最大30字)</div>

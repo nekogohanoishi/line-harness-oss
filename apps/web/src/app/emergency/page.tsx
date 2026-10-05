@@ -226,7 +226,7 @@ export default function EmergencyPage() {
         <h2 className="text-sm font-semibold text-gray-800 mb-3">この画面での実行結果</h2>
         <div className="space-y-2">
           {actions.map((action) => (
-            <div key={action.id} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
+            <div key={action.id} className="flex items-center justify-between py-2 border-b border-gray-200 last:border-0">
               <span className="text-sm text-gray-600">{action.label}</span>
               <span className={`text-xs font-medium ${
                 action.status === 'done'

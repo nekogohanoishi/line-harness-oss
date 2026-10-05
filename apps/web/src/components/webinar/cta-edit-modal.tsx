@@ -164,7 +164,7 @@ export default function CtaEditModal({ existing, videoDurationSeconds, onClose, 
                   }`}
                 >
                   <div className="text-sm font-bold">{m.label}</div>
-                  <div className="text-[10px] text-gray-500">{m.desc}</div>
+                  <div className="text-xs text-gray-500">{m.desc}</div>
                 </button>
               ))}
             </div>

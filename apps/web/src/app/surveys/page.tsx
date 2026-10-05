@@ -724,7 +724,7 @@ export default function SurveysPage() {
                       選択肢を追加
                     </button>
 
-                    <details className="border-t border-gray-100 pt-3">
+                    <details className="border-t border-gray-200 pt-3">
                       <summary className="cursor-pointer text-xs font-medium text-gray-500">
                         データ連携設定
                       </summary>

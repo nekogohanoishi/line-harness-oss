@@ -100,7 +100,7 @@ export default function ScenarioList({ scenarios, onToggleActive, onDelete, onSh
           <span className="sr-only">操作</span>
         </div>
 
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-gray-200">
           {scenarios.map((scenario) => {
             const stepCount = scenario.stepCount ?? 0
             const triggerLabel = triggerLabels[scenario.triggerType] ?? '未設定'

@@ -37,7 +37,7 @@ const triggerOptions: { value: ScenarioTriggerType; label: string }[] = [
 const messageTypeOptions: { value: MessageType; label: string }[] = [
   { value: 'text', label: 'テキスト' },
   { value: 'image', label: '画像' },
-  { value: 'flex', label: 'Flex' },
+  { value: 'flex', label: 'カード型' },
 ]
 
 const modeBadgeStyle: Record<DeliveryMode, { bg: string; text: string; label: string }> = {
@@ -127,9 +127,9 @@ function buildStepSnippet(messageType: string, content: string): string {
   if (messageType === 'flex') {
     try {
       const text = firstFlexText(JSON.parse(content))
-      return text ? truncate(readable(text).replace(/\s+/g, ' ')) : 'Flexメッセージ'
+      return text ? truncate(readable(text).replace(/\s+/g, ' ')) : 'カード型メッセージ'
     } catch {
-      return 'Flexメッセージ'
+      return 'カード型メッセージ'
     }
   }
   if (messageType === 'image') return '画像メッセージ'
@@ -1669,7 +1669,7 @@ export default function ScenarioDetailClient({ scenarioId }: { scenarioId: strin
             value={recipientQuery}
             onChange={(e) => setRecipientQuery(e.target.value)}
           />
-          <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+          <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-200">
             {recipientSearching ? (
               <p className="p-3 text-xs text-gray-400">検索中...</p>
             ) : recipientResults.length === 0 ? (

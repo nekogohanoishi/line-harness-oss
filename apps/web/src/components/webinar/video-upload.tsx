@@ -178,7 +178,7 @@ export default function VideoUpload({ accountId, eventId, event, onEventUpdated 
             </div>
             <div>
               <div className="text-xs text-gray-500">R2 key</div>
-              <div className="text-gray-800 font-mono text-[10px] truncate" title={event.video_r2_key ?? ''}>
+              <div className="text-gray-800 font-mono text-xs truncate" title={event.video_r2_key ?? ''}>
                 {event.video_r2_key ?? '-'}
               </div>
             </div>

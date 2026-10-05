@@ -228,7 +228,7 @@ export default function FriendEventsPage() {
 
       <div className="border-y border-gray-200 bg-white">
         {loading ? (
-          <div className="divide-y divide-gray-100">
+          <div className="divide-y divide-gray-200">
             {Array.from({ length: 6 }).map((_, index) => (
               <div key={index} className="flex h-28 animate-pulse items-center gap-4 px-4 sm:px-5">
                 <div className="h-12 w-12 shrink-0 rounded-full bg-gray-200" />
@@ -256,7 +256,7 @@ export default function FriendEventsPage() {
             該当する履歴はありません。
           </div>
         ) : (
-          <ul className="divide-y divide-gray-100">
+          <ul className="divide-y divide-gray-200">
             {events.map((event) => {
               const presentation = eventPresentation[event.eventType]
               const formatted = formatEventDate(event.eventAt)
@@ -273,7 +273,7 @@ export default function FriendEventsPage() {
                             {presentation.label}
                           </p>
                           {event.isUnread && (
-                            <span className="rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-bold text-white">新着</span>
+                            <span className="rounded-full bg-rose-500 px-1.5 py-0.5 text-xs font-bold text-white">新着</span>
                           )}
                         </div>
                       </div>

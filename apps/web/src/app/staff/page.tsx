@@ -260,7 +260,7 @@ export default function StaffPage() {
       {loading ? (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
           {[...Array(3)].map((_, i) => (
-            <div key={i} className="px-4 py-4 border-b border-gray-100 flex items-center gap-4 animate-pulse">
+            <div key={i} className="px-4 py-4 border-b border-gray-200 flex items-center gap-4 animate-pulse">
               <div className="flex-1 space-y-2">
                 <div className="h-3 bg-gray-200 rounded w-32" />
                 <div className="h-2 bg-gray-100 rounded w-48" />
@@ -288,7 +288,7 @@ export default function StaffPage() {
                 <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">操作</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-gray-200">
               {members.map((member) => (
                 <tr key={member.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 font-medium text-gray-900">{member.name}</td>

@@ -334,7 +334,7 @@ export default function Sidebar() {
           <div key={si}>
             {section.label && (
               <div className="pt-5 pb-2 px-3">
-                <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{section.label}</p>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">{section.label}</p>
               </div>
             )}
             {section.items.filter((item) => {
@@ -368,7 +368,7 @@ export default function Sidebar() {
                   <span className="flex-1">{item.label}</span>
                   {badgeCount > 0 && (
                     <span
-                      className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${
+                      className={`rounded-full px-1.5 py-0.5 text-xs font-bold tabular-nums ${
                         active ? 'bg-white text-rose-600' : 'bg-rose-500 text-white'
                       }`}
                     >
@@ -386,9 +386,9 @@ export default function Sidebar() {
       {/* フッター (ホームインジケータに隠れないようセーフエリア分を確保) */}
       <div className="border-t border-gray-200 shrink-0 lh-safe-pb">
         {staffName && (
-          <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-100">
+          <div className="px-3 py-2 text-xs text-gray-500 border-t border-gray-200">
             <div className="font-medium text-gray-700">{staffName}</div>
-            <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-medium mt-0.5 ${
+            <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium mt-0.5 ${
               staffRole === 'owner' ? 'bg-yellow-100 text-yellow-800' :
               staffRole === 'admin' ? 'bg-blue-100 text-blue-800' :
               'bg-gray-100 text-gray-600'
@@ -448,7 +448,7 @@ export default function Sidebar() {
           </svg>
           {/* メニューを閉じている間も未読の存在が分かるようにする */}
           {!isOpen && totalBadgeCount > 0 && (
-            <span className="absolute top-1 right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold leading-[18px] text-center tabular-nums ring-2 ring-white">
+            <span className="absolute top-1 right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-xs font-bold leading-[18px] text-center tabular-nums ring-2 ring-white">
               {totalBadgeCount > 99 ? '99+' : totalBadgeCount}
             </span>
           )}
@@ -459,7 +459,7 @@ export default function Sidebar() {
         <div className="min-w-0 flex-1 px-1">
           <p className="text-[15px] font-bold text-gray-900 truncate leading-tight">{pageLabel}</p>
           {selectedAccount && (
-            <p className="text-[11px] text-gray-400 truncate leading-tight">
+            <p className="text-xs text-gray-400 truncate leading-tight">
               {selectedAccount.displayName || selectedAccount.name}
             </p>
           )}

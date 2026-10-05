@@ -296,7 +296,7 @@ export default function ScenarioModePicker({ open, onClose, onCreate }: Props) {
             <h2 className="text-lg font-semibold text-gray-900">作成内容を確認</h2>
             <p className="mt-1 text-sm text-gray-500">シナリオは停止中で作成されます。ステップを追加してから有効にしてください。</p>
 
-            <dl className="mt-5 divide-y divide-gray-100 border-y border-gray-200 text-sm">
+            <dl className="mt-5 divide-y divide-gray-200 border-y border-gray-200 text-sm">
               <div className="grid grid-cols-[110px_1fr] gap-4 py-3">
                 <dt className="text-gray-500">名前</dt>
                 <dd className="font-medium text-gray-900 break-words">{name.trim()}</dd>

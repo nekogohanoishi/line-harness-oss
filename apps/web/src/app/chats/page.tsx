@@ -1010,7 +1010,7 @@ export default function ChatsPage() {
         {/* Left Panel: Chat List */}
         <section className={`w-full flex-col overflow-hidden bg-white lg:w-[21rem] lg:flex-shrink-0 lg:border-r lg:border-gray-200 xl:w-[22rem] 2xl:w-[23rem] ${selectedChatId ? 'hidden lg:flex' : 'flex'}`}>
           <div className="border-b border-gray-200 bg-white">
-            <div className="flex h-10 gap-1 overflow-x-auto border-b border-gray-100 px-2">
+            <div className="flex h-10 gap-1 overflow-x-auto border-b border-gray-200 px-2">
               {inboxFilters.map((filter) => {
                 const active = inboxFilter === filter.key
                 return (
@@ -1073,27 +1073,27 @@ export default function ChatsPage() {
             </div>
 
             {activeFilters.length > 0 && (
-              <div className="flex min-h-8 flex-wrap items-center gap-1 border-t border-gray-100 px-2 py-1">
+              <div className="flex min-h-8 flex-wrap items-center gap-1 border-t border-gray-200 px-2 py-1">
                 {activeFilters.map((filter) => (
                   <button
                     key={filter.key}
                     type="button"
                     onClick={filter.clear}
-                    className="inline-flex h-6 max-w-full items-center gap-1 rounded bg-gray-100 px-2 text-[11px] text-gray-700 hover:bg-gray-200"
+                    className="inline-flex h-6 max-w-full items-center gap-1 rounded bg-gray-100 px-2 text-xs text-gray-700 hover:bg-gray-200"
                     title={`${filter.label}を解除`}
                   >
                     <span className="truncate">{filter.label}</span>
                     <span aria-hidden="true">×</span>
                   </button>
                 ))}
-                <button type="button" onClick={clearFilters} className="ml-auto h-6 px-1 text-[11px] text-gray-500 hover:text-gray-900">
+                <button type="button" onClick={clearFilters} className="ml-auto h-6 px-1 text-xs text-gray-500 hover:text-gray-900">
                   すべて解除
                 </button>
               </div>
             )}
 
             {showFilters && (
-              <div className="grid grid-cols-2 gap-2 border-t border-gray-100 bg-gray-50 px-2 py-2">
+              <div className="grid grid-cols-2 gap-2 border-t border-gray-200 bg-gray-50 px-2 py-2">
                 <label className="min-w-0">
                   <span className="sr-only">担当者で絞り込む</span>
                   <select
@@ -1158,7 +1158,7 @@ export default function ChatsPage() {
             {showFilters && showOperatorMetrics && (
               <div className="max-h-52 overflow-auto border-t border-gray-200">
                 {/* モバイル: 5列の表は 375px では読めないので1人1ブロックに展開する */}
-                <ul className="divide-y divide-gray-100 lg:hidden">
+                <ul className="divide-y divide-gray-200 lg:hidden">
                   {operatorMetrics.map((metric) => (
                     <li key={metric.operatorId ?? 'unassigned'} className="px-3 py-2.5">
                       <div className="flex items-baseline justify-between gap-2">
@@ -1181,7 +1181,7 @@ export default function ChatsPage() {
                   )}
                 </ul>
 
-                <table className="hidden w-full table-fixed text-left text-[11px] lg:table">
+                <table className="hidden w-full table-fixed text-left text-xs lg:table">
                   <thead className="sticky top-0 bg-gray-50 text-gray-500">
                     <tr>
                       <th className="w-[32%] px-3 py-2 font-medium">担当者</th>
@@ -1191,7 +1191,7 @@ export default function ChatsPage() {
                       <th className="px-3 py-2 text-right font-medium">初回応答</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody className="divide-y divide-gray-200">
                     {operatorMetrics.map((metric) => (
                       <tr key={metric.operatorId ?? 'unassigned'} className="text-gray-700">
                         <td className="truncate px-3 py-2" title={metric.operatorName}>{metric.operatorName}</td>
@@ -1214,7 +1214,7 @@ export default function ChatsPage() {
               <form onSubmit={handleCreateOperator} className="border-t border-gray-200 bg-gray-50 px-3 py-2">
                 <div className="grid grid-cols-2 gap-2">
                   <label>
-                    <span className="mb-1 block text-[11px] text-gray-500">担当者名</span>
+                    <span className="mb-1 block text-xs text-gray-500">担当者名</span>
                     <input
                       type="text"
                       value={newOperatorName}
@@ -1224,7 +1224,7 @@ export default function ChatsPage() {
                     />
                   </label>
                   <label>
-                    <span className="mb-1 block text-[11px] text-gray-500">メールアドレス</span>
+                    <span className="mb-1 block text-xs text-gray-500">メールアドレス</span>
                     <input
                       type="email"
                       value={newOperatorEmail}
@@ -1306,7 +1306,7 @@ export default function ChatsPage() {
             {loading ? (
               <div>
                 {[...Array(8)].map((_, i) => (
-                  <div key={i} className="flex h-16 items-center gap-2 border-b border-gray-100 px-2 animate-pulse">
+                  <div key={i} className="flex h-16 items-center gap-2 border-b border-gray-200 px-2 animate-pulse">
                     <div className="h-4 w-4 rounded bg-gray-100" />
                     <div className="h-9 w-9 rounded-full bg-gray-200" />
                     <div className="min-w-0 flex-1 space-y-2">
@@ -1327,7 +1327,7 @@ export default function ChatsPage() {
                   const previewRaw = chat.lastMessageContent ?? ''
                   const preview = (() => {
                     if (chat.lastMessageType === 'image') return '[画像]'
-                    if (chat.lastMessageType === 'flex') return '[Flexメッセージ]'
+                    if (chat.lastMessageType === 'flex') return '[カード型メッセージ]'
                     if (chat.lastMessageType === 'sticker') return '[スタンプ]'
                     if (chat.lastMessageType === 'video') return '[動画]'
                     if (chat.lastMessageType === 'audio') return '[音声]'
@@ -1347,7 +1347,7 @@ export default function ChatsPage() {
                   return (
                     <div
                       key={chat.id}
-                      className={`group relative flex h-16 border-b border-gray-100 transition-colors ${
+                      className={`group relative flex h-16 border-b border-gray-200 transition-colors ${
                         isSelected && !selectedFriendId
                           ? 'bg-green-50/80'
                           : selectedChatIds.has(chat.id)
@@ -1386,7 +1386,7 @@ export default function ChatsPage() {
                                 )}
                                 <p className={`truncate text-sm text-gray-900 ${hasUnreadMessage ? 'font-semibold' : 'font-medium'}`}>{chat.friendName}</p>
                               </div>
-                              <span className={`flex-shrink-0 text-[11px] tabular-nums ${overdue ? 'font-medium text-red-700' : 'text-gray-400'}`}>
+                              <span className={`flex-shrink-0 text-xs tabular-nums ${overdue ? 'font-medium text-red-700' : 'text-gray-400'}`}>
                                 {overdue ? '期限超過' : formatListDatetime(chat.lastMessageAt)}
                               </span>
                             </div>
@@ -1398,7 +1398,7 @@ export default function ChatsPage() {
                                 {chat.lastMessageDirection === 'outgoing' && <span className="mr-1 text-gray-400">↪</span>}
                                 {preview || <span className="italic text-gray-300">(まだメッセージなし)</span>}
                               </p>
-                              <div className="flex flex-shrink-0 items-center gap-1.5 text-[10px]">
+                              <div className="flex flex-shrink-0 items-center gap-1.5 text-xs">
                                 {showStatusText && (
                                   <span className={statusConfig[chat.status].className.split(' ').slice(1).join(' ')}>
                                   {statusConfig[chat.status].label}
@@ -1478,7 +1478,7 @@ export default function ChatsPage() {
                       <p className="truncate text-sm font-semibold text-gray-900">
                         {chatDetail.friendName}
                       </p>
-                      <p className="truncate text-[11px] text-gray-400">{operatorNameById(chatDetail.operatorId)}</p>
+                      <p className="truncate text-xs text-gray-400">{operatorNameById(chatDetail.operatorId)}</p>
                     </div>
                   </div>
 
@@ -1620,7 +1620,7 @@ export default function ChatsPage() {
                       <div key={msg.id}>
                         {showDateSep && (
                           <div className="flex justify-center my-3">
-                            <span className="rounded bg-white/90 px-2.5 py-1 text-[11px] text-gray-500 shadow-sm">
+                            <span className="rounded bg-white/90 px-2.5 py-1 text-xs text-gray-500 shadow-sm">
                               {formatYmdSlash(msg.createdAt)}
                             </span>
                           </div>
@@ -1628,7 +1628,7 @@ export default function ChatsPage() {
                         {showUnreadSep && (
                           <div className="my-3 flex items-center gap-2" aria-label="ここから未読">
                             <span className="h-px flex-1 bg-red-300/70" />
-                            <span className="rounded-full bg-red-500 px-2.5 py-0.5 text-[11px] font-medium text-white">
+                            <span className="rounded-full bg-red-500 px-2.5 py-0.5 text-xs font-medium text-white">
                               ここから未読
                             </span>
                             <span className="h-px flex-1 bg-red-300/70" />
@@ -1662,7 +1662,7 @@ export default function ChatsPage() {
                             >
                               {bubbleContent}
                             </div>
-                            <span className="mt-0.5 px-1 text-[11px] text-gray-500">
+                            <span className="mt-0.5 px-1 text-xs text-gray-500">
                               {new Date(msg.createdAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           </div>
@@ -1675,7 +1675,7 @@ export default function ChatsPage() {
 
               {/* 返信・メモ・送信設定を1つのコンポーザーに集約する。 */}
               <footer className={`flex-shrink-0 border-t border-gray-200 ${composerMode === 'note' ? 'bg-amber-50' : 'bg-white'}`}>
-                <div className="flex min-h-10 items-center gap-1 overflow-x-auto border-b border-gray-100 px-2">
+                <div className="flex min-h-10 items-center gap-1 overflow-x-auto border-b border-gray-200 px-2">
                   <div className="flex h-8 flex-shrink-0 items-center rounded-md bg-gray-100 p-0.5" role="tablist" aria-label="入力種別">
                     <button
                       type="button"
@@ -1712,7 +1712,7 @@ export default function ChatsPage() {
                   )}
                   <div className="ml-auto" />
                   {composerMode === 'note' ? (
-                    <span className="flex-shrink-0 px-1 text-[11px] text-amber-700">相手には送信されません</span>
+                    <span className="flex-shrink-0 px-1 text-xs text-amber-700">相手には送信されません</span>
                   ) : (
                     <button
                       type="button"
@@ -1730,7 +1730,7 @@ export default function ChatsPage() {
                 </div>
 
                 {composerMode === 'reply' && showSendOptions && (
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
                     <label className="inline-flex cursor-pointer select-none items-center gap-2">
                       <input
                         type="checkbox"

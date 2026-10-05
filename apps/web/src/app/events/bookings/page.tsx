@@ -231,7 +231,7 @@ function BookingsInner() {
               <Link
                 key={choice.id}
                 href={`/events/bookings?id=${encodeURIComponent(choice.id)}`}
-                className="flex items-center justify-between gap-3 px-4 py-3.5 min-h-16 border-b border-gray-100 last:border-b-0 hover:bg-gray-50 active:bg-gray-100"
+                className="flex items-center justify-between gap-3 px-4 py-3.5 min-h-16 border-b border-gray-200 last:border-b-0 hover:bg-gray-50 active:bg-gray-100"
               >
                 <div className="min-w-0">
                   <div className="font-medium text-gray-900 truncate">{choice.name}</div>

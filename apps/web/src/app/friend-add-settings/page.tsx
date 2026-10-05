@@ -240,7 +240,7 @@ function OrphanSection({
           所属していた LINE アカウントが削除されたシナリオです。webhook は元の line_account_id でしか発火しないため実質配信されません。残しておく理由がなければ削除推奨。
         </p>
       </div>
-      <ul className="divide-y divide-gray-100">
+      <ul className="divide-y divide-gray-200">
         {scenarios.map(scenario => (
           <li key={scenario.id} className="px-4 py-3 flex items-center justify-between gap-3">
             <div className="min-w-0 flex-1">
@@ -310,7 +310,7 @@ function AccountSection({
           </button>
         </div>
       ) : (
-        <ul className="divide-y divide-gray-100">
+        <ul className="divide-y divide-gray-200">
           {row.scenarios.map(scenario => (
             <li key={scenario.id} className="px-4 py-3 flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
@@ -320,7 +320,7 @@ function AccountSection({
                     {scenario.isGlobal && (
                       <span
                         title="このシナリオは line_account_id=NULL のため全アカウント共通で発火します"
-                        className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium"
+                        className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium"
                       >
                         全アカ共通
                       </span>

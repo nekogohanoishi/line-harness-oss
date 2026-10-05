@@ -180,7 +180,7 @@ export default function ScenariosPage() {
       </div>
 
       {loading ? (
-        <div className="divide-y divide-gray-100 overflow-hidden rounded-lg border border-gray-200 bg-white">
+        <div className="divide-y divide-gray-200 overflow-hidden rounded-lg border border-gray-200 bg-white">
           {[...Array(3)].map((_, i) => (
             <div key={i} className="p-5 animate-pulse space-y-3">
               <div className="h-4 bg-gray-200 rounded w-3/4" />

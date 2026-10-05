@@ -22,8 +22,8 @@ const MOBILE_TAG_LIMIT = 3
 //  - lg 以上: 5カラムのグリッド
 //    対応マーク / 名前 / シナリオ / 受信メッセージ / ★つきタグ・友だち情報
 //  - lg 未満: 1枚のカード。横スクロールを起こさずに 375px 幅へ収めるため、
-//    表示は「アイコン+表示名 / ステータス / 登録日 / 受信メッセージ / タグ」に
-//    絞り、シナリオなどの補助情報は詳細（チャット画面）側に委ねる。
+//    表示は「アイコン+表示名 / ステータス / 登録日 / シナリオの状態 /
+//    受信メッセージ / タグ」に絞る。シナリオは状態と名前の1行だけ出す。
 //
 // Clicking the row navigates to the per-friend chat view at
 // `/chats?friend=<id>` so the operator can read history / reply / mark as
@@ -33,7 +33,11 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
   const router = useRouter()
   const navigateToChat = () => router.push(`/chats?friend=${friend.id}`)
   const incoming = friend.latestIncomingMessage
-  const scenario = friend.activeScenario
+  // scenarioSummary は一時停止・完了も含む「いまの状態」。古い Worker が返さない間は
+  // 進行中だけの activeScenario で代用する。
+  const scenario = friend.scenarioSummary
+    ?? (friend.activeScenario ? { ...friend.activeScenario, nextDeliveryAt: null } : null)
+  const scenarioState = describeScenarioState(scenario)
   const isFollowing = friend.isFollowing
   const incomingPreview = incoming
     ? (incoming.messageType === 'text' ? incoming.content : `[${incoming.messageType}]`)
@@ -63,7 +67,7 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); onTagEditClick() }}
-      className="text-[11px] text-blue-600 hover:text-blue-800 underline"
+      className="text-xs text-blue-600 hover:text-blue-800 underline"
     >
       タグ編集
     </button>
@@ -74,7 +78,7 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
       {/* ------------------------------ モバイル: カード ------------------------------ */}
       <div
         {...rowInteractionProps}
-        className="lg:hidden px-4 py-3.5 border-b border-gray-100 active:bg-gray-50 cursor-pointer focus:outline-none focus:bg-gray-50"
+        className="lg:hidden px-4 py-3.5 border-b border-gray-200 active:bg-gray-50 cursor-pointer focus:outline-none focus:bg-gray-50"
       >
         <div className="flex items-start gap-3">
           <Avatar friend={friend} />
@@ -83,15 +87,21 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
               <p className="text-sm font-medium text-gray-900 truncate">{friend.displayName}</p>
               <StatusBadge chatStatus={friend.chatStatus} />
             </div>
-            <p className="text-[11px] text-gray-400 mt-0.5">登録: {formatJstDate(friend.createdAt)}</p>
+            <p className="text-xs text-gray-400 mt-0.5">登録: {formatJstDate(friend.createdAt)}</p>
             {!isFollowing && (
-              <p className="text-[11px] font-medium text-red-500 mt-0.5">
+              <p className="text-xs font-medium text-red-500 mt-0.5">
                 ブロック中
                 <span className="ml-1 font-normal text-gray-400">
                   {friend.blockedAt ? formatJstTimestamp(friend.blockedAt) : '日時不明'}
                 </span>
               </p>
             )}
+            {/* シナリオの状態。スマホでも、配信待ち・一時停止・完了・未登録を見分けられるようにする */}
+            <p className="mt-1 text-xs leading-5 text-gray-600">
+              <span className={`font-semibold ${scenarioState.tone}`}>{scenarioState.label}</span>
+              {scenario && <span className="ml-1.5 break-all">{scenario.name}</span>}
+              {scenarioState.detail && <span className="ml-1.5 text-gray-500">{scenarioState.detail}</span>}
+            </p>
           </div>
         </div>
 
@@ -105,7 +115,7 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
               <TagBadge key={tag.id} tag={tag} />
             ))}
             {hiddenTagCount > 0 && (
-              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium bg-gray-100 text-gray-500">
+              <span className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-gray-100 text-gray-500">
                 他{hiddenTagCount}
               </span>
             )}
@@ -117,7 +127,7 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
       {/* ------------------------------ デスクトップ: 5カラム ------------------------------ */}
       <div
         {...rowInteractionProps}
-        className="hidden lg:grid grid-cols-[80px_220px_120px_1fr_280px] gap-3 px-4 py-3 border-b border-gray-100 hover:bg-gray-50 cursor-pointer items-start focus:outline-none focus:bg-gray-50"
+        className="hidden lg:grid grid-cols-[80px_220px_120px_1fr_280px] gap-3 px-4 py-3 border-b border-gray-200 hover:bg-gray-50 cursor-pointer items-start focus:outline-none focus:bg-gray-50"
       >
         {/* 対応マーク — chats.status 由来 (unread / in_progress / resolved). */}
         <div className="pt-1">
@@ -129,11 +139,11 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
           <Avatar friend={friend} />
           <div className="min-w-0">
             <p className="text-sm font-medium text-gray-900 truncate">{friend.displayName}</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">登録: {formatJstDate(friend.createdAt)}</p>
+            <p className="text-xs text-gray-400 mt-0.5">登録: {formatJstDate(friend.createdAt)}</p>
             {!isFollowing && (
               <div className="mt-0.5">
-                <p className="text-[10px] font-medium text-red-500">ブロック中</p>
-                <p className="text-[10px] text-gray-400">
+                <p className="text-xs font-medium text-red-500">ブロック中</p>
+                <p className="text-xs text-gray-400">
                   {friend.blockedAt ? `日時: ${formatJstTimestamp(friend.blockedAt)}` : '日時不明（記録開始前）'}
                 </p>
               </div>
@@ -143,18 +153,13 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
 
         {/* シナリオ */}
         <div className="pt-1">
-          {scenario ? (
-            <div>
-              <p className="text-xs font-medium text-blue-700 truncate" title={scenario.name}>
-                {scenario.name}
-              </p>
-              <p className="text-[10px] text-gray-400 mt-0.5">
-                {scenario.status === 'active' ? '配信中' : scenario.status === 'delivering' ? '配信処理中' : scenario.status}
-              </p>
-            </div>
-          ) : (
-            <span className="text-xs text-gray-400">進行中のシナリオなし</span>
+          <p className={`text-xs font-semibold ${scenarioState.tone}`}>{scenarioState.label}</p>
+          {scenario && (
+            <p className="mt-0.5 text-xs text-gray-700 truncate" title={scenario.name}>
+              {scenario.name}
+            </p>
           )}
+          {scenarioState.detail && <p className="mt-0.5 text-xs text-gray-500">{scenarioState.detail}</p>}
         </div>
 
         {/* 受信メッセージ */}
@@ -162,7 +167,7 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
           {incoming ? (
             <>
               <p className="text-xs text-gray-700 line-clamp-2 break-all">{incomingPreview}</p>
-              <p className="text-[10px] text-gray-400 mt-1">
+              <p className="text-xs text-gray-400 mt-1">
                 ({formatJstTimestamp(incoming.createdAt)})
               </p>
             </>
@@ -181,19 +186,19 @@ export default function FriendListRow({ friend, onTagEditClick }: Props) {
             </div>
           )}
           {friend.firstTrackedLinkName && (
-            <p className="text-[10px] text-gray-500">
+            <p className="text-xs text-gray-500">
               <span className="text-gray-400">ASP_LP名：</span>
               {friend.firstTrackedLinkName}
             </p>
           )}
           {friend.refCode && !friend.firstTrackedLinkName && (
-            <p className="text-[10px] text-gray-500">
+            <p className="text-xs text-gray-500">
               <span className="text-gray-400">流入：</span>
               {friend.refCode}
             </p>
           )}
           {friend.tags.length === 0 && !friend.firstTrackedLinkName && !friend.refCode && (
-            <span className="text-[10px] text-gray-300">—</span>
+            <span className="text-xs text-gray-300">—</span>
           )}
           {tagEditButton}
         </div>
@@ -222,20 +227,20 @@ function Avatar({ friend }: { friend: FriendListItem }) {
 function StatusBadge({ chatStatus }: { chatStatus: FriendListItem['chatStatus'] }) {
   if (chatStatus === 'unread') {
     return (
-      <span className="inline-flex flex-shrink-0 items-center px-2 py-0.5 rounded text-[11px] font-medium bg-red-100 text-red-700">
+      <span className="inline-flex flex-shrink-0 items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
         未対応
       </span>
     )
   }
   if (chatStatus === 'in_progress') {
     return (
-      <span className="inline-flex flex-shrink-0 items-center px-2 py-0.5 rounded text-[11px] font-medium bg-yellow-100 text-yellow-700">
+      <span className="inline-flex flex-shrink-0 items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-700">
         対応中
       </span>
     )
   }
   return (
-    <span className="inline-flex flex-shrink-0 items-center px-2 py-0.5 rounded text-[11px] font-medium bg-gray-100 text-gray-500">
+    <span className="inline-flex flex-shrink-0 items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500">
       対応済み
     </span>
   )
@@ -256,4 +261,34 @@ function formatJstTimestamp(iso: string): string {
 // rationale — slice off everything after the date portion.
 function formatJstDate(iso: string): string {
   return iso.slice(0, 10).replace(/-/g, '/')
+}
+
+// 一覧に出すシナリオの状態。以前は進行中以外がすべて「進行中のシナリオなし」に
+// まとまり、一時停止中・配信完了・未登録の友だちを見分けられなかった。
+function describeScenarioState(
+  scenario: { name: string; status: string; nextDeliveryAt: string | null } | null,
+): { label: string; tone: string; detail: string | null } {
+  if (!scenario) return { label: 'シナリオなし', tone: 'text-gray-500', detail: null }
+  switch (scenario.status) {
+    case 'delivering':
+      return { label: '送信中', tone: 'text-green-700', detail: null }
+    case 'active':
+      return {
+        label: '配信待ち',
+        tone: 'text-green-700',
+        detail: scenario.nextDeliveryAt ? `次は ${formatJstShortTimestamp(scenario.nextDeliveryAt)}` : null,
+      }
+    case 'paused':
+      return { label: '一時停止中', tone: 'text-amber-700', detail: null }
+    case 'completed':
+      return { label: '配信完了', tone: 'text-gray-600', detail: null }
+    default:
+      return { label: '状態を確認できません', tone: 'text-gray-500', detail: null }
+  }
+}
+
+// 「10/05 20:00」形式。保存値は日本時間のまま入っている前提 (formatJstTimestamp と同じ)。
+function formatJstShortTimestamp(iso: string): string {
+  const full = formatJstTimestamp(iso)
+  return `${full.slice(5, 7)}/${full.slice(8, 10)} ${full.slice(11, 16)}`
 }

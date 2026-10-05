@@ -160,7 +160,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
         ) : error ? (
           <div className="p-4 text-xs text-red-600">{error}</div>
         ) : friend ? (
-          <div className="divide-y divide-gray-100">
+          <div className="divide-y divide-gray-200">
             {/* Profile Header */}
             <div className="p-4 flex items-start gap-3">
               {friend.pictureUrl ? (
@@ -172,11 +172,11 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
               )}
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-gray-900 truncate">{friend.displayName || '名前なし'}</p>
-                <p className="text-[11px] text-gray-400 mt-0.5">
+                <p className="text-xs text-gray-400 mt-0.5">
                   登録日: {formatDate(friend.createdAt)}
                 </p>
                 {!friend.isFollowing && (
-                  <span className="inline-block mt-1 px-1.5 py-0 rounded text-[10px] font-medium bg-gray-100 text-gray-500">
+                  <span className="inline-block mt-1 px-1.5 py-0 rounded text-xs font-medium bg-gray-100 text-gray-500">
                     ブロック中
                   </span>
                 )}
@@ -185,35 +185,35 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
 
             {/* LINE follow status and transition history */}
             <div className="p-4">
-              <h4 className="text-[11px] font-medium text-gray-500 mb-2">LINE状態</h4>
+              <h4 className="text-xs font-medium text-gray-500 mb-2">LINE状態</h4>
               <div className="flex items-center justify-between gap-3">
-                <span className="text-[11px] text-gray-500">現在</span>
+                <span className="text-xs text-gray-500">現在</span>
                 <span className={`text-xs font-medium ${friend.isFollowing ? 'text-green-700' : 'text-red-600'}`}>
                   {friend.isFollowing ? 'フォロー中' : 'ブロック中'}
                 </span>
               </div>
               {!friend.isFollowing && (
                 <div className="flex items-start justify-between gap-3 mt-1.5">
-                  <span className="text-[11px] text-gray-500">ブロック日時</span>
-                  <span className="text-[11px] text-gray-700 text-right">
+                  <span className="text-xs text-gray-500">ブロック日時</span>
+                  <span className="text-xs text-gray-700 text-right">
                     {friend.blockedAt ? formatDate(friend.blockedAt) : '日時不明（記録開始前）'}
                   </span>
                 </div>
               )}
               {friend.isFollowing && friend.lastUnblockedAt && (
                 <div className="flex items-start justify-between gap-3 mt-1.5">
-                  <span className="text-[11px] text-gray-500">最終解除日時</span>
-                  <span className="text-[11px] text-gray-700">{formatDate(friend.lastUnblockedAt)}</span>
+                  <span className="text-xs text-gray-500">最終解除日時</span>
+                  <span className="text-xs text-gray-700">{formatDate(friend.lastUnblockedAt)}</span>
                 </div>
               )}
-              <div className="mt-3 pt-3 border-t border-gray-100">
-                <p className="text-[10px] text-gray-400 mb-1.5">直近の履歴</p>
+              <div className="mt-3 pt-3 border-t border-gray-200">
+                <p className="text-xs text-gray-400 mb-1.5">直近の履歴</p>
                 {friend.followEvents.length === 0 ? (
-                  <p className="text-[11px] text-gray-400">記録開始後の履歴はありません</p>
+                  <p className="text-xs text-gray-400">記録開始後の履歴はありません</p>
                 ) : (
                   <ul className="space-y-1.5">
                     {(showAllEvents ? friend.followEvents : friend.followEvents.slice(0, EVENT_PREVIEW_COUNT)).map((event) => (
-                      <li key={event.id} className="flex items-center justify-between gap-3 text-[11px]">
+                      <li key={event.id} className="flex items-center justify-between gap-3 text-xs">
                         <span className={
                           event.eventType === 'blocked'
                             ? 'text-red-600'
@@ -232,7 +232,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
                   <button
                     type="button"
                     onClick={() => setShowAllEvents((open) => !open)}
-                    className="mt-2 min-h-9 text-[11px] font-medium text-blue-600 hover:text-blue-800"
+                    className="mt-2 min-h-9 text-xs font-medium text-blue-600 hover:text-blue-800"
                   >
                     {showAllEvents
                       ? '履歴を折りたたむ'
@@ -247,7 +247,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
               <div className="p-4 space-y-2">
                 {chatStatus?.status && statusLabels[chatStatus.status] && (
                   <div className="flex justify-between items-center">
-                    <span className="text-[11px] text-gray-500">対応状況</span>
+                    <span className="text-xs text-gray-500">対応状況</span>
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${statusLabels[chatStatus.status].className}`}>
                       {statusLabels[chatStatus.status].label}
                     </span>
@@ -255,7 +255,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
                 )}
                 {operatorName && (
                   <div className="flex justify-between items-center">
-                    <span className="text-[11px] text-gray-500">担当者</span>
+                    <span className="text-xs text-gray-500">担当者</span>
                     <span className="text-xs text-gray-700">{operatorName}</span>
                   </div>
                 )}
@@ -265,7 +265,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
             {/* Notes */}
             {chatStatus?.notes && (
               <div className="p-4">
-                <h4 className="text-[11px] font-medium text-gray-500 mb-1.5">個別メモ</h4>
+                <h4 className="text-xs font-medium text-gray-500 mb-1.5">個別メモ</h4>
                 {/* 長文メモで詳細全体が押し流されないよう、既定は8行までに抑える。 */}
                 <p className="max-h-40 overflow-y-auto text-xs text-gray-700 whitespace-pre-wrap break-words">
                   {chatStatus.notes}
@@ -277,15 +277,15 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
 
             {/* Tags */}
             <div className="p-4">
-              <h4 className="text-[11px] font-medium text-gray-500 mb-1.5">タグ</h4>
+              <h4 className="text-xs font-medium text-gray-500 mb-1.5">タグ</h4>
               {friend.tags.length === 0 ? (
-                <p className="text-[11px] text-gray-400 italic">タグなし</p>
+                <p className="text-xs text-gray-400 italic">タグなし</p>
               ) : (
                 <div className="flex flex-wrap gap-1">
                   {friend.tags.map((tag) => (
                     <span
                       key={tag.id}
-                      className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium"
+                      className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
                       style={{
                         backgroundColor: `${tag.color}20`,
                         color: tag.color,
@@ -300,18 +300,18 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
 
             {/* Rich Menu */}
             <div className="p-4">
-              <h4 className="text-[11px] font-medium text-gray-500 mb-1.5">リッチメニュー</h4>
+              <h4 className="text-xs font-medium text-gray-500 mb-1.5">リッチメニュー</h4>
               {richMenu.kind === 'loading' ? (
-                <p className="text-[11px] text-gray-400 italic">読み込み中...</p>
+                <p className="text-xs text-gray-400 italic">読み込み中...</p>
               ) : richMenu.kind === 'error' ? (
-                <p className="text-[11px] text-red-500 italic">取得に失敗しました</p>
+                <p className="text-xs text-red-500 italic">取得に失敗しました</p>
               ) : richMenu.id === null ? (
-                <p className="text-[11px] text-gray-400 italic">未設定</p>
+                <p className="text-xs text-gray-400 italic">未設定</p>
               ) : (
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs text-gray-700">{richMenu.name ?? '(名前なし)'}</span>
                   {richMenu.isDefault && (
-                    <span className="px-1.5 py-0 rounded text-[10px] font-medium bg-gray-100 text-gray-500">
+                    <span className="px-1.5 py-0 rounded text-xs font-medium bg-gray-100 text-gray-500">
                       デフォルト
                     </span>
                   )}
@@ -326,11 +326,11 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
               const hidden = entries.length - visible.length
               return (
                 <div className="p-4">
-                  <h4 className="text-[11px] font-medium text-gray-500 mb-2">友だち情報</h4>
+                  <h4 className="text-xs font-medium text-gray-500 mb-2">友だち情報</h4>
                   <dl className="space-y-2 text-xs">
                     {visible.map(([key, value]) => (
                       <div key={key}>
-                        <dt className="text-[10px] text-gray-500">{formatMetadataLabel(key)}</dt>
+                        <dt className="text-xs text-gray-500">{formatMetadataLabel(key)}</dt>
                         <dd className="max-h-32 overflow-y-auto text-gray-700 mt-0.5 whitespace-pre-wrap break-words">
                           {renderValue(value)}
                         </dd>
@@ -341,7 +341,7 @@ export default function FriendInfoSidebar({ friendId, chatStatus, operatorName, 
                     <button
                       type="button"
                       onClick={() => setShowAllMetadata((open) => !open)}
-                      className="mt-2 min-h-9 text-[11px] font-medium text-blue-600 hover:text-blue-800"
+                      className="mt-2 min-h-9 text-xs font-medium text-blue-600 hover:text-blue-800"
                     >
                       {showAllMetadata ? '折りたたむ' : `残り${hidden}項目を表示`}
                     </button>

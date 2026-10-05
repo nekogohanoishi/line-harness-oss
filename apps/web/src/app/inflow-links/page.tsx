@@ -297,19 +297,19 @@ export default function InflowLinksPage() {
 
       {summary && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          <div className="bg-white rounded-xl p-5 border border-gray-100">
+          <div className="bg-white rounded-xl p-5 border border-gray-200">
             <p className="text-sm text-gray-500">総友だち数</p>
             <p className="text-3xl font-bold text-gray-900 mt-1">{summary.totalFriends}</p>
           </div>
-          <div className="bg-white rounded-xl p-5 border border-gray-100">
+          <div className="bg-white rounded-xl p-5 border border-gray-200">
             <p className="text-sm text-gray-500">ref 経由</p>
             <p className="text-3xl font-bold text-green-600 mt-1">{summary.friendsWithRef}</p>
           </div>
-          <div className="bg-white rounded-xl p-5 border border-gray-100">
+          <div className="bg-white rounded-xl p-5 border border-gray-200">
             <p className="text-sm text-gray-500">ref 不明</p>
             <p className="text-3xl font-bold text-gray-400 mt-1">{summary.friendsWithoutRef}</p>
           </div>
-          <div className="bg-white rounded-xl p-5 border border-gray-100">
+          <div className="bg-white rounded-xl p-5 border border-gray-200">
             <p className="text-sm text-gray-500">リンク数</p>
             <p className="text-3xl font-bold text-blue-600 mt-1">{routes.length}</p>
           </div>
@@ -385,7 +385,7 @@ export default function InflowLinksPage() {
       ) : (
         <>
         {/* モバイル: 1 リンク = 1 カード (表は横に長すぎて 375px では読めない) */}
-        <ul className="sm:hidden divide-y divide-gray-100 bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <ul className="sm:hidden divide-y divide-gray-200 bg-white rounded-lg border border-gray-200 overflow-hidden">
           {sortedRows.map((r) => {
             const pool = pools.find((p) => p.id === r.poolId)
             const sc = scenarios.find((s) => s.id === r.scenarioId)
@@ -407,7 +407,7 @@ export default function InflowLinksPage() {
                       <span className="text-[15px] font-semibold text-gray-900 break-words">
                         {r.name}
                         <span
-                          className="ml-2 align-middle text-[10px] font-normal text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5"
+                          className="ml-2 align-middle text-xs font-normal text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5"
                           title="entry_routes に未登録 — X Harness など外部システムが発行した ref。流入実績のみ集計。"
                         >
                           未登録
@@ -418,7 +418,7 @@ export default function InflowLinksPage() {
                   </div>
                   <div className="shrink-0 text-right">
                     <p className="text-lg font-bold text-gray-900 leading-tight">{r.stats?.friendCount ?? 0}</p>
-                    <p className="text-[10px] text-gray-400">友だち</p>
+                    <p className="text-xs text-gray-400">友だち</p>
                   </div>
                 </div>
 
@@ -580,7 +580,7 @@ export default function InflowLinksPage() {
                         <span className="text-gray-700">
                           {r.name}
                           <span
-                            className="ml-2 text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5"
+                            className="ml-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5"
                             title="entry_routes に未登録 — X Harness など外部システムが発行した ref。流入実績のみ集計。"
                           >
                             未登録
@@ -729,7 +729,7 @@ function FragmentRow({
       </tr>
       {isExpanded && (
         <tr>
-          <td colSpan={11} className="px-6 py-4 bg-gray-50 border-t border-gray-100">
+          <td colSpan={11} className="px-6 py-4 bg-gray-50 border-t border-gray-200">
             <RefFriendsPanel refDetailLoading={refDetailLoading} friends={friends} />
           </td>
         </tr>
@@ -764,7 +764,7 @@ function RefFriendsPanel({
           <Link
             key={f.id}
             href={`/chats?friend=${f.id}`}
-            className="flex min-h-[44px] items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-100 hover:border-blue-300"
+            className="flex min-h-[44px] items-center justify-between bg-white rounded-lg px-3 py-2 border border-gray-200 hover:border-blue-300"
           >
             <span className="text-sm text-gray-800 font-medium truncate">{f.displayName}</span>
             <span className="text-xs text-gray-400 ml-2 shrink-0">

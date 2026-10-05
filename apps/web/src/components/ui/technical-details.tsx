@@ -41,16 +41,16 @@ export default function TechnicalDetails({
         <span aria-hidden="true" className="transition-transform group-open:rotate-90">›</span>
         {label}
       </summary>
-      <dl className="mt-1 divide-y divide-gray-100 border-y border-gray-100">
+      <dl className="mt-1 divide-y divide-gray-200 border-y border-gray-200">
         {visibleItems.map((item, index) => (
           <div key={`${item.label}-${index}`} className="grid grid-cols-[minmax(88px,0.35fr)_minmax(0,1fr)_auto] items-start gap-2 py-2">
             <dt className="text-gray-400">{item.label}</dt>
-            <dd className="break-all font-mono text-[11px] leading-5 text-gray-600">{String(item.value)}</dd>
+            <dd className="break-all font-mono text-xs leading-5 text-gray-600">{String(item.value)}</dd>
             {item.copyable ? (
               <button
                 type="button"
                 onClick={() => void copy(item)}
-                className="min-h-8 rounded px-2 text-[11px] font-medium text-blue-600 hover:bg-blue-50"
+                className="min-h-8 rounded px-2 text-xs font-medium text-blue-600 hover:bg-blue-50"
                 aria-label={`${item.label}をコピー`}
               >
                 {copiedLabel === item.label ? 'コピー済み' : 'コピー'}

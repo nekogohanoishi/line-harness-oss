@@ -3,10 +3,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { Tag } from '@line-crm/shared'
 import { api } from '@/lib/api'
-import type { FriendListItem } from '@/lib/api'
+import type { FriendListItem, FriendSavedFilter } from '@/lib/api'
 import Header from '@/components/layout/header'
 import FriendListTable from '@/components/friends/friend-list-table'
 import CcPromptButton from '@/components/cc-prompt-button'
+import { Sheet, SheetButton } from '@/components/ui'
 import { useAccount } from '@/contexts/account-context'
 
 const ccPrompts = [
@@ -44,6 +45,24 @@ function FilterField({ label, children }: { label: string; children: React.React
 type SortMode = 'recent' | 'oldest'
 type ResponseFilter = 'all' | 'unhandled'
 type FollowStatusFilter = 'all' | 'following' | 'blocked'
+type SavedFilterValues = FriendSavedFilter['filters']
+
+// 保存した絞り込みどうしを比べるため、未指定のキーを落とした形にそろえる。
+function filterKey(filters: SavedFilterValues): string {
+  return JSON.stringify([filters.search ?? '', filters.tagId ?? '', filters.handled ?? '', filters.followStatus ?? '', filters.sort ?? ''])
+}
+
+// 保存した絞り込みの中身を「タグ「受講生」、未対応のみ」のような1文にする。
+function describeFilters(filters: SavedFilterValues, tags: Tag[]): string {
+  const parts: string[] = []
+  if (filters.search) parts.push(`名前に「${filters.search}」を含む`)
+  if (filters.tagId) parts.push(`タグ「${tags.find((tag) => tag.id === filters.tagId)?.name ?? '削除されたタグ'}」`)
+  if (filters.handled === 'unhandled') parts.push('未対応のみ')
+  if (filters.followStatus === 'following') parts.push('フォロー中のみ')
+  if (filters.followStatus === 'blocked') parts.push('ブロック中のみ')
+  if (filters.sort === 'oldest') parts.push('古い順')
+  return parts.length > 0 ? parts.join('、') : '条件なし'
+}
 
 export default function FriendsPage() {
   const { selectedAccountId } = useAccount()
@@ -62,6 +81,25 @@ export default function FriendsPage() {
   const [error, setError] = useState('')
   // モバイルの絞り込みパネル開閉。sm 以上では常時表示のため参照されない。
   const [filtersOpen, setFiltersOpen] = useState(false)
+  // 保存した絞り込み。アカウントごとにサーバーへ保存し、スマホと PC で共有する。
+  const [savedFilters, setSavedFilters] = useState<FriendSavedFilter[]>([])
+  const [savedSheetOpen, setSavedSheetOpen] = useState(false)
+  const [newFilterName, setNewFilterName] = useState('')
+  const [savingFilters, setSavingFilters] = useState(false)
+  const [savedFiltersError, setSavedFiltersError] = useState('')
+
+  const currentFilters: SavedFilterValues = {
+    ...(searchSubmitted ? { search: searchSubmitted } : {}),
+    ...(selectedTagId ? { tagId: selectedTagId } : {}),
+    ...(responseFilter === 'unhandled' ? { handled: 'unhandled' as const } : {}),
+    ...(followStatusFilter !== 'all' ? { followStatus: followStatusFilter } : {}),
+    ...(sortMode === 'oldest' ? { sort: 'oldest' as const } : {}),
+  }
+  const hasCurrentFilters = Object.keys(currentFilters).length > 0
+  const currentFilterKey = filterKey(currentFilters)
+  // 今の条件がすでに保存済みなら、同じものを二重に保存させない。
+  const matchingSaved = savedFilters.find((saved) => filterKey(saved.filters) === currentFilterKey)
+  const canSaveCurrent = hasCurrentFilters && !matchingSaved
 
   // 既定値から変更されている絞り込み条件の数。トグルのバッジと
   // 「絞り込みを解除」の表示可否に使う。
@@ -113,6 +151,18 @@ export default function FriendsPage() {
     loadTags()
   }, [loadTags])
 
+  useEffect(() => {
+    if (!selectedAccountId) {
+      setSavedFilters([])
+      return
+    }
+    let cancelled = false
+    api.accountSettings.getFriendSavedFilters(selectedAccountId)
+      .then((res) => { if (!cancelled && res.success) setSavedFilters(res.data) })
+      .catch(() => { /* 保存した絞り込みが読めなくても一覧は使える */ })
+    return () => { cancelled = true }
+  }, [selectedAccountId])
+
   // Reset the URL-style account context to page 1 in a separate effect.
   // For user-driven filter changes (search/sort/handled/tag) we reset
   // page synchronously inside the handlers below — that avoids the
@@ -159,6 +209,64 @@ export default function FriendsPage() {
     setSortMode('recent')
   })
 
+  const applySavedFilter = (saved: FriendSavedFilter) => updateAndResetPage(() => {
+    setSearchInput(saved.filters.search ?? '')
+    setSearchSubmitted(saved.filters.search ?? '')
+    setSelectedTagId(saved.filters.tagId ?? '')
+    setResponseFilter(saved.filters.handled ? 'unhandled' : 'all')
+    setFollowStatusFilter(saved.filters.followStatus ?? 'all')
+    setSortMode(saved.filters.sort ?? 'recent')
+  })
+
+  // 名前の候補は、いま選んでいる条件から作る (例: タグを選んでいればタグ名)。
+  const suggestFilterName = () => {
+    if (selectedTagId) return allTags.find((tag) => tag.id === selectedTagId)?.name ?? ''
+    if (responseFilter === 'unhandled') return '未対応の人'
+    if (followStatusFilter === 'blocked') return 'ブロック中の人'
+    if (searchSubmitted) return `「${searchSubmitted}」で検索`
+    return ''
+  }
+
+  const openSavedSheet = () => {
+    setNewFilterName(suggestFilterName())
+    setSavedFiltersError('')
+    setSavedSheetOpen(true)
+  }
+
+  const persistSavedFilters = async (next: FriendSavedFilter[]) => {
+    if (!selectedAccountId) return false
+    setSavingFilters(true)
+    setSavedFiltersError('')
+    try {
+      const res = await api.accountSettings.updateFriendSavedFilters(selectedAccountId, next)
+      if (!res.success) {
+        setSavedFiltersError(res.error || '保存できませんでした。もう一度お試しください。')
+        return false
+      }
+      setSavedFilters(res.data)
+      return true
+    } catch {
+      setSavedFiltersError('保存できませんでした。通信状況を確認して、もう一度お試しください。')
+      return false
+    } finally {
+      setSavingFilters(false)
+    }
+  }
+
+  const saveCurrentFilters = async () => {
+    const name = newFilterName.trim()
+    if (!name) {
+      setSavedFiltersError('名前を入力してください。')
+      return
+    }
+    const ok = await persistSavedFilters([...savedFilters, { id: crypto.randomUUID(), name, filters: currentFilters }])
+    if (ok) setNewFilterName('')
+  }
+
+  const deleteSavedFilter = (id: string) => {
+    void persistSavedFilters(savedFilters.filter((saved) => saved.id !== id))
+  }
+
   return (
     <div>
       <Header
@@ -185,6 +293,35 @@ export default function FriendsPage() {
           </button>
         </form>
 
+        {/* よく使う絞り込み — スマホでも絞り込み欄を開かずに1回で呼び出せるよう、検索欄のすぐ下に置く */}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium text-gray-600">よく使う絞り込み</span>
+          {savedFilters.map((saved) => {
+            const active = filterKey(saved.filters) === currentFilterKey
+            return (
+              <button
+                key={saved.id}
+                type="button"
+                onClick={() => applySavedFilter(saved)}
+                aria-pressed={active}
+                title={describeFilters(saved.filters, allTags)}
+                className={`min-h-[36px] rounded-full border px-3 text-sm ${
+                  active ? 'border-green-600 bg-green-50 font-semibold text-green-800' : 'border-gray-300 bg-white text-gray-800 hover:bg-gray-50'
+                }`}
+              >
+                {saved.name}
+              </button>
+            )
+          })}
+          <button
+            type="button"
+            onClick={openSavedSheet}
+            className="min-h-[36px] rounded-full px-2 text-sm font-medium text-blue-700 hover:underline"
+          >
+            {canSaveCurrent ? '＋ 今の条件を保存' : savedFilters.length > 0 ? '保存した絞り込みを管理' : '使い方'}
+          </button>
+        </div>
+
         {/* 絞り込みトグル — モバイルのみ。既定は畳んでおき、一覧を先に見せる。 */}
         <button
           type="button"
@@ -195,7 +332,7 @@ export default function FriendsPage() {
           <span className="flex items-center gap-2">
             絞り込み・並び順
             {activeFilterCount > 0 && (
-              <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-gray-900 px-1.5 text-[11px] font-medium text-white">
+              <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-gray-900 px-1.5 text-xs font-medium text-white">
                 {activeFilterCount}
               </span>
             )}
@@ -211,7 +348,7 @@ export default function FriendsPage() {
         {/* Secondary filters — 並び順 + タグ + 対応マーク + LINE状態
             モバイルでは縦積み（トグルで開閉）、sm 以上では従来どおり横並び。 */}
         <div
-          className={`mt-3 gap-3 border-t border-gray-100 pt-3 sm:flex sm:flex-wrap sm:items-center ${
+          className={`mt-3 gap-3 border-t border-gray-200 pt-3 sm:flex sm:flex-wrap sm:items-center ${
             filtersOpen ? 'grid grid-cols-1' : 'hidden'
           }`}
         >
@@ -288,7 +425,7 @@ export default function FriendsPage() {
           {[...Array(5)].map((_, i) => (
             // スケルトンも本体と同じブレークポイントで切り替える。5カラムの
             // グリッドを常時適用すると、読み込み中だけモバイルで横にはみ出す。
-            <div key={i} className="px-4 py-4 border-b border-gray-100 flex flex-col gap-3 animate-pulse lg:grid lg:grid-cols-[80px_220px_120px_1fr_280px]">
+            <div key={i} className="px-4 py-4 border-b border-gray-200 flex flex-col gap-3 animate-pulse lg:grid lg:grid-cols-[80px_220px_120px_1fr_280px]">
               <div className="h-5 bg-gray-100 rounded w-16" />
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-full bg-gray-200" />
@@ -332,6 +469,80 @@ export default function FriendsPage() {
           </div>
         </div>
       )}
+
+      <Sheet
+        open={savedSheetOpen}
+        onClose={() => { if (!savingFilters) setSavedSheetOpen(false) }}
+        title="よく使う絞り込み"
+        description="タグや対応マークなどの組み合わせに名前を付けて保存すると、次から1回押すだけで同じ条件の一覧を出せます。スマホとパソコンで共通です。"
+        busy={savingFilters}
+        footer={
+          <>
+            <SheetButton onClick={() => setSavedSheetOpen(false)}>閉じる</SheetButton>
+            {canSaveCurrent && (
+              <SheetButton variant="primary" onClick={() => void saveCurrentFilters()} busy={savingFilters} busyLabel="保存中...">
+                今の条件を保存
+              </SheetButton>
+            )}
+          </>
+        }
+      >
+        <section>
+          <h3 className="text-sm font-semibold text-gray-900">今の条件</h3>
+          {matchingSaved ? (
+            <p className="mt-1 text-sm leading-6 text-gray-700">
+              {describeFilters(currentFilters, allTags)}。この条件は「{matchingSaved.name}」として保存済みです。
+            </p>
+          ) : hasCurrentFilters ? (
+            <>
+              <p className="mt-1 text-sm text-gray-700">{describeFilters(currentFilters, allTags)}</p>
+              <label className="mt-3 block">
+                <span className="text-sm font-medium text-gray-700">保存する名前</span>
+                <input
+                  type="text"
+                  value={newFilterName}
+                  onChange={(e) => setNewFilterName(e.target.value)}
+                  maxLength={30}
+                  placeholder="例: 受講生"
+                  className="mt-1 h-11 w-full rounded-lg border border-gray-300 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+              </label>
+            </>
+          ) : (
+            <p className="mt-1 text-sm leading-6 text-gray-600">
+              いまは条件を選んでいません。「絞り込み・並び順」でタグや対応マークを選んでから、もう一度ここを開いてください。
+            </p>
+          )}
+          {savedFiltersError && <p role="alert" className="mt-2 text-sm text-red-700">{savedFiltersError}</p>}
+        </section>
+
+        <section className="mt-6 border-t border-gray-200 pt-4">
+          <h3 className="text-sm font-semibold text-gray-900">保存した絞り込み</h3>
+          {savedFilters.length === 0 ? (
+            <p className="mt-1 text-sm text-gray-600">まだありません。</p>
+          ) : (
+            <ul className="mt-1">
+              {savedFilters.map((saved) => (
+                <li key={saved.id} className="flex items-center justify-between gap-3 border-b border-gray-200 py-2.5 last:border-b-0">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-gray-900 break-words">{saved.name}</p>
+                    <p className="text-xs text-gray-600 break-words">{describeFilters(saved.filters, allTags)}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => deleteSavedFilter(saved.id)}
+                    disabled={savingFilters}
+                    aria-label={`「${saved.name}」を削除`}
+                    className="min-h-[44px] shrink-0 rounded-lg px-3 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-40"
+                  >
+                    削除
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </Sheet>
 
       <CcPromptButton prompts={ccPrompts} />
     </div>

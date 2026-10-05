@@ -205,7 +205,7 @@ export default function MultiAccountDedupSection({
             <option key={tag.id} value={tag.id}>{tag.name}</option>
           ))}
         </select>
-        <p className="mt-1 text-[11px] text-gray-500">
+        <p className="mt-1 text-xs text-gray-500">
           タグを選ぶと、そのタグが付いた友達だけ対象に重複除外する。空なら全員対象。
         </p>
       </div>
@@ -258,7 +258,7 @@ export default function MultiAccountDedupSection({
               <span>削減</span>
               <span>{preview.reduction.toLocaleString()} 通 ({(preview.reductionRate * 100).toFixed(1)}%)</span>
             </div>
-            <div className="border-t border-gray-100 pt-2 mt-2">
+            <div className="border-t border-gray-200 pt-2 mt-2">
               <p className="text-xs font-medium text-gray-600 mb-1">送信内訳</p>
               {preview.perAccount.map((p) => {
                 const flag = countryFlag(p.accountCountry)

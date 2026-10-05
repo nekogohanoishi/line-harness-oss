@@ -265,7 +265,7 @@ export default function AccountsPage() {
                   {account.isActive ? '有効' : '無効'}
                 </button>
               </div>
-              <div className="grid grid-cols-3 gap-3 mb-4 py-3 border-t border-b border-gray-100">
+              <div className="grid grid-cols-3 gap-3 mb-4 py-3 border-t border-b border-gray-200">
                 <div className="text-center">
                   <p className="text-lg font-bold text-gray-900">{account.stats.friendCount}</p>
                   <p className="text-xs text-gray-400">友だち</p>
@@ -283,7 +283,7 @@ export default function AccountsPage() {
               {/* Login/LIFF status badges — at-a-glance signal that an account
                   is fully wired. Important because SQL-only setup historically
                   left rows half-configured (Login/LIFF blank). */}
-              <div className="flex gap-2 mb-3 text-[11px]">
+              <div className="flex gap-2 mb-3 text-xs">
                 <span
                   className={`px-2 py-0.5 rounded-full ${
                     account.loginChannelId
@@ -322,7 +322,7 @@ export default function AccountsPage() {
                 ]}
               />
 
-              <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-100">
+              <div className="flex items-center justify-between mt-3 pt-3 border-t border-gray-200">
                 <p className="text-xs text-gray-400">
                   登録: {new Date(account.createdAt).toLocaleDateString('ja-JP')}
                 </p>

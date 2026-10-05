@@ -27,7 +27,7 @@ export default function AccountSetupUrls({ liffId, heading }: Props) {
   const liffEndpointUrl = base && liffId ? `${base}?liffId=${encodeURIComponent(liffId)}` : ''
 
   return (
-    <div className="space-y-3 mt-4 pt-4 border-t border-gray-100">
+    <div className="space-y-3 mt-4 pt-4 border-t border-gray-200">
       <p className="text-xs font-medium text-gray-700">
         {heading ?? 'LINE Developers Console に登録すべき URL'}
       </p>
@@ -70,7 +70,7 @@ function UrlRow({ label, hint, url }: { label: string; hint: string; url: string
     <div>
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-medium text-gray-600">{label}</span>
-        <span className="text-[10px] text-gray-400">{hint}</span>
+        <span className="text-xs text-gray-400">{hint}</span>
       </div>
       <div className="flex items-stretch gap-1">
         <input

@@ -91,7 +91,7 @@ export function TextField({
         required={required}
         className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
       />
-      {hint && <p className="text-[11px] text-gray-400 mt-1">{hint}</p>}
+      {hint && <p className="text-xs text-gray-400 mt-1">{hint}</p>}
     </div>
   )
 }
@@ -143,7 +143,7 @@ export function AccountFormSections({
               disabled
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono bg-gray-50 text-gray-500 cursor-not-allowed"
             />
-            <p className="text-[11px] text-gray-400 mt-1">
+            <p className="text-xs text-gray-400 mt-1">
               Channel ID は変更できません（LINE 側で固定の識別子）
             </p>
           </div>

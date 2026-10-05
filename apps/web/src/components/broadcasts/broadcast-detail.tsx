@@ -27,7 +27,7 @@ export const broadcastStatusConfig: Record<ApiBroadcast['status'], { label: stri
 export const broadcastMessageTypeLabels: Record<ApiBroadcast['messageType'], string> = {
   text: 'テキスト',
   image: '画像',
-  flex: 'Flexメッセージ',
+  flex: 'カード型メッセージ',
 }
 
 /** 日本時間の「2026/10/12 20:00」形式 (「現在有効な配信」ページと同じ) */
@@ -374,7 +374,7 @@ export default function BroadcastDetail({ broadcastId }: BroadcastDetailProps) {
                   <th className="px-2 py-2 text-right text-xs font-medium text-gray-500">クリック</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-200">
                 {perAccountStats.map((row) => {
                   // accounts list から displayName を引く (なければ row.accountName 内部ラベル)
                   const acc = accounts.find((a) => a.id === row.accountId)

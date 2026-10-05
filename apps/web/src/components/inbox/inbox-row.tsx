@@ -61,7 +61,7 @@ export default function InboxRow({ row }: Props) {
   return (
     <Link
       href={`/chats?friend=${encodeURIComponent(row.friendId)}`}
-      className="flex items-start gap-3 border-b border-gray-100 px-4 py-3 hover:bg-gray-50"
+      className="flex items-start gap-3 border-b border-gray-200 px-4 py-3 hover:bg-gray-50"
     >
       {row.pictureUrl ? (
         // eslint-disable-next-line @next/next/no-img-element
@@ -78,11 +78,11 @@ export default function InboxRow({ row }: Props) {
           <span className="truncate text-sm font-medium text-gray-900">
             {row.displayName || '(名前なし)'}
           </span>
-          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
             {row.accountName}
           </span>
           {machineAfterIncoming && (
-            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-medium text-sky-700">
+            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700">
               auto 返答済
             </span>
           )}

@@ -217,7 +217,7 @@ export default function ScenarioProgress({ scenarios, accountId, initialScenario
   return (
     <div className="space-y-5">
       <section className="border-y border-gray-200 bg-white sm:rounded-lg sm:border">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 px-4 py-4 sm:px-6">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-200 px-4 py-4 sm:px-6">
           <div>
             <h2 className="text-base font-semibold text-gray-900">配信の現在地</h2>
             <p className="mt-1 text-sm text-gray-500">シナリオを選ぶと、その友だちと進行段階を下に表示します。</p>
@@ -232,7 +232,7 @@ export default function ScenarioProgress({ scenarios, accountId, initialScenario
           </button>
         </div>
 
-        <div className="grid grid-cols-3 divide-x divide-gray-100 border-b border-gray-100 px-2 py-5 sm:px-6">
+        <div className="grid grid-cols-3 divide-x divide-gray-200 border-b border-gray-200 px-2 py-5 sm:px-6">
           <div className="px-2 sm:px-4">
             <p className="text-xs text-gray-500">配信待ち・処理中</p>
             <p className="mt-1 text-2xl font-semibold tabular-nums text-green-700">{counts.active + counts.delivering}<span className="ml-1 text-sm font-normal text-gray-500">件</span></p>
@@ -247,14 +247,14 @@ export default function ScenarioProgress({ scenarios, accountId, initialScenario
           </div>
         </div>
 
-        <div className="border-b border-gray-100 px-4 py-3 text-xs text-gray-500 sm:px-6">
+        <div className="border-b border-gray-200 px-4 py-3 text-xs text-gray-500 sm:px-6">
           ステップの数字は「そこまで処理が進んだ位置」です。条件で送信を飛ばした場合も通過に含みます。人数はシナリオごとの参加件数です。
           {updatedAt && <span className="ml-2">{formatDate(updatedAt.toISOString())}時点</span>}
         </div>
 
         {error && <p role="alert" className="border-b border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 sm:px-6">{error}</p>}
 
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-gray-200">
           {scenarios.map((scenario) => {
             const stepCount = scenario.stepCount ?? 0
             const entries = summary.filter((entry) => entry.scenarioId === scenario.id)
@@ -296,7 +296,7 @@ export default function ScenarioProgress({ scenarios, accountId, initialScenario
                       className={`relative min-h-[58px] min-w-[72px] flex-1 overflow-hidden rounded-md border px-2 py-2 text-left transition-colors hover:border-green-500 ${scenarioId === scenario.id && stage === index && filter === 'current' ? 'border-green-600 ring-1 ring-green-600' : 'border-gray-200'}`}
                     >
                       <span className="absolute inset-x-0 bottom-0 bg-green-100" style={{ height: `${count / maxStage * 100}%` }} aria-hidden="true" />
-                      <span className="relative block whitespace-nowrap text-[11px] text-gray-600">{index === 0 ? '開始前' : `${index}通目まで`}</span>
+                      <span className="relative block whitespace-nowrap text-xs text-gray-600">{index === 0 ? '開始前' : `${index}通目まで`}</span>
                       <span className="relative mt-1 block text-base font-semibold tabular-nums text-gray-900">{count}<span className="ml-0.5 text-xs font-normal">人</span></span>
                     </button>
                   ))}
@@ -308,7 +308,7 @@ export default function ScenarioProgress({ scenarios, accountId, initialScenario
       </section>
 
       <section className="border-y border-gray-200 bg-white sm:rounded-lg sm:border">
-        <div className="border-b border-gray-100 px-4 py-4 sm:px-6">
+        <div className="border-b border-gray-200 px-4 py-4 sm:px-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-base font-semibold text-gray-900">友だちごとの進行状況</h2>
@@ -350,7 +350,7 @@ export default function ScenarioProgress({ scenarios, accountId, initialScenario
           </div>
         </div>
 
-        <div className="hidden grid-cols-[minmax(160px,1.1fr)_minmax(140px,1fr)_minmax(180px,1.5fr)_105px_125px] gap-4 border-b border-gray-100 bg-gray-50 px-6 py-2 text-xs font-medium text-gray-500 lg:grid">
+        <div className="hidden grid-cols-[minmax(160px,1.1fr)_minmax(140px,1fr)_minmax(180px,1.5fr)_105px_125px] gap-4 border-b border-gray-200 bg-gray-50 px-6 py-2 text-xs font-medium text-gray-500 lg:grid">
           <span>友だち</span><span>シナリオ</span><span>現在地</span><span>状態</span><span>次の予定</span>
         </div>
         {loading && items.length === 0 ? (
@@ -358,7 +358,7 @@ export default function ScenarioProgress({ scenarios, accountId, initialScenario
         ) : items.length === 0 ? (
           <p className="px-4 py-10 text-center text-sm text-gray-500">該当する友だちはいません。シナリオや状態を変えて確認してください。</p>
         ) : (
-          <div className={`divide-y divide-gray-100 ${loading ? 'opacity-60' : ''}`}>
+          <div className={`divide-y divide-gray-200 ${loading ? 'opacity-60' : ''}`}>
             {items.map((item) => (
               <div key={item.id} className="grid gap-3 px-4 py-4 lg:grid-cols-[minmax(160px,1.1fr)_minmax(140px,1fr)_minmax(180px,1.5fr)_105px_125px] lg:items-center lg:gap-4 lg:px-6">
                 <div className="flex min-w-0 items-center gap-2.5">
@@ -384,7 +384,7 @@ export default function ScenarioProgress({ scenarios, accountId, initialScenario
           </div>
         )}
         {total > PAGE_SIZE && (
-          <div className="flex items-center justify-between border-t border-gray-100 px-4 py-3 text-sm sm:px-6">
+          <div className="flex items-center justify-between border-t border-gray-200 px-4 py-3 text-sm sm:px-6">
             <span className="text-gray-500">{start}〜{end}件 / 全{total}件</span>
             <div className="flex gap-2">
               <button type="button" onClick={() => setPage((value) => Math.max(0, value - 1))} disabled={page === 0 || loading} className="min-h-10 rounded-md border border-gray-300 px-3 disabled:opacity-40">前へ</button>

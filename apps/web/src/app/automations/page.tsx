@@ -841,7 +841,7 @@ export default function AutomationsPage() {
 
       {/* Loading skeleton */}
       {loading ? (
-        <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100">
+        <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-200">
           {[...Array(3)].map((_, i) => (
             <div key={i} className="p-4 animate-pulse">
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
@@ -860,7 +860,7 @@ export default function AutomationsPage() {
           />
         </div>
       ) : (
-        <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100 overflow-hidden">
+        <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-200 overflow-hidden">
           {automations.map((automation) => (
             <div key={automation.id} className="p-4 hover:bg-gray-50">
               <div className="grid grid-cols-1 lg:grid-cols-[minmax(200px,1.2fr)_minmax(180px,0.8fr)_minmax(240px,1.4fr)_auto] gap-3 lg:items-center">

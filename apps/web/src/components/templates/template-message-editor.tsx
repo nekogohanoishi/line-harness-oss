@@ -53,7 +53,7 @@ export function validateTemplateMessage(messageType: string, value: string): str
     try {
       JSON.parse(value)
     } catch {
-      return 'Flexメッセージの内容を確認してください'
+      return 'カード型メッセージの内容を確認してください'
     }
   }
 

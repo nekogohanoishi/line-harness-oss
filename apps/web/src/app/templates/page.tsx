@@ -39,7 +39,7 @@ type TypeFilter = 'all' | 'text' | 'flex' | 'image' | 'unused'
 const messageTypeLabels: Record<string, string> = {
   text: 'テキスト',
   image: '画像',
-  flex: 'Flex',
+  flex: 'カード型',
   carousel: 'カルーセル',
 }
 
@@ -385,7 +385,7 @@ export default function TemplatesPage() {
         {([
           { key: 'all', label: '全て' },
           { key: 'text', label: 'テキスト' },
-          { key: 'flex', label: 'Flex' },
+          { key: 'flex', label: 'カード型' },
           { key: 'image', label: '画像' },
           { key: 'unused', label: '未使用' },
         ] as const).map(({ key, label }) => (
@@ -436,7 +436,7 @@ export default function TemplatesPage() {
                 onChange={(e) => setForm({ ...form, messageType: e.target.value, messageContent: '' })}
               >
                 <option value="text">テキスト</option>
-                <option value="flex">Flex</option>
+                <option value="flex">カード型</option>
                 <option value="image">画像</option>
               </select>
             </div>

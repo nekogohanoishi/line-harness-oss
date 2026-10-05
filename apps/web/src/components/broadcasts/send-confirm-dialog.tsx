@@ -46,7 +46,7 @@ export default function SendConfirmDialog({ title, targetCount, accountName, isM
           {showBreakdown ? (
             <div>
               <dt className="text-gray-500 mb-1">配信先</dt>
-              <dd className="space-y-1 mt-1 border-t border-gray-100 pt-2">
+              <dd className="space-y-1 mt-1 border-t border-gray-200 pt-2">
                 {perAccount === undefined ? (
                   // データ未取得 (preview-count 読み込み中 or 失敗)。"全アカウント無効" と
                   // 誤表示しないように loading 表示にする。

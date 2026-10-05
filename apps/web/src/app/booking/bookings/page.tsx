@@ -280,7 +280,7 @@ export default function BookingsPage() {
             <div>状態</div>
             <div className="text-right">操作</div>
           </div>
-          <div className="divide-y divide-gray-100">
+          <div className="divide-y divide-gray-200">
             {visibleItems.map((item) => (
               <BookingRow
                 key={item.key}
@@ -328,7 +328,7 @@ function BookingRow({
 
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <span className="shrink-0 rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-[11px] text-gray-600">
+          <span className="shrink-0 rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-xs text-gray-600">
             {item.source === 'event' ? 'イベント' : '個別'}
           </span>
           <span className="truncate text-sm text-gray-900">{item.title}</span>

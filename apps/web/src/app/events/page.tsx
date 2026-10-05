@@ -160,7 +160,7 @@ export default function EventsListPage() {
                   </Link>
                   <Link
                     href={`/events/bookings?id=${e.id}`}
-                    className="mt-auto flex items-center justify-between gap-2 border-t border-gray-100 px-4 min-h-12 text-sm font-medium text-blue-600 hover:bg-blue-50 active:bg-blue-50"
+                    className="mt-auto flex items-center justify-between gap-2 border-t border-gray-200 px-4 min-h-12 text-sm font-medium text-blue-600 hover:bg-blue-50 active:bg-blue-50"
                   >
                     予約を確認
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

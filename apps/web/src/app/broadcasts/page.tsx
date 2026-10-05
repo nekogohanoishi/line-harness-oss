@@ -231,8 +231,8 @@ function BroadcastList() {
         <div className="mb-4 flex gap-1 border-b border-gray-200 overflow-x-auto">
           {([
             { id: 'all', label: '全部', count: broadcasts.length },
-            { id: 'single', label: '単アカ配信', count: singleCount },
-            { id: 'dedup', label: '複アカ重複除外', count: dedupCount },
+            { id: 'single', label: '通常の配信', count: singleCount },
+            { id: 'dedup', label: '複数アカウント', count: dedupCount },
           ] as const).map((tab) => (
             <button
               key={tab.id}

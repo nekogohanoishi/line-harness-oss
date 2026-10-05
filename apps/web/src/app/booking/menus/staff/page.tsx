@@ -162,7 +162,7 @@ export default function MenuStaffMatrix() {
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">料金（上書き）</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
+              <tbody className="divide-y divide-gray-200">
                 {staff.map((s) => {
                   const row = rows[s.id]
                   if (!row) return null

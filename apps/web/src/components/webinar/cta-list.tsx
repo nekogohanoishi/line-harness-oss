@@ -127,7 +127,7 @@ export default function CtaList({ accountId, eventId, ctas, videoDurationSeconds
                   <td className="px-3 py-2 text-gray-700">
                     <div className="text-xs">{ACTION_LABELS[c.action_type]}</div>
                     {c.action_value && (
-                      <div className="text-[11px] text-gray-500 font-mono truncate max-w-[240px]" title={c.action_value}>
+                      <div className="text-xs text-gray-500 font-mono truncate max-w-[240px]" title={c.action_value}>
                         {c.action_value}
                       </div>
                     )}

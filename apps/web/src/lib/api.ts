@@ -322,11 +322,24 @@ export type FriendDeliveryControl = {
   scheduledMessagesPaused: boolean
   scheduledMessagesPausedAt: string | null
 }
+/** 友だち一覧の保存した絞り込み。キーは友だち一覧の絞り込み項目と同じ意味 */
+export type FriendSavedFilter = {
+  id: string
+  name: string
+  filters: {
+    search?: string
+    tagId?: string
+    handled?: 'unhandled'
+    followStatus?: 'following' | 'blocked'
+    sort?: 'oldest'
+  }
+}
 /** Friend list items, optionally hydrated with chat status (when ?includeChatStatus=true) */
 export type FriendListItem = FriendWithTags & Partial<{
   latestIncomingMessage: { content: string; messageType: string; createdAt: string } | null
   latestOutgoingAt: string | null
   activeScenario: { name: string; status: string } | null
+  scenarioSummary: { name: string; status: string; nextDeliveryAt: string | null } | null
   handled: boolean
 }>
 
@@ -779,6 +792,13 @@ export const api = {
       fetchApi<{ success: boolean }>('/api/account-settings/test-recipients', {
         method: 'PUT',
         body: JSON.stringify({ accountId, friendIds }),
+      }),
+    getFriendSavedFilters: (accountId: string) =>
+      fetchApi<ApiResponse<FriendSavedFilter[]>>(`/api/account-settings/friend-saved-filters?accountId=${encodeURIComponent(accountId)}`),
+    updateFriendSavedFilters: (accountId: string, filters: FriendSavedFilter[]) =>
+      fetchApi<ApiResponse<FriendSavedFilter[]>>('/api/account-settings/friend-saved-filters', {
+        method: 'PUT',
+        body: JSON.stringify({ accountId, filters }),
       }),
   },
 

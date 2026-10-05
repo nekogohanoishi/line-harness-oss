@@ -106,7 +106,7 @@ export function AreaProperties({ area, pages, onUpdate, onDelete }: Props) {
             placeholder="https://..."
             className="mt-0.5 block w-full border border-gray-300 rounded px-2 py-1 text-sm"
           />
-          <p className="mt-1 text-[11px] text-gray-500">
+          <p className="mt-1 text-xs text-gray-500">
             クリック数を計測する場合は、計測リンクを指定してください。
           </p>
         </label>
@@ -164,7 +164,7 @@ export function AreaProperties({ area, pages, onUpdate, onDelete }: Props) {
             ))}
           </select>
           {pages.length < 2 && (
-            <p className="mt-1 text-[11px] text-amber-600">
+            <p className="mt-1 text-xs text-amber-600">
               タブ切替には複数ページが必要です。先にページを追加してください。
             </p>
           )}

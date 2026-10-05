@@ -87,7 +87,7 @@ export default function TestRecipientsSetting({ accountId }: TestRecipientsSetti
   if (loading) return <p className="text-xs text-gray-400">読み込み中...</p>
 
   return (
-    <div className="mt-3 pt-3 border-t border-gray-100">
+    <div className="mt-3 pt-3 border-t border-gray-200">
       <h4 className="text-xs font-semibold text-gray-600 mb-2">テスト送信先</h4>
 
       {/* Current recipients */}

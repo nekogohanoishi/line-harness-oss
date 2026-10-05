@@ -268,7 +268,7 @@ export default function HealthPage() {
                         <div className="overflow-x-auto">
                           <table className="w-full text-sm">
                             <thead>
-                              <tr className="text-left text-xs text-gray-500 border-b border-gray-100">
+                              <tr className="text-left text-xs text-gray-500 border-b border-gray-200">
                                 <th className="pb-2 pr-3 font-medium">内容</th>
                                 <th className="pb-2 pr-3 font-medium">エラー数</th>
                                 <th className="pb-2 pr-3 font-medium">チェック期間</th>
@@ -389,7 +389,7 @@ export default function HealthPage() {
                           ? Math.round((migration.migratedCount / migration.totalCount) * 100)
                           : 0
                         return (
-                          <tr key={migration.id} className="border-b border-gray-100 hover:bg-gray-50">
+                          <tr key={migration.id} className="border-b border-gray-200 hover:bg-gray-50">
                             <td className="px-4 py-3 text-gray-900 font-medium">
                               {getAccountName(migration.fromAccountId)}
                             </td>

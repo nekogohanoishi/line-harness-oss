@@ -21,7 +21,7 @@ interface Props {
 
 const messageTypeLabels: Record<AutoReplyMessageType, string> = {
   text: 'テキスト',
-  flex: 'ボタン付きメッセージ',
+  flex: 'カード型メッセージ',
   image: '画像',
 }
 

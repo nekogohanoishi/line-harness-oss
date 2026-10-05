@@ -16,7 +16,7 @@ interface BroadcastFormProps {
 const messageTypeLabels: Record<ApiBroadcast['messageType'], string> = {
   text: 'テキスト',
   image: '画像',
-  flex: 'Flexメッセージ',
+  flex: 'カード型メッセージ',
 }
 
 interface FormState {

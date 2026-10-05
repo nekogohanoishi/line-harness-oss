@@ -171,7 +171,7 @@ export default function ResponsiveTable<T>({
                 onKeyDown={onRowClick ? (event) => handleRowKeyDown(event, row, i) : undefined}
                 tabIndex={onRowClick ? 0 : undefined}
                 aria-label={onRowClick ? (rowLabel?.(row, i) ?? `項目 ${i + 1} を開く`) : undefined}
-                className={`border-t border-gray-100 ${onRowClick ? 'cursor-pointer hover:bg-gray-50' : 'hover:bg-gray-50'}`}
+                className={`border-t border-gray-200 ${onRowClick ? 'cursor-pointer hover:bg-gray-50' : 'hover:bg-gray-50'}`}
               >
                 {columns.map((c) => (
                   <td
@@ -196,7 +196,7 @@ export default function ResponsiveTable<T>({
       </div>
 
       {/* ── モバイル: 1 行 = 1 カード ── */}
-      <ul className="sm:hidden divide-y divide-gray-100">
+      <ul className="sm:hidden divide-y divide-gray-200">
         {rows.map((row, i) => (
           <li
             key={rowKey(row, i)}

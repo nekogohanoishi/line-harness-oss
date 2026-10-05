@@ -181,7 +181,7 @@ export default function FormSubmissionsPage() {
                     <h3 className={`text-sm font-semibold leading-snug ${isSelected ? 'text-[#06C755]' : 'text-gray-900'}`}>
                       {form.name}
                     </h3>
-                    <span className="text-[11px] text-gray-400 whitespace-nowrap">
+                    <span className="text-xs text-gray-400 whitespace-nowrap">
                       {formatRelative(form.lastSubmittedAt)}
                     </span>
                   </div>
@@ -198,7 +198,7 @@ export default function FormSubmissionsPage() {
                         return (
                           <span
                             key={acc.id}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-100 text-[11px] text-gray-700"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-200 text-xs text-gray-700"
                             title={`${acc.name}: ${acc.count}件`}
                           >
                             {flag && <span>{flag}</span>}
@@ -209,7 +209,7 @@ export default function FormSubmissionsPage() {
                       })}
                     </div>
                   ) : (
-                    <div className="text-[11px] text-gray-300">配信中アカウントなし</div>
+                    <div className="text-xs text-gray-300">配信中アカウントなし</div>
                   )}
                 </button>
               )
@@ -247,7 +247,7 @@ export default function FormSubmissionsPage() {
           ) : (
             <>
               {/* モバイル: 横スクロールの表ではなく1件1カードで縦に積む */}
-              <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200 bg-white lg:hidden">
+              <ul className="divide-y divide-gray-200 rounded-lg border border-gray-200 bg-white lg:hidden">
                 {paged.map((sub) => (
                   <li key={sub.id}>
                     <button
@@ -259,7 +259,7 @@ export default function FormSubmissionsPage() {
                         <span className="min-w-0 truncate text-sm font-medium text-gray-900">
                           {sub.friendName || '不明'}
                         </span>
-                        <span className="flex-shrink-0 text-[11px] text-gray-400">
+                        <span className="flex-shrink-0 text-xs text-gray-400">
                           {new Date(sub.createdAt).toLocaleString('ja-JP', {
                             month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
                           })}
@@ -276,7 +276,7 @@ export default function FormSubmissionsPage() {
                         </dl>
                       )}
                       {fieldKeys.length > 3 && (
-                        <p className="mt-1.5 text-[11px] text-gray-400">他 {fieldKeys.length - 3} 項目</p>
+                        <p className="mt-1.5 text-xs text-gray-400">他 {fieldKeys.length - 3} 項目</p>
                       )}
                     </button>
                     {sub.friendId && (
@@ -309,7 +309,7 @@ export default function FormSubmissionsPage() {
                       )}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody className="divide-y divide-gray-200">
                     {paged.map((sub) => (
                       <tr
                         key={sub.id}
@@ -386,14 +386,14 @@ export default function FormSubmissionsPage() {
         >
           <div className="space-y-5">
             <div>
-              <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-1">回答者</div>
+              <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">回答者</div>
               {detailSubmission.friendId ? (
                 <Link
                   href={`/chats?friend=${encodeURIComponent(detailSubmission.friendId)}`}
                   className="inline-flex min-h-11 items-center gap-2 text-sm text-[#06C755] hover:underline sm:min-h-0"
                 >
                   <span className="font-medium">{detailSubmission.friendName || '不明'}</span>
-                  <span className="text-[11px] text-gray-400">→ チャットを開く</span>
+                  <span className="text-xs text-gray-400">→ チャットを開く</span>
                 </Link>
               ) : (
                 <span className="text-sm text-gray-700">{detailSubmission.friendName || '不明'}</span>
@@ -401,19 +401,19 @@ export default function FormSubmissionsPage() {
             </div>
 
             <div>
-              <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-1">送信日時</div>
+              <div className="text-xs text-gray-400 uppercase tracking-wide mb-1">送信日時</div>
               <div className="text-sm text-gray-700">{formatDateTime(detailSubmission.createdAt)}</div>
             </div>
 
             <div>
-              <div className="text-[11px] text-gray-400 uppercase tracking-wide mb-2">回答内容</div>
+              <div className="text-xs text-gray-400 uppercase tracking-wide mb-2">回答内容</div>
               <dl className="space-y-3">
                 {fieldKeys.length === 0 ? (
                   <div className="text-sm text-gray-400">項目なし</div>
                 ) : (
                   fieldKeys.map((key) => (
                     <div key={key} className="grid grid-cols-1 gap-1">
-                      <dt className="text-[11px] text-gray-500">{fieldLabels[key] || key}</dt>
+                      <dt className="text-xs text-gray-500">{fieldLabels[key] || key}</dt>
                       <dd className="text-sm text-gray-900 break-words whitespace-pre-wrap">
                         {formatValue(detailSubmission.data[key])}
                       </dd>

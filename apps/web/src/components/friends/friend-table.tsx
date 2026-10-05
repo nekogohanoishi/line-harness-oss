@@ -100,7 +100,7 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
             <th className="px-4 py-3" />
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100">
+        <tbody className="divide-y divide-gray-200">
           {friends.map((friend) => {
             const isExpanded = expandedId === friend.id
             const isAddingTag = addingTagForFriend === friend.id
@@ -135,7 +135,7 @@ export default function FriendTable({ friends, allTags, onRefresh }: FriendTable
                           <p className="text-xs text-gray-400 truncate max-w-[160px]">{friend.statusMessage}</p>
                         )}
                         {/* モバイルで畳んだ列の代替表示 */}
-                        <p className="sm:hidden mt-1 flex items-center gap-2 text-[11px]">
+                        <p className="sm:hidden mt-1 flex items-center gap-2 text-xs">
                           <span className={friend.isFollowing ? 'text-green-700' : 'text-gray-500'}>
                             {friend.isFollowing ? 'フォロー中' : 'ブロック/退会'}
                           </span>

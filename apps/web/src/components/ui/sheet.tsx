@@ -121,7 +121,7 @@ export default function Sheet({
         </div>
 
         {(title || description) && (
-          <div className="px-5 pt-3 pb-3 sm:pt-5 border-b border-gray-100 shrink-0 flex items-start gap-3">
+          <div className="px-5 pt-3 pb-3 sm:pt-5 border-b border-gray-200 shrink-0 flex items-start gap-3">
             <div className="min-w-0 flex-1">
               {title && <h3 className="text-base sm:text-lg font-bold text-gray-900">{title}</h3>}
               {description && <p className="mt-1 text-[13px] text-gray-500">{description}</p>}
@@ -143,7 +143,7 @@ export default function Sheet({
         <div className="px-5 py-4 overflow-y-auto overscroll-contain flex-1">{children}</div>
 
         {footer && (
-          <div className="px-5 pt-3 border-t border-gray-100 bg-gray-50 shrink-0 flex gap-2 justify-stretch sm:justify-end lh-safe-pb-3 [&>*]:flex-1 sm:[&>*]:flex-none">
+          <div className="px-5 pt-3 border-t border-gray-200 bg-gray-50 shrink-0 flex gap-2 justify-stretch sm:justify-end lh-safe-pb-3 [&>*]:flex-1 sm:[&>*]:flex-none">
             {footer}
           </div>
         )}

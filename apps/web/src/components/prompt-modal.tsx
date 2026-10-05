@@ -80,7 +80,7 @@ export default function PromptModal({ isOpen, onClose, prompts }: PromptModalPro
               </button>
 
               {expandedIndex === i && (
-                <div className="px-4 pb-3 border-t border-gray-100">
+                <div className="px-4 pb-3 border-t border-gray-200">
                   <pre className="text-xs text-gray-600 whitespace-pre-wrap bg-gray-50 rounded-md p-3 mt-2 max-h-48 overflow-y-auto">
                     {p.prompt}
                   </pre>

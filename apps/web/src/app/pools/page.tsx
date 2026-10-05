@@ -294,7 +294,7 @@ function CreatePoolModal({
             </option>
           ))}
         </select>
-        <div className="flex justify-end gap-2 pt-2 border-t border-gray-100">
+        <div className="flex justify-end gap-2 pt-2 border-t border-gray-200">
           <button onClick={onClose} className="text-sm px-3 py-1.5 text-gray-600">
             キャンセル
           </button>

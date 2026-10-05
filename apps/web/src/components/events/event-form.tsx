@@ -748,7 +748,7 @@ function OverviewTab({
                   />
                   <span className="text-sm">
                     {a.country ? a.country + ' ' : ''}{a.name}
-                    {isCurrent && <span className="ml-1 text-[10px] text-gray-500">(現アカ・必須)</span>}
+                    {isCurrent && <span className="ml-1 text-xs text-gray-500">(現アカ・必須)</span>}
                   </span>
                 </label>
               )
@@ -957,7 +957,7 @@ function SlotsTab({
                 {g.label}
                 <span className="ml-2 text-xs font-normal text-gray-500">{g.items.length} 枠</span>
               </h3>
-              <ul className="divide-y divide-gray-100">
+              <ul className="divide-y divide-gray-200">
                 {g.items.map((s) => {
                   const booked = s.active_count ?? 0
                   const full = s.capacity != null && booked >= s.capacity
