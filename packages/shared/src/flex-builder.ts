@@ -13,7 +13,8 @@
 // =============================================================================
 
 export type FlexButtonStyle = 'primary' | 'secondary';
-export type FlexActionKind = 'uri' | 'message' | 'postback';
+/** harness = ボタンの動き (postback data "lh:act:<id>")。送信時は postback と同じ形になる */
+export type FlexActionKind = 'uri' | 'message' | 'postback' | 'harness';
 export type FlexHeaderColor = 'green' | 'blue' | 'gray';
 export type FlexBuilderMode = 'single' | 'carousel';
 
@@ -278,7 +279,8 @@ function parseButton(raw: unknown): FlexBuilderButton | null {
   if (action.type === 'postback') {
     if (typeof action.data !== 'string' || Object.keys(action).length !== 4) return null;
     if (action.displayText !== action.label) return null;
-    return { label: action.label, actionType: 'postback', actionValue: action.data, style: raw.style };
+    const actionType = action.data.startsWith('lh:act:') ? 'harness' : 'postback';
+    return { label: action.label, actionType, actionValue: action.data, style: raw.style };
   }
   return null;
 }

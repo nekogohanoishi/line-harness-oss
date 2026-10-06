@@ -5,6 +5,7 @@
 // 順番のある配信は番号付きの縦線 (TalkTimeline) でつなぐ。
 
 import type { ReactNode } from 'react'
+import { extractQuickReply, type QuickReply } from '@line-crm/shared'
 import FlexPreviewComponent from '@/components/flex-preview'
 
 /** トーク画面に見立てた背景。吹き出しはこの中に置く。 */
@@ -19,6 +20,33 @@ const bubbleFrame = 'border border-[#CDD8E5] bg-white'
  * clamp を付けると、テキストを先頭4行だけ見せる (一覧で長文が続くとき用)。
  */
 export function MessageBubble({ type, content, clamp = false }: { type: string; content: string; clamp?: boolean }) {
+  // 本文に保存されたクイックリプライ (選択肢ボタン) は取り出し、吹き出しの下に並べる
+  const { content: body, quickReply } = extractQuickReply(type, content)
+  const bubble = <MessageBody type={type} content={body} clamp={clamp} />
+  if (!quickReply) return bubble
+  return (
+    <div>
+      {bubble}
+      <QuickReplyChips quickReply={quickReply} />
+    </div>
+  )
+}
+
+/** クイックリプライの見本。友だちの画面では、メッセージの下に丸いボタンが横に並ぶ */
+export function QuickReplyChips({ quickReply }: { quickReply: QuickReply | undefined }) {
+  if (!quickReply || quickReply.items.length === 0) return null
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5" aria-label="選択肢ボタン（押すと消えます）">
+      {quickReply.items.map((item, index) => (
+        <span key={index} className="rounded-full border border-gray-300 bg-white px-3 py-1 text-xs font-medium text-gray-800 shadow-sm">
+          {item.action.label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function MessageBody({ type, content, clamp }: { type: string; content: string; clamp: boolean }) {
   if (type === 'flex' || type === 'carousel') {
     return (
       <div className="max-w-full overflow-x-auto">

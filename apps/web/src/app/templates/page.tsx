@@ -1,12 +1,14 @@
 'use client'
 
 import Link from 'next/link'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { embedQuickReply, extractQuickReply, type QuickReply } from '@line-crm/shared'
 import { api } from '@/lib/api'
 import Header from '@/components/layout/header'
 import CcPromptButton from '@/components/cc-prompt-button'
 import TemplateMessageEditor, { validateTemplateMessage } from '@/components/templates/template-message-editor'
 import TemplatePreview, { isFlexLikeType } from '@/components/templates/template-preview'
+import QuickReplyEditor, { finalizeQuickReply } from '@/components/messages/quick-reply-editor'
 import { EmptyState, ConfirmSheet } from '@/components/ui'
 
 interface Template {
@@ -201,6 +203,9 @@ export default function TemplatesPage() {
   const [drawerLoading, setDrawerLoading] = useState(false)
   const [drawerError, setDrawerError] = useState<string | null>(null)
   const [editContent, setEditContent] = useState<string | null>(null)
+  // クイックリプライは本文とは別の欄で編集し、保存の直前に本文へ埋め込む。null = 変更なし
+  const [editQuickReply, setEditQuickReply] = useState<{ value: QuickReply | undefined } | null>(null)
+  const [formQuickReply, setFormQuickReply] = useState<QuickReply | undefined>(undefined)
   const [editName, setEditName] = useState<string | null>(null)
   const [editError, setEditError] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
@@ -257,7 +262,13 @@ export default function TemplatesPage() {
   }, [drawerId])
 
   // reset edits when drawer changes
-  useEffect(() => { setEditContent(null); setEditName(null); setEditError('') }, [drawerId])
+  useEffect(() => { setEditContent(null); setEditName(null); setEditQuickReply(null); setEditError('') }, [drawerId])
+
+  // 保存されている本文からクイックリプライを取り出す。編集欄には本文だけを渡す
+  const drawerSplit = useMemo(
+    () => (drawerData ? extractQuickReply(drawerData.messageType, drawerData.messageContent) : null),
+    [drawerData],
+  )
 
   const filteredTemplates = templates.filter((t) => {
     if (typeFilter === 'all') return true
@@ -273,10 +284,14 @@ export default function TemplatesPage() {
     setFormError('')
     setNotice('')
     try {
-      const res = await api.templates.create(form)
+      const res = await api.templates.create({
+        ...form,
+        messageContent: embedQuickReply(form.messageType, form.messageContent, finalizeQuickReply(formQuickReply)),
+      })
       if (res.success) {
         setShowCreate(false)
         setForm({ name: '', category: 'general', messageType: 'text', messageContent: '' })
+        setFormQuickReply(undefined)
         setNotice('テンプレートを作成しました。')
         load()
       } else {
@@ -311,7 +326,13 @@ export default function TemplatesPage() {
     setNotice('')
     try {
       const updates: Record<string, string> = {}
-      if (editContent !== null) updates.messageContent = editContent
+      if ((editContent !== null || editQuickReply !== null) && drawerSplit) {
+        updates.messageContent = embedQuickReply(
+          drawerData.messageType,
+          editContent ?? drawerSplit.content,
+          editQuickReply ? finalizeQuickReply(editQuickReply.value) : drawerSplit.quickReply,
+        )
+      }
       if (editName !== null) updates.name = editName
       const updateRes = await api.templates.update(drawerData.id, updates)
       if (!updateRes.success) throw new Error(updateRes.error)
@@ -319,6 +340,7 @@ export default function TemplatesPage() {
       if (r.success && r.data) setDrawerData(r.data)
       setEditContent(null)
       setEditName(null)
+      setEditQuickReply(null)
       setNotice('変更を保存しました。')
       load()
     } catch (updateError) {
@@ -460,6 +482,8 @@ export default function TemplatesPage() {
               )}
             </div>
 
+            <QuickReplyEditor value={formQuickReply} onChange={setFormQuickReply} />
+
             {formError && <p className="text-xs text-red-600">{formError}</p>}
 
             <div className="flex flex-col sm:flex-row gap-2 sticky bottom-0 bg-gray-50 pt-2 pb-1 -mx-4 px-4 sm:static sm:mx-0 sm:px-0 sm:pt-0 sm:pb-0">
@@ -582,7 +606,7 @@ export default function TemplatesPage() {
                     <h4 className="mb-2 text-sm font-semibold text-gray-900">メッセージ内容</h4>
                     <TemplateMessageEditor
                       messageType={drawerData.messageType}
-                      value={editContent ?? drawerData.messageContent}
+                      value={editContent ?? drawerSplit?.content ?? drawerData.messageContent}
                       onChange={setEditContent}
                       textRef={editContentRef}
                     />
@@ -593,12 +617,17 @@ export default function TemplatesPage() {
                         <h5 className="mb-2 text-xs font-medium text-gray-600">友だちの画面での見え方</h5>
                         <TemplatePreview
                           type={drawerData.messageType}
-                          content={editContent ?? drawerData.messageContent}
+                          content={editContent ?? drawerSplit?.content ?? drawerData.messageContent}
                           emptyNote={editEmptyNote(drawerData.messageType)}
                         />
                       </div>
                     )}
                   </section>
+
+                  <QuickReplyEditor
+                    value={editQuickReply ? editQuickReply.value : drawerSplit?.quickReply}
+                    onChange={(value) => setEditQuickReply({ value })}
+                  />
 
                   {/* Used by */}
                   <section>
@@ -647,7 +676,7 @@ export default function TemplatesPage() {
             </div>
 
             {/* 変更があるときだけ、保存の操作を画面の下に固定する。右の余白は「CCに依頼」ボタンを避けるため */}
-            {drawerData && (editContent !== null || editName !== null) && (
+            {drawerData && (editContent !== null || editName !== null || editQuickReply !== null) && (
               <div className="shrink-0 border-t border-gray-200 bg-white px-4 py-3 pr-20 sm:pr-4">
                 {editError && (
                   <p role="alert" className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -664,7 +693,7 @@ export default function TemplatesPage() {
                     {savingEdit ? '保存中...' : '保存'}
                   </button>
                   <button
-                    onClick={() => { setEditContent(null); setEditName(null); setEditError('') }}
+                    onClick={() => { setEditContent(null); setEditName(null); setEditQuickReply(null); setEditError('') }}
                     className="min-h-[44px] flex-1 rounded-lg bg-gray-100 px-4 text-sm font-medium text-gray-600 hover:bg-gray-200 sm:flex-none"
                   >
                     キャンセル

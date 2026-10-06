@@ -334,6 +334,35 @@ export type FriendSavedFilter = {
     sort?: 'oldest'
   }
 }
+/** ボタンの動き: ボタンやクイックリプライを押したときに Harness が行うこと */
+export type MessageActionStep =
+  | { type: 'add_tag'; tagId: string }
+  | { type: 'remove_tag'; tagId: string }
+  | { type: 'start_scenario'; scenarioId: string }
+  | { type: 'set_metadata'; key: string; value: string }
+  | { type: 'reply_text'; text: string }
+  | { type: 'reply_template'; templateId: string }
+export type MessageAction = {
+  id: string
+  name: string
+  kind: 'postback' | 'link'
+  lineAccountId: string | null
+  steps: MessageActionStep[]
+  linkUrl: string | null
+  oncePerFriend: boolean
+  repeatReply: string | null
+  deadlineAt: string | null
+  expiredReply: string | null
+  expiredUrl: string | null
+  isActive: boolean
+  /** ボタンに入れる値。postback は data、リンクは Worker 上のパス */
+  postbackData: string | null
+  linkPath: string | null
+  stats: { doneFriends: number; doneCount: number; expiredCount: number; openedCount: number; lastAt: string | null }
+  createdAt: string
+  updatedAt: string
+}
+export type MessageActionInput = Omit<MessageAction, 'id' | 'postbackData' | 'linkPath' | 'stats' | 'createdAt' | 'updatedAt'>
 /** Friend list items, optionally hydrated with chat status (when ?includeChatStatus=true) */
 export type FriendListItem = FriendWithTags & Partial<{
   latestIncomingMessage: { content: string; messageType: string; createdAt: string } | null
@@ -931,6 +960,17 @@ export const api = {
         `/api/affiliates/${id}/report?` + new URLSearchParams(params as Record<string, string>),
       ),
   },
+  messageActions: {
+    list: (lineAccountId?: string) =>
+      fetchApi<ApiResponse<MessageAction[]>>(`/api/message-actions${lineAccountId ? `?lineAccountId=${encodeURIComponent(lineAccountId)}` : ''}`),
+    create: (input: MessageActionInput) =>
+      fetchApi<ApiResponse<MessageAction>>('/api/message-actions', { method: 'POST', body: JSON.stringify(input) }),
+    update: (id: string, input: MessageActionInput) =>
+      fetchApi<ApiResponse<MessageAction>>(`/api/message-actions/${id}`, { method: 'PUT', body: JSON.stringify(input) }),
+    delete: (id: string) =>
+      fetchApi<ApiResponse<null>>(`/api/message-actions/${id}`, { method: 'DELETE' }),
+  },
+
   templates: {
     list: (category?: string) =>
       fetchApi<ApiResponse<Array<{

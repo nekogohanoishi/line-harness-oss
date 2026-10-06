@@ -58,3 +58,19 @@ describe('quick reply の保存と取り出し', () => {
     expect(extractQuickReply('text', broken)).toEqual({ content: 'こんにちは' });
   });
 });
+
+describe('カード型のボタンで「ボタンの動き」を使う', () => {
+  test('保存すると postback (lh:act:) になり、読み込むと「ボタンの動き」に戻る', async () => {
+    const { buildFlexJson, parseBuilderFlex, emptyFlexBuilderState, emptyFlexBuilderBubble } = await import('@line-crm/shared');
+    const state = emptyFlexBuilderState();
+    state.bubbles = [{
+      ...emptyFlexBuilderBubble(),
+      bodyText: '作成会のご案内です',
+      buttons: [{ label: '詳しく知りたい', actionType: 'harness', actionValue: 'lh:act:act-1', style: 'primary' }],
+    }];
+    const json = buildFlexJson(state) as { footer: { contents: Array<{ action: Record<string, unknown> }> } };
+    expect(json.footer.contents[0].action).toEqual({ type: 'postback', label: '詳しく知りたい', data: 'lh:act:act-1', displayText: '詳しく知りたい' });
+    const parsed = parseBuilderFlex(JSON.stringify(json));
+    expect(parsed?.bubbles[0].buttons[0]).toMatchObject({ actionType: 'harness', actionValue: 'lh:act:act-1' });
+  });
+});

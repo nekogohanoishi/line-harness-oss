@@ -1,6 +1,7 @@
 'use client'
 
 import { useRef } from 'react'
+import { useMessageActions } from '@/lib/use-message-actions'
 import type { FlexBuilderBubbleState, FlexBuilderButton, FlexActionKind, FlexHeaderColor } from '@line-crm/shared'
 import { emptyFlexBuilderButton, FLEX_BUILDER_HEADER_COLORS, FLEX_BUILDER_MAX_BUTTONS } from '@line-crm/shared'
 import MessageVariableButton from '@/components/message-variable-button'
@@ -13,8 +14,9 @@ const headerColorOptions: { value: FlexHeaderColor; label: string }[] = [
 
 const actionTypeOptions: { value: FlexActionKind; label: string }[] = [
   { value: 'uri', label: 'URLを開く' },
+  { value: 'harness', label: 'ボタンの動きを使う（タグ付け・シナリオ開始など）' },
   { value: 'message', label: 'テキストを送信させる' },
-  { value: 'postback', label: 'ポストバック（上級者向け）' },
+  { value: 'postback', label: '合図を送る（上級者向け）' },
 ]
 
 const inputCls =
@@ -24,7 +26,7 @@ const labelCls = 'block text-xs font-medium text-gray-600 mb-1'
 function actionValueField(button: FlexBuilderButton) {
   if (button.actionType === 'uri') return { label: 'URL', placeholder: 'https://example.com', type: 'url' }
   if (button.actionType === 'message') return { label: '送信させるテキスト', placeholder: '例: はい', type: 'text' }
-  return { label: 'postback data（上級者向け）', placeholder: '例: lh:custom:action1', type: 'text' }
+  return { label: '合図の文字列（上級者向け）', placeholder: '例: lh:custom:action1', type: 'text' }
 }
 
 interface ButtonRowProps {
@@ -37,6 +39,9 @@ interface ButtonRowProps {
 
 function ButtonRow({ button, index, canRemove, onChange, onRemove }: ButtonRowProps) {
   const valueField = actionValueField(button)
+  const { actions, origin } = useMessageActions()
+  const postbackActions = actions.filter((action) => action.kind === 'postback')
+  const linkActions = actions.filter((action) => action.kind === 'link')
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-3 space-y-2">
       <div className="flex items-center justify-between">
@@ -84,21 +89,53 @@ function ButtonRow({ button, index, canRemove, onChange, onRemove }: ButtonRowPr
             value={button.style}
             onChange={(e) => onChange({ ...button, style: e.target.value as FlexBuilderButton['style'] })}
           >
-            <option value="primary">緑（primary）</option>
-            <option value="secondary">グレー（secondary）</option>
+            <option value="primary">緑</option>
+            <option value="secondary">灰色</option>
           </select>
         </div>
       </div>
-      <div>
-        <label className={labelCls}>{valueField.label} <span className="text-red-500">*</span></label>
-        <input
-          type={valueField.type}
-          className={inputCls}
-          placeholder={valueField.placeholder}
-          value={button.actionValue}
-          onChange={(e) => onChange({ ...button, actionValue: e.target.value })}
-        />
-      </div>
+      {button.actionType === 'harness' ? (
+        <div>
+          <label className={labelCls}>使うボタンの動き <span className="text-red-500">*</span></label>
+          <select
+            className={inputCls + ' bg-white'}
+            value={button.actionValue}
+            onChange={(e) => onChange({ ...button, actionValue: e.target.value })}
+          >
+            <option value="">選んでください</option>
+            {postbackActions.map((action) => (
+              <option key={action.id} value={action.postbackData ?? ''}>{action.name}{action.isActive ? '' : '（停止中）'}</option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-gray-600">
+            {postbackActions.length === 0 ? 'まだありません。サイドバーの「ボタンの動き」から作ってください。' : '押した人に、選んだ動き（タグ付け・返信など）を行います。'}
+          </p>
+        </div>
+      ) : (
+        <div>
+          <label className={labelCls}>{valueField.label} <span className="text-red-500">*</span></label>
+          <input
+            type={valueField.type}
+            className={inputCls}
+            placeholder={valueField.placeholder}
+            value={button.actionValue}
+            onChange={(e) => onChange({ ...button, actionValue: e.target.value })}
+          />
+          {button.actionType === 'uri' && linkActions.length > 0 && (
+            <select
+              className={inputCls + ' mt-2 bg-white'}
+              value=""
+              onChange={(e) => { if (e.target.value) onChange({ ...button, actionValue: e.target.value }) }}
+              aria-label="締切つきリンクを使う"
+            >
+              <option value="">締切つきリンクを使う場合は選ぶ</option>
+              {linkActions.map((action) => (
+                <option key={action.id} value={`${origin}${action.linkPath}`}>{action.name}</option>
+              ))}
+            </select>
+          )}
+        </div>
+      )}
     </div>
   )
 }
