@@ -1,4 +1,5 @@
 import { extractFlexAltText } from '../utils/flex-alt-text.js';
+import { extractQuickReply } from '@line-crm/shared';
 
 /**
  * イベントバス — システム内イベントの発火と処理
@@ -291,16 +292,18 @@ async function executeAction(
         { ...friend, metadata: resolvedMeta } as Parameters<typeof expandVariables>[1],
       );
 
+      // 本文に保存されたクイックリプライは取り出して quickReply に付け替える
+      const { content: bodyContent, quickReply } = extractQuickReply(resolvedType, resolvedContent);
       let msg: Message;
       let logContent: string;
       if (resolvedType === 'flex') {
-        const contents = JSON.parse(resolvedContent);
+        const contents = JSON.parse(bodyContent);
         msg = { type: 'flex', altText: action.params.altText || extractFlexAltText(contents), contents };
         logContent = JSON.stringify(contents);
       } else if (resolvedType === 'image') {
         // template に "originalContentUrl" / "previewImageUrl" を持つ JSON が入る前提。
         // parse 失敗時は text fallback ではなく throw → automation 側で partial 扱いにする。
-        const parsed = JSON.parse(resolvedContent) as { originalContentUrl: string; previewImageUrl: string };
+        const parsed = JSON.parse(bodyContent) as { originalContentUrl: string; previewImageUrl: string };
         msg = {
           type: 'image',
           originalContentUrl: parsed.originalContentUrl,
@@ -308,9 +311,10 @@ async function executeAction(
         };
         logContent = JSON.stringify(parsed);
       } else {
-        msg = { type: 'text', text: resolvedContent };
-        logContent = resolvedContent;
+        msg = { type: 'text', text: bodyContent };
+        logContent = bodyContent;
       }
+      if (quickReply) msg = { ...msg, quickReply } as unknown as Message;
 
       let deliveryType: 'reply' | 'push';
       if (payload.replyToken) {
@@ -419,7 +423,7 @@ async function executeAction(
 }
 
 /** 送信メッセージを messages_log に記録（失敗しても例外を上げない） */
-async function logOutgoingMessage(
+export async function logOutgoingMessage(
   db: D1Database,
   params: {
     friendId: string;

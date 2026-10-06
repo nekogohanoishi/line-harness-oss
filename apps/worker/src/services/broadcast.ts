@@ -14,6 +14,7 @@ import type { Broadcast } from '@line-crm/db';
 import type { LineClient } from '@line-crm/line-sdk';
 import type { Message } from '@line-crm/line-sdk';
 import { calculateStaggerDelay, sleep, addMessageVariation } from './stealth.js';
+import { extractQuickReply } from '@line-crm/shared';
 
 const MULTICAST_BATCH_SIZE = 500;
 
@@ -388,7 +389,7 @@ async function processQueuedBroadcastBatches(
   await updateBroadcastStatus(db, broadcast.id, 'sent');
 }
 
-export function buildMessage(messageType: string, messageContent: string, altText?: string): Message {
+function buildPlainMessage(messageType: string, messageContent: string, altText?: string): Message {
   if (messageType === 'text') {
     return { type: 'text', text: messageContent };
   }
@@ -419,4 +420,14 @@ export function buildMessage(messageType: string, messageContent: string, altTex
   }
 
   return { type: 'text', text: messageContent };
+}
+
+/**
+ * 本文に保存されたクイックリプライ (選択肢ボタン) を取り出して LINE の quickReply に付け替える。
+ * 本文側からは必ず取り除く (残すとテキストに記号が混ざるか、Flex の検証で弾かれる)。
+ */
+export function buildMessage(messageType: string, messageContent: string, altText?: string): Message {
+  const { content, quickReply } = extractQuickReply(messageType, messageContent);
+  const message = buildPlainMessage(messageType, content, altText);
+  return quickReply ? ({ ...message, quickReply } as unknown as Message) : message;
 }

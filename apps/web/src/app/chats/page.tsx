@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { parseStickerMessageContent, stickerFallback } from '@line-crm/shared'
+import { extractQuickReply, parseStickerMessageContent, stickerFallback } from '@line-crm/shared'
 import { api, fetchApi, type ChatCounts, type ChatOperatorMetric } from '@/lib/api'
 import { useAccount } from '@/contexts/account-context'
 import CcPromptButton from '@/components/cc-prompt-button'
@@ -260,7 +260,8 @@ function DirectMessagePanel({ friendId, friend, onBack, onSent }: {
   }
 
   function renderContent(msg: MessageLog) {
-    if (msg.messageType === 'text') return msg.content
+    // 選択肢ボタン (クイックリプライ) の保存用の印が本文に残っている記録もあるので、表示前に取り除く
+    if (msg.messageType === 'text') return extractQuickReply('text', msg.content).content
     if (msg.messageType === 'flex') {
       try {
         const parsed = JSON.parse(msg.content)
@@ -1324,7 +1325,7 @@ export default function ChatsPage() {
                   // Message read state is independent from the handling workflow status.
                   const hasUnreadMessage = chat.hasUnreadMessage
                   // 最新メッセージの本文 preview。flex/image は文字列で見せても意味が薄いので type 表記に置換。
-                  const previewRaw = chat.lastMessageContent ?? ''
+                  const previewRaw = extractQuickReply('text', chat.lastMessageContent ?? '').content
                   const preview = (() => {
                     if (chat.lastMessageType === 'image') return '[画像]'
                     if (chat.lastMessageType === 'flex') return '[カード型メッセージ]'

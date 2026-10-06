@@ -8,14 +8,13 @@ import {
   removeTagFromFriend,
   getFriendTags,
   getFriendTagsByIds,
-  getScenarios,
-  enrollFriendInScenario,
   jstNow,
   toJstString,
   recordManualChatMessage,
 } from '@line-crm/db';
 import type { Friend as DbFriend, Tag as DbTag } from '@line-crm/db';
 import { fireEvent } from '../services/event-bus.js';
+import { enrollTagTriggeredScenarios } from '../services/tag-scenarios.js';
 import { buildMessage, expandVariables, resolveMetadata } from '../services/step-delivery.js';
 import {
   DELIVERY_CONTROL_METADATA_KEY,
@@ -704,18 +703,7 @@ friends.post('/api/friends/:id/tags', async (c) => {
     await addTagToFriend(db, friendId, body.tagId);
 
     // Enroll in tag_added scenarios that match this tag
-    const allScenarios = await getScenarios(db);
-    for (const scenario of allScenarios) {
-      if (scenario.trigger_type === 'tag_added' && scenario.is_active && scenario.trigger_tag_id === body.tagId) {
-        const existing = await db
-          .prepare(`SELECT id FROM friend_scenarios WHERE friend_id = ? AND scenario_id = ?`)
-          .bind(friendId, scenario.id)
-          .first();
-        if (!existing) {
-          await enrollFriendInScenario(db, friendId, scenario.id);
-        }
-      }
-    }
+    await enrollTagTriggeredScenarios(db, friendId, body.tagId);
 
     // イベントバス発火: tag_change
     await fireEvent(db, 'tag_change', { friendId, eventData: { tagId: body.tagId, action: 'add' } });

@@ -53,6 +53,7 @@ import {
   type DelayedAutoReplyPayload,
 } from '../services/delayed-auto-reply.js';
 import type { Env } from '../index.js';
+import { handleMessageActionPostback, parseActionPostback } from '../services/message-actions.js';
 
 const webhook = new Hono<Env>();
 
@@ -926,6 +927,24 @@ async function handleEvent(
         );
       } catch (err) {
         console.error('Failed to handle inline survey postback', err);
+      }
+      return;
+    }
+
+    // ボタンの動き (lh:act:<id>) — タグ付け・シナリオ開始・返信などを行う
+    const messageActionId = parseActionPostback(postbackData);
+    if (messageActionId) {
+      try {
+        await handleMessageActionPostback({
+          db,
+          lineAccessToken,
+          replyToken: event.replyToken,
+          friendId: friend.id,
+          actionId: messageActionId,
+          lineAccountId,
+        });
+      } catch (err) {
+        console.error('Failed to handle message action postback', err);
       }
       return;
     }

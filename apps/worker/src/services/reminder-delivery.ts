@@ -16,6 +16,7 @@ import {
 import type { LineClient, Message } from '@line-crm/line-sdk';
 import { addJitter, sleep } from './stealth.js';
 import { expandVariables, resolveMetadata } from './step-delivery.js';
+import { extractQuickReply } from '@line-crm/shared';
 
 export async function processReminderDeliveries(
   db: D1Database,
@@ -89,7 +90,7 @@ export async function processReminderDeliveries(
   }
 }
 
-function buildMessage(messageType: string, messageContent: string, altText?: string): Message {
+function buildPlainMessage(messageType: string, messageContent: string, altText?: string): Message {
   if (messageType === 'text') {
     return { type: 'text', text: messageContent };
   }
@@ -110,4 +111,14 @@ function buildMessage(messageType: string, messageContent: string, altText?: str
     }
   }
   return { type: 'text', text: messageContent };
+}
+
+/**
+ * 本文に保存されたクイックリプライ (選択肢ボタン) を取り出して LINE の quickReply に付け替える。
+ * 本文側からは必ず取り除く (残すとテキストに記号が混ざるか、Flex の検証で弾かれる)。
+ */
+function buildMessage(messageType: string, messageContent: string, altText?: string): Message {
+  const { content, quickReply } = extractQuickReply(messageType, messageContent);
+  const message = buildPlainMessage(messageType, content, altText);
+  return quickReply ? ({ ...message, quickReply } as unknown as Message) : message;
 }

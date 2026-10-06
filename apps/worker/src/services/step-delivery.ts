@@ -15,6 +15,7 @@ import {
 import type { LineClient } from '@line-crm/line-sdk';
 import type { Message } from '@line-crm/line-sdk';
 import { jitterDeliveryTime, addJitter, sleep } from './stealth.js';
+import { extractQuickReply } from '@line-crm/shared';
 
 // ===========================================================
 // Phase 6c: Webinar countdown / cart countdown 用ヘルパ
@@ -652,7 +653,7 @@ export function messageToLogPayload(message: Message): { messageType: string; co
   return { messageType: message.type, content: JSON.stringify(message) };
 }
 
-export function buildMessage(messageType: string, messageContent: string, altText?: string): Message {
+function buildPlainMessage(messageType: string, messageContent: string, altText?: string): Message {
   if (messageType === 'text') {
     return { type: 'text', text: messageContent };
   }
@@ -689,4 +690,14 @@ export function buildMessage(messageType: string, messageContent: string, altTex
 
   // Fallback
   return { type: 'text', text: messageContent };
+}
+
+/**
+ * 本文に保存されたクイックリプライ (選択肢ボタン) を取り出して LINE の quickReply に付け替える。
+ * 本文側からは必ず取り除く (残すとテキストに記号が混ざるか、Flex の検証で弾かれる)。
+ */
+export function buildMessage(messageType: string, messageContent: string, altText?: string): Message {
+  const { content, quickReply } = extractQuickReply(messageType, messageContent);
+  const message = buildPlainMessage(messageType, content, altText);
+  return quickReply ? ({ ...message, quickReply } as unknown as Message) : message;
 }
