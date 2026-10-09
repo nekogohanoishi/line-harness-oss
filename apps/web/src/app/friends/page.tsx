@@ -1,11 +1,14 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import Link from 'next/link'
 import type { Tag } from '@line-crm/shared'
 import { api } from '@/lib/api'
 import type { FriendListItem, FriendSavedFilter } from '@/lib/api'
 import Header from '@/components/layout/header'
 import FriendListTable from '@/components/friends/friend-list-table'
+import BlockedFriendList from '@/components/friends/blocked-friend-list'
+import ManualRefreshButton from '@/components/ui/manual-refresh-button'
 import CcPromptButton from '@/components/cc-prompt-button'
 import { Sheet, SheetButton } from '@/components/ui'
 import { useAccount } from '@/contexts/account-context'
@@ -65,7 +68,7 @@ function describeFilters(filters: SavedFilterValues, tags: Tag[]): string {
 }
 
 export default function FriendsPage() {
-  const { selectedAccountId } = useAccount()
+  const { selectedAccountId, loading: accountLoading } = useAccount()
   const [friends, setFriends] = useState<FriendListItem[]>([])
   const [allTags, setAllTags] = useState<Tag[]>([])
   const [total, setTotal] = useState(0)
@@ -87,6 +90,7 @@ export default function FriendsPage() {
   const [newFilterName, setNewFilterName] = useState('')
   const [savingFilters, setSavingFilters] = useState(false)
   const [savedFiltersError, setSavedFiltersError] = useState('')
+  const requestId = useRef(0)
 
   const currentFilters: SavedFilterValues = {
     ...(searchSubmitted ? { search: searchSubmitted } : {}),
@@ -119,6 +123,8 @@ export default function FriendsPage() {
   }, [])
 
   const loadFriends = useCallback(async () => {
+    if (accountLoading) return
+    const currentRequest = ++requestId.current
     setLoading(true)
     setError('')
     try {
@@ -128,11 +134,12 @@ export default function FriendsPage() {
         tagId: selectedTagId || undefined,
         accountId: selectedAccountId || undefined,
         search: searchSubmitted || undefined,
-        includeChatStatus: true,
+        includeChatStatus: followStatusFilter !== 'blocked',
         sort: sortMode,
         handled: responseFilter === 'unhandled' ? 'unhandled' : undefined,
         followStatus: followStatusFilter === 'all' ? undefined : followStatusFilter,
       })
+      if (currentRequest !== requestId.current) return
       if (res.success) {
         setFriends(res.data.items)
         setTotal(res.data.total)
@@ -141,11 +148,13 @@ export default function FriendsPage() {
         setError(res.error)
       }
     } catch {
-      setError('友だちの読み込みに失敗しました。もう一度お試しください。')
+      if (currentRequest === requestId.current) {
+        setError('友だちの読み込みに失敗しました。もう一度お試しください。')
+      }
     } finally {
-      setLoading(false)
+      if (currentRequest === requestId.current) setLoading(false)
     }
-  }, [page, selectedTagId, selectedAccountId, searchSubmitted, sortMode, responseFilter, followStatusFilter])
+  }, [accountLoading, page, selectedTagId, selectedAccountId, searchSubmitted, sortMode, responseFilter, followStatusFilter])
 
   useEffect(() => {
     loadTags()
@@ -174,6 +183,7 @@ export default function FriendsPage() {
 
   useEffect(() => {
     loadFriends()
+    return () => { requestId.current += 1 }
   }, [loadFriends])
 
   // Fan-out helpers: changing a filter also resets pagination synchronously,
@@ -271,8 +281,34 @@ export default function FriendsPage() {
     <div>
       <Header
         title="友だちリスト"
-        description="友だちの検索や、詳細情報の確認ができます。"
+        action={<ManualRefreshButton onClick={loadFriends} loading={loading} />}
       />
+
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-gray-200">
+        <div className="flex" role="tablist" aria-label="友だちのLINE状態">
+          {([
+            { value: 'all', label: 'すべて' },
+            { value: 'following', label: 'フォロー中' },
+            { value: 'blocked', label: 'ブロック中' },
+          ] as const).map(({ value, label }) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={followStatusFilter === value}
+              onClick={() => handleFollowStatusChange(value)}
+              className={`min-h-11 border-b-2 px-3 text-sm font-medium sm:px-4 ${followStatusFilter === value
+                ? value === 'blocked' ? 'border-red-600 text-red-700' : 'border-green-600 text-green-800'
+                : 'border-transparent text-gray-600 hover:text-gray-900'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <Link href="/friend-events" className="inline-flex min-h-11 items-center text-sm font-medium text-blue-700 hover:underline">
+          追加・ブロック履歴
+        </Link>
+      </div>
 
       {/* Search + sort bar — L-step style */}
       <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4">
@@ -345,7 +381,7 @@ export default function FriendsPage() {
           </svg>
         </button>
 
-        {/* Secondary filters — 並び順 + タグ + 対応マーク + LINE状態
+        {/* Secondary filters — 並び順 + タグ + 対応マーク
             モバイルでは縦積み（トグルで開閉）、sm 以上では従来どおり横並び。 */}
         <div
           className={`mt-3 gap-3 border-t border-gray-200 pt-3 sm:flex sm:flex-wrap sm:items-center ${
@@ -358,8 +394,8 @@ export default function FriendsPage() {
               value={sortMode}
               onChange={(e) => handleSortChange(e.target.value as SortMode)}
             >
-              <option value="recent">友だち追加の新しい順</option>
-              <option value="oldest">友だち追加の古い順</option>
+              <option value="recent">{followStatusFilter === 'blocked' ? 'ブロック日時の新しい順' : '友だち追加の新しい順'}</option>
+              <option value="oldest">{followStatusFilter === 'blocked' ? 'ブロック日時の古い順' : '友だち追加の古い順'}</option>
             </select>
           </FilterField>
           <FilterField label="タグ">
@@ -382,17 +418,6 @@ export default function FriendsPage() {
             >
               <option value="all">すべて</option>
               <option value="unhandled">未対応のみ</option>
-            </select>
-          </FilterField>
-          <FilterField label="LINE状態">
-            <select
-              className="h-11 w-full rounded-lg border border-gray-300 bg-white px-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 sm:h-auto sm:w-auto sm:py-1.5 sm:text-xs"
-              value={followStatusFilter}
-              onChange={(e) => handleFollowStatusChange(e.target.value as FollowStatusFilter)}
-            >
-              <option value="all">すべて</option>
-              <option value="following">フォロー中</option>
-              <option value="blocked">ブロック中</option>
             </select>
           </FilterField>
           {activeFilterCount > 0 && (
@@ -440,6 +465,8 @@ export default function FriendsPage() {
             </div>
           ))}
         </div>
+      ) : error ? null : followStatusFilter === 'blocked' ? (
+        <BlockedFriendList friends={friends} filtered={Boolean(searchSubmitted || selectedTagId || responseFilter !== 'all')} />
       ) : (
         <FriendListTable friends={friends} allTags={allTags} onRefresh={loadFriends} />
       )}

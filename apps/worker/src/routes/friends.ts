@@ -139,9 +139,8 @@ friends.get('/api/friends', async (c) => {
     // each friend. Used by the L-step-style /friends listing; off by
     // default to keep the simple list / autocomplete paths cheap.
     const includeChatStatus = c.req.query('includeChatStatus') === 'true';
-    // ?sort=oldest reverses default created_at DESC. Default = recent-first.
-    // Search mode (when `search` is set) overrides both — we keep the
-    // match-quality ranking and only flip the secondary `created_at` tier.
+    // ブロック中の一覧は blocked_at、それ以外は created_at で並べる。
+    // 名前検索では一致度を優先し、その中で日時順にする。
     const sort: 'recent' | 'oldest' = c.req.query('sort') === 'oldest' ? 'oldest' : 'recent';
     // ?handled=unhandled filters to friends whose latest activity is an
     // incoming message (mirroring the L-step "未対応" tab). Done in SQL so
@@ -251,9 +250,11 @@ friends.get('/api/friends', async (c) => {
     const baseFrom = includeChatStatus
       ? `FROM friends f LEFT JOIN tracked_links tl ON tl.id = f.first_tracked_link_id`
       : `FROM friends f`;
-    // Secondary tier of the search-mode ORDER BY (after match_score) and the
-    // primary tier in non-search mode. Switched by ?sort=oldest|recent.
-    const createdOrder = sort === 'oldest' ? 'ASC' : 'DESC';
+    const dateOrder = sort === 'oldest' ? 'ASC' : 'DESC';
+    // 記録開始前などでブロック日時が不明の人は、どちらの日時順でも最後に置く。
+    const orderBy = followStatus === 'blocked'
+      ? `CASE WHEN f.blocked_at IS NULL THEN 1 ELSE 0 END ASC, f.blocked_at ${dateOrder}, f.created_at DESC, f.id ASC`
+      : `f.created_at ${dateOrder}`;
     let listStmt;
     let listBinds: unknown[];
     if (search) {
@@ -270,13 +271,13 @@ friends.get('/api/friends', async (c) => {
                   ELSE 3
                 END AS match_score
          ${baseFrom} ${where}
-         ORDER BY match_score ASC, f.created_at ${createdOrder}
+         ORDER BY match_score ASC, ${orderBy}
          LIMIT ? OFFSET ?`,
       );
       listBinds = [exactPattern, prefixPattern, wordStartAscii, wordStartFullWidth, ...binds, limit, offset];
     } else {
       listStmt = db.prepare(
-        `SELECT ${baseSelect} ${baseFrom} ${where} ORDER BY f.created_at ${createdOrder} LIMIT ? OFFSET ?`,
+        `SELECT ${baseSelect} ${baseFrom} ${where} ORDER BY ${orderBy} LIMIT ? OFFSET ?`,
       );
       listBinds = [...binds, limit, offset];
     }
